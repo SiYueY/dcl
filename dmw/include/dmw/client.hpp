@@ -1,0 +1,56 @@
+// SPDX-License-Identifier: Apache-2.0
+
+#ifndef DMW__CLIENT_HPP_
+#define DMW__CLIENT_HPP_
+
+#include <memory>
+#include <string_view>
+#include <utility>
+
+#include "dmw/compatibility.hpp"
+#include "dmw/request_id.hpp"
+#include "dmw/result.hpp"
+#include "dmw/take_status.hpp"
+#include "dmw/visibility_control.hpp"
+
+namespace dmw {
+
+class Node;
+
+struct ClientOptions {
+    CompatibilityProfile compatibility{CompatibilityProfile::NativeDds};
+};
+
+/// Type-erased service client and WaitSet waitable.
+class DMW_PUBLIC Client {
+public:
+    ~Client() noexcept;
+
+    Client(const Client&) = delete;
+    Client& operator=(const Client&) = delete;
+    Client(Client&&) = delete;
+    Client& operator=(Client&&) = delete;
+
+    /// Send a non-null request object matching the Client's request MessageType.
+    Result<RequestId> send_request(const void* request);
+
+    /// Take a response addressed to this Client; NoData leaves both outputs unchanged.
+    Result<TakeStatus> take_response(void* response, RequestId& request_id);
+
+    /// Return a snapshot without combining endpoints from different participants.
+    Result<bool> service_is_available() const;
+    std::string_view service_name() const noexcept;
+
+private:
+    friend class Node;
+
+    class Impl;
+
+    explicit Client(std::unique_ptr<Impl> impl) noexcept;
+
+    std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace dmw
+
+#endif  // DMW__CLIENT_HPP_
