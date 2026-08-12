@@ -248,7 +248,7 @@ void ContextState::unregister_shutdown_callback(std::uint64_t id) noexcept {
 
 Result<ContextState::TypeLease> ContextState::acquire_type(const MessageType& type) {
     const std::string type_name(type.type_name());
-    const auto binding_type = detail::MessageTypeAccess::binding_type(type);
+    const auto binding_type = dmw::fastdds::MessageTypeAccess::binding_type(type);
     {
         std::unique_lock<std::mutex> lock(registry_mutex_);
         while (true) {
@@ -275,7 +275,7 @@ Result<ContextState::TypeLease> ContextState::acquire_type(const MessageType& ty
 
     eprosima::fastrtps::types::ReturnCode_t result;
     try {
-        result = participant_->register_type(detail::MessageTypeAccess::type_support(type));
+        result = participant_->register_type(dmw::fastdds::MessageTypeAccess::type_support(type));
     } catch (...) {
         {
             std::lock_guard<std::mutex> lock(registry_mutex_);

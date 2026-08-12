@@ -142,7 +142,7 @@ int main() {
     assert(second_wait_set.value()->add(*reusable_guard.value()));
 
     eprosima::fastdds::dds::TypeSupport type_support(new NamedTopicDataType("dmw.test.Initial"));
-    auto result = dmw::detail::MessageTypeAccess::create(type_support, typeid(NamedTopicDataType));
+    auto result = dmw::fastdds::MessageTypeAccess::create(type_support, typeid(NamedTopicDataType));
     assert(result);
     assert(result.value().type_name() == "dmw.test.Initial");
 
@@ -539,7 +539,7 @@ int main() {
     eprosima::fastdds::dds::TypeSupport releasable_support(
         new NamedTopicDataType("dmw.test.ReleasableTopicDataType"));
     auto releasable_type =
-        dmw::detail::MessageTypeAccess::create(releasable_support, typeid(NamedTopicDataType));
+        dmw::fastdds::MessageTypeAccess::create(releasable_support, typeid(NamedTopicDataType));
     assert(releasable_type);
     auto releasable_publisher =
         node.value()->create_publisher(releasable_type.value(), "releasable", dmw::Qos{});
@@ -761,7 +761,7 @@ int main() {
     assert(!rejected_node);
     assert(rejected_node.error().code() == dmw::ErrorCode::ContextShutdown);
 
-    auto null_result = dmw::detail::MessageTypeAccess::create({}, typeid(NamedTopicDataType));
+    auto null_result = dmw::fastdds::MessageTypeAccess::create({}, typeid(NamedTopicDataType));
     assert(!null_result);
     assert(null_result.error().code() == dmw::ErrorCode::InvalidArgument);
 

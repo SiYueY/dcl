@@ -11,9 +11,9 @@
 
 namespace dmw {
 
-namespace detail {
+namespace fastdds {
 class MessageTypeAccess;
-}  // namespace detail
+}  // namespace fastdds
 
 /// Cheap-copy handle to an immutable middleware type binding descriptor.
 class DMW_PUBLIC MessageType {
@@ -27,7 +27,7 @@ public:
     std::string_view type_name() const noexcept;
 
 private:
-    friend class detail::MessageTypeAccess;
+    friend class fastdds::MessageTypeAccess;
 
     class Impl;
 

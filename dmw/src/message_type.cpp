@@ -22,7 +22,7 @@ public:
 
 private:
     friend class MessageType;
-    friend class detail::MessageTypeAccess;
+    friend class fastdds::MessageTypeAccess;
 
     eprosima::fastdds::dds::TypeSupport type_support_;
     const std::string wire_type_name_;
@@ -31,7 +31,7 @@ private:
 
 std::string_view MessageType::type_name() const noexcept { return impl_->wire_type_name_; }
 
-namespace detail {
+namespace fastdds {
 
 Result<MessageType> MessageTypeAccess::create(
     eprosima::fastdds::dds::TypeSupport type_support, std::type_index binding_type) {
@@ -60,6 +60,6 @@ std::type_index MessageTypeAccess::binding_type(const MessageType& message_type)
     return message_type.impl_->binding_type_;
 }
 
-}  // namespace detail
+}  // namespace fastdds
 
 }  // namespace dmw

@@ -17,7 +17,7 @@
 
 namespace dmw {
 
-namespace detail {
+namespace fastdds {
 
 /// Internal bridge from the Fast DDS binding header to MessageType's private constructor.
 class DMW_PUBLIC MessageTypeAccess {
@@ -32,10 +32,6 @@ public:
     static std::type_index binding_type(const MessageType& message_type) noexcept;
 };
 
-}  // namespace detail
-
-namespace fastdds {
-
 /// Construct a MessageType from a Fast DDS generated TopicDataType binding.
 template <class PubSubTypeT>
 Result<MessageType> make_message_type() {
@@ -44,7 +40,7 @@ Result<MessageType> make_message_type() {
         "PubSubTypeT must derive from eprosima::fastdds::dds::TopicDataType");
 
     eprosima::fastdds::dds::TypeSupport type_support(new PubSubTypeT());
-    return detail::MessageTypeAccess::create(std::move(type_support), typeid(PubSubTypeT));
+    return MessageTypeAccess::create(std::move(type_support), typeid(PubSubTypeT));
 }
 
 }  // namespace fastdds

@@ -1774,7 +1774,7 @@ handle 指向的 binding descriptor 在构造后不可变；copy/move assignment
 handle 改为引用另一个不可变 descriptor，并不修改已有 descriptor 内容。
 
 ```cpp
-namespace detail
+namespace fastdds
 {
 class MessageTypeAccess;
 }
@@ -1794,7 +1794,7 @@ public:
     type_name() const noexcept;
 
 private:
-    friend class detail::MessageTypeAccess;
+    friend class fastdds::MessageTypeAccess;
 
     class Impl;
 
@@ -1835,7 +1835,7 @@ bool valid();
 提供：
 
 ```cpp
-namespace dmw::detail
+namespace dmw::fastdds
 {
 
 class MessageTypeAccess
@@ -1845,12 +1845,12 @@ public:
         eprosima::fastdds::dds::TypeSupport
             type_support,
         std::type_index binding_type);
+
+    static const eprosima::fastdds::dds::TypeSupport& type_support(
+        const MessageType& message_type) noexcept;
+
+    static std::type_index binding_type(const MessageType& message_type) noexcept;
 };
-
-}
-
-namespace dmw::fastdds
-{
 
 template<class PubSubTypeT>
 Result<MessageType>
@@ -1866,7 +1866,7 @@ make_message_type<PubSubTypeT>()
         ↓
 construct PubSubTypeT
         ↓
-detail::MessageTypeAccess::create(
+fastdds::MessageTypeAccess::create(
     type_support,
     typeid(PubSubTypeT))
         ↓
@@ -1875,7 +1875,7 @@ MessageType::Impl::create(...)
 完整有效的 MessageType handle
 ```
 
-`detail::MessageTypeAccess` 只服务于 binding integration，不属于普通 runtime
+`fastdds::MessageTypeAccess` 只服务于 binding integration，不属于普通 runtime
 consumer API。它是唯一可以构造 `MessageType::Impl` 并调用 private
 `MessageType` 构造函数的 integration access point；`make_message_type()` 不绕过
 `Impl::create()` 的验证和错误返回。

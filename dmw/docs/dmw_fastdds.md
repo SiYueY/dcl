@@ -103,7 +103,7 @@ Fast DDS 实现遵循以下原则：
 
 #### 1.4.1 内部命名空间与 `Info` 约定
 
-Fast DDS 专用实现类型必须位于 `dmw::impl::fastdds`；`dmw::impl` 只保留 `ContextState`、`NodeState`、`WaitableState`、`RegistrationState` 等 runtime/concurrency authority。公开 binding API 继续位于 `dmw::fastdds`，`MessageTypeAccess` 继续位于 `dmw::detail`。
+Fast DDS 专用实现类型必须位于 `dmw::impl::fastdds`；`dmw::impl` 只保留 `ContextState`、`NodeState`、`WaitableState`、`RegistrationState` 等 runtime/concurrency authority。公开 binding API 与 `MessageTypeAccess` 均位于 `dmw::fastdds`。
 
 ```cpp
 namespace dmw::impl::fastdds
