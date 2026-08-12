@@ -8,7 +8,6 @@
 #include <string_view>
 #include <utility>
 
-#include "dmw/compatibility.hpp"
 #include "dmw/event.hpp"
 #include "dmw/message_type.hpp"
 #include "dmw/result.hpp"
@@ -18,9 +17,8 @@ namespace dmw {
 
 class Node;
 
-struct PublisherOptions {
-    CompatibilityProfile compatibility{CompatibilityProfile::NativeDds};
-};
+/// Endpoint-local publisher options; compatibility is inherited from the parent Context.
+struct PublisherOptions {};
 
 /// Type-erased topic writer.
 class DMW_PUBLIC Publisher {

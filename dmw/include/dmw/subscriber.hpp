@@ -8,7 +8,6 @@
 #include <string_view>
 #include <utility>
 
-#include "dmw/compatibility.hpp"
 #include "dmw/event.hpp"
 #include "dmw/message_info.hpp"
 #include "dmw/message_type.hpp"
@@ -20,9 +19,8 @@ namespace dmw {
 
 class Node;
 
-struct SubscriberOptions {
-    CompatibilityProfile compatibility{CompatibilityProfile::NativeDds};
-};
+/// Endpoint-local subscriber options; compatibility is inherited from the parent Context.
+struct SubscriberOptions {};
 
 /// Type-erased topic reader and WaitSet waitable.
 class DMW_PUBLIC Subscriber {
@@ -46,6 +44,7 @@ public:
 
 private:
     friend class Node;
+    friend class WaitSet;
 
     class Impl;
 

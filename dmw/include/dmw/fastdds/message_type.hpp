@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <fastdds/dds/topic/TopicDataType.hpp>
+#include <fastdds/dds/topic/TypeSupport.hpp>
 
 #include "dmw/message_type.hpp"
 #include "dmw/result.hpp"
@@ -22,8 +23,13 @@ namespace detail {
 class DMW_PUBLIC MessageTypeAccess {
 public:
     static Result<MessageType> create(
-        std::shared_ptr<eprosima::fastdds::dds::TopicDataType> type_support,
-        std::type_index binding_type);
+        eprosima::fastdds::dds::TypeSupport type_support, std::type_index binding_type);
+
+    /// Return the immutable Fast DDS binding retained by a MessageType.
+    static const eprosima::fastdds::dds::TypeSupport& type_support(
+        const MessageType& message_type) noexcept;
+
+    static std::type_index binding_type(const MessageType& message_type) noexcept;
 };
 
 }  // namespace detail
@@ -37,7 +43,7 @@ Result<MessageType> make_message_type() {
         std::is_base_of<eprosima::fastdds::dds::TopicDataType, PubSubTypeT>::value,
         "PubSubTypeT must derive from eprosima::fastdds::dds::TopicDataType");
 
-    auto type_support = std::make_shared<PubSubTypeT>();
+    eprosima::fastdds::dds::TypeSupport type_support(new PubSubTypeT());
     return detail::MessageTypeAccess::create(std::move(type_support), typeid(PubSubTypeT));
 }
 

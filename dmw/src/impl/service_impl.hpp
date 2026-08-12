@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: Apache-2.0
+
+#ifndef DMW__IMPL__SERVICE_IMPL_HPP_
+#define DMW__IMPL__SERVICE_IMPL_HPP_
+
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+
+#include <fastdds/dds/publisher/DataWriter.hpp>
+#include <fastdds/dds/subscriber/DataReader.hpp>
+#include <fastdds/rtps/common/SampleIdentity.h>
+
+#include "dmw/client.hpp"
+#include "dmw/server.hpp"
+#include "impl/fastdds/context_state.hpp"
+#include "impl/reader_wait_state.hpp"
+#include "impl/service_match_state.hpp"
+
+namespace dmw {
+
+class Client::Impl {
+public:
+    Impl(
+        std::shared_ptr<impl::fastdds::ContextState> state,
+        eprosima::fastdds::dds::DataWriter* request_writer,
+        eprosima::fastdds::dds::DataReader* response_reader, std::string service_name,
+        MessageType response_type, std::shared_ptr<impl::ServiceMatchState> match_state,
+        std::unique_ptr<impl::RequestWriterMatchListener> request_listener,
+        std::unique_ptr<impl::ResponseReaderMatchListener> response_listener,
+        impl::fastdds::ContextState::TopicLease request_topic_lease,
+        impl::fastdds::ContextState::TopicLease response_topic_lease) noexcept
+    : state_(state),
+      request_writer_(request_writer),
+      response_reader_(response_reader),
+      service_name_(std::move(service_name)),
+      response_type_(std::move(response_type)),
+      match_state_(std::move(match_state)),
+      request_listener_(std::move(request_listener)),
+      response_listener_(std::move(response_listener)),
+      response_wait_state_(
+          std::make_shared<impl::ReaderWaitState>(std::move(state), response_reader)),
+      request_topic_lease_(std::move(request_topic_lease)),
+      response_topic_lease_(std::move(response_topic_lease)) {}
+    ~Impl() noexcept;
+
+    std::shared_ptr<impl::fastdds::ContextState> state_;
+    eprosima::fastdds::dds::DataWriter* request_writer_;
+    eprosima::fastdds::dds::DataReader* response_reader_;
+    std::string service_name_;
+    MessageType response_type_;
+    std::shared_ptr<impl::ServiceMatchState> match_state_;
+    std::unique_ptr<impl::RequestWriterMatchListener> request_listener_;
+    std::unique_ptr<impl::ResponseReaderMatchListener> response_listener_;
+    std::shared_ptr<impl::ReaderWaitState> response_wait_state_;
+    impl::fastdds::ContextState::TopicLease request_topic_lease_;
+    impl::fastdds::ContextState::TopicLease response_topic_lease_;
+};
+
+class Server::Impl {
+public:
+    enum class PendingPhase { Pending, Responding };
+
+    struct PendingRequest {
+        eprosima::fastrtps::rtps::SampleIdentity sample_identity;
+        PendingPhase phase{PendingPhase::Pending};
+    };
+
+    Impl(
+        std::shared_ptr<impl::fastdds::ContextState> state,
+        eprosima::fastdds::dds::DataReader* request_reader,
+        eprosima::fastdds::dds::DataWriter* response_writer, std::string service_name,
+        std::size_t max_pending_requests, MessageType request_type,
+        std::shared_ptr<impl::ResponseWriterMatchState> response_match_state,
+        std::unique_ptr<impl::ResponseWriterMatchListener> response_match_listener,
+        impl::fastdds::ContextState::TopicLease request_topic_lease,
+        impl::fastdds::ContextState::TopicLease response_topic_lease) noexcept
+    : state_(state),
+      request_reader_(request_reader),
+      response_writer_(response_writer),
+      service_name_(std::move(service_name)),
+      max_pending_requests_(max_pending_requests),
+      request_type_(std::move(request_type)),
+      response_match_state_(std::move(response_match_state)),
+      response_match_listener_(std::move(response_match_listener)),
+      request_wait_state_(
+          std::make_shared<impl::ReaderWaitState>(std::move(state), request_reader)),
+      request_topic_lease_(std::move(request_topic_lease)),
+      response_topic_lease_(std::move(response_topic_lease)) {}
+    ~Impl() noexcept;
+
+    std::shared_ptr<impl::fastdds::ContextState> state_;
+    eprosima::fastdds::dds::DataReader* request_reader_;
+    eprosima::fastdds::dds::DataWriter* response_writer_;
+    std::string service_name_;
+    std::size_t max_pending_requests_;
+    MessageType request_type_;
+    std::shared_ptr<impl::ResponseWriterMatchState> response_match_state_;
+    std::unique_ptr<impl::ResponseWriterMatchListener> response_match_listener_;
+    std::shared_ptr<impl::ReaderWaitState> request_wait_state_;
+    impl::fastdds::ContextState::TopicLease request_topic_lease_;
+    impl::fastdds::ContextState::TopicLease response_topic_lease_;
+    std::mutex pending_mutex_;
+    std::size_t reservations_{0};
+    std::unordered_map<RequestId, PendingRequest, RequestIdHash> pending_;
+};
+
+}  // namespace dmw
+
+#endif  // DMW__IMPL__SERVICE_IMPL_HPP_

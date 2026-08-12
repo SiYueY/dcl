@@ -1,48 +1,62 @@
 # DMW 设计文档
 
-> **文档状态**：V1 Freeze Candidate
-> **模块名称**：DMW — DDS Middleware Layer
-> **上层**：`dclcpp`、`dclpy`
-> **下层**：Fast DDS
-> **语言标准**：C++17
-> **ROS 2 兼容基线**：ROS 2 Humble + `rmw_fastrtps_cpp`
+| 属性 | 值 |
+| --- | --- |
+| 文档状态 | V1 Freeze Candidate |
+| 模块名称 | DMW — DDS Middleware Layer |
+| 上层 | `dclcpp`、`dclpy` |
+| 下层 | Fast DDS |
+| 语言标准 | C++17 |
+| ROS 2 兼容基线 | ROS 2 Humble + `rmw_fastrtps_cpp` |
 
----
+## 1. 文档概述
 
-# 1. 文档概述
+<a id="dmw-document-authority"></a>
 
-## 1.1 文档目的
+### 1.1 文档目的
 
-本文档定义 DCL 项目中 `dmw` 模块 V1 的：
+本文档是 DCL 项目中 `dmw` 模块 V1 的唯一公共运行时规范，定义公共 API、对象与所有权模型、生命周期、错误与并发语义，以及 ROS 2 Fast DDS wire interoperability contract。Fast DDS 专用实现规则由 [`dmw_fastdds.md`](dmw_fastdds.md) 定义；后者不得扩大、收窄或改写本文的公共契约。
 
-* 总体架构；
-* public API；
-* 对象模型；
-* Factory 模型；
-* RAII 生命周期；
-* Context / Node runtime；
-* Topic 发布订阅；
-* matched endpoint count；
-* Service Client / Server；
-* request / response correlation；
-* WaitSet；
-* GuardCondition；
-* Event；
-* QoS；
-* Registry；
-* DDS discovery；
-* ROS 2 Fast DDS wire compatibility；
-* Error / Result；
-* 线程模型；
-* 测试和验收标准。
-
-本文档目标不是只给出架构方向，而是给出：
+本文档不仅描述架构方向，还给出：
 
 > **DMW V1 可以直接进入实现阶段所需要的公共契约、生命周期规则、并发语义和 wire compatibility 规则。**
 
----
+#### 1.1.1 阅读路径
 
-## 1.2 DMW 定位
+| 读者目标 | 建议章节 |
+| --- | --- |
+| 理解模块边界和对象关系 | [公共对象模型](#dmw-public-object-model) |
+| 实现公共 API 与生命周期 | [Factory 与 RAII](#dmw-public-object-model)、[Context runtime](#dmw-context-runtime) |
+| 实现 Topic、Service 和同步原语 | [Topic](#dmw-topic)、[Service](#dmw-service)、[WaitSet](#dmw-waitset) |
+| 理解 discovery、并发和 ROS 2 互操作 | [Registry 与 discovery](#dmw-registry-discovery)、[并发](#dmw-concurrency)、[ROS 2 互操作](#dmw-ros2-interop) |
+| 执行实现验收或冻结审查 | [验收](#dmw-verification)、[Frozen invariant](#dmw-frozen-invariants) |
+
+#### 1.1.2 规范性语言
+
+本文统一使用以下关键词：
+
+| 关键词 | 含义 |
+| --- | --- |
+| **必须** | 实现必须满足的强制要求 |
+| **不得** | 实现禁止出现的行为 |
+| **可以** | 允许但不要求采用的行为 |
+| **建议** | 非规范性的实现建议 |
+
+未使用上述关键词的原理、原因和示例用于解释规范，不独立引入新要求。代码中的类型名、函数名和枚举值保持其原始英文拼写。
+
+#### 1.1.3 术语约定
+
+| 术语 | 本文含义 |
+| --- | --- |
+| public entity | 暴露给调用者、具有稳定身份的资源对象 |
+| value type | 不表示 middleware resource identity 的值、描述符或结果类型 |
+| Factory | 返回完整有效对象或 Error 的归属型创建接口 |
+| parent | 创建并定义子实体逻辑归属的 Context、Node 或 endpoint |
+| backing/state | 用于并发安全和延迟 teardown 的内部共享状态，不改变 public ownership |
+| DDS entity | Fast DDS 创建的 Participant、Reader、Writer、Topic 或 Condition |
+| wire compatibility | DDS naming、type、QoS 和 identity 足以实现数据面互操作 |
+
+### 1.2 DMW 定位
 
 DMW 是 DCL 的 middleware 核心层：
 
@@ -60,20 +74,15 @@ DMW 是 DCL 的 middleware 核心层：
                        DDSI-RTPS
 ```
 
-DMW：
+DMW 具有以下边界：
 
-* 不依赖 `rcl`；
-* 不依赖 `rclcpp`；
-* 不依赖 ROS 2 runtime；
-* 不依赖 ament runtime；
-* 不实现多 DDS backend；
-* 不额外引入 Runtime Core / Backend / Protocol 等顶层抽象层。
+- 不依赖 `rcl`、`rclcpp`、ROS 2 runtime 或 ament runtime；
+- 不支持在运行时或构建时切换到其他 DDS 实现；
+- 不额外引入 Runtime Core、实现选择层或 Protocol 等顶层抽象层。
 
-DMW 直接使用 Fast DDS 实现 middleware primitives。
+DMW 直接使用 Fast DDS 提供 middleware primitives，但普通公共 API 不暴露 Fast DDS 类型。
 
----
-
-## 1.3 V1 核心设计原则
+### 1.3 V1 核心设计原则
 
 DMW V1 冻结以下基础原则：
 
@@ -97,106 +106,92 @@ DMW V1 冻结以下基础原则：
 18. V1 支持 ROS 2 Humble + Fast DDS wire interoperability；
 19. V1 不要求完整 ROS Graph compatibility。
 
----
+## 2. V1 范围与能力边界
 
-# 2. V1 范围与能力边界
-
-## 2.1 Runtime
+### 2.1 Runtime
 
 V1 支持：
 
-* `Context`
-* `Node`
-* DDS Domain ID
-* DomainParticipant
-* shutdown
-* 一个进程创建多个 Context
-* 多 DDS Domain
+- `Context`
+- `Node`
+- DDS Domain ID
+- DomainParticipant
+- shutdown
+- 一个进程创建多个 Context
+- 多 DDS Domain
 
----
-
-## 2.2 Topic
+### 2.2 Topic
 
 V1 支持：
 
-* `Publisher`
-* `Subscriber`
-* native C++ message publish
-* native C++ message take
-* `MessageInfo`
-* matched Subscriber count
-* matched Publisher count
-* 基础 Topic QoS
-* Publisher / Subscriber Event
+- `Publisher`
+- `Subscriber`
+- Fast DDS C++ message publish
+- Fast DDS C++ message take
+- `MessageInfo`
+- matched Subscriber count
+- matched Publisher count
+- 基础 Topic QoS
+- Publisher / Subscriber Event
 
----
-
-## 2.3 Service
+### 2.3 Service
 
 V1 支持：
 
-* `Client`
-* `Server`
-* send request
-* take request
-* send response
-* take response
-* `RequestId`
-* multi-client correlation
-* service availability
-* WaitSet readiness
-* ROS 2 Humble Fast DDS Service interoperability
+- `Client`
+- `Server`
+- send request
+- take request
+- send response
+- take response
+- `RequestId`
+- multi-client correlation
+- service availability
+- WaitSet readiness
+- ROS 2 Humble Fast DDS Service interoperability
 
----
-
-## 2.4 Wait
+### 2.4 Wait
 
 V1 支持：
 
-* `WaitSet`
-* `WaitToken`
-* `WaitResult`
-* poll
-* finite timeout
-* infinite wait
-* `GuardCondition`
-* `Event`
-* Subscriber readiness
-* Client readiness
-* Server readiness
-* topology wakeup
-* Context shutdown wakeup
+- `WaitSet`
+- `WaitToken`
+- `WaitResult`
+- poll
+- finite timeout
+- infinite wait
+- `GuardCondition`
+- `Event`
+- Subscriber readiness
+- Client readiness
+- Server readiness
+- topology wakeup
+- Context shutdown wakeup
 
----
-
-## 2.5 Type
+### 2.5 Type
 
 V1 支持：
 
-* `MessageType`
-* `ServiceType`
-* Fast DDS TypeSupport binding
-* TypeRegistry
-* TopicRegistry
+- `MessageType`
+- `ServiceType`
+- Fast DDS TypeSupport binding
+- TypeRegistry
+- TopicRegistry
 
----
-
-## 2.6 QoS
+### 2.6 QoS
 
 V1 支持：
 
-* History
-* Depth
-* Reliability
-* Durability
-* Deadline
-* Lifespan
-* Liveliness
-* Liveliness lease duration
+- History
+- Depth
+- Reliability
+- Durability
+- Deadline
+- Lifespan
+- Liveliness
+- Liveliness lease duration
 
----
-
-## 2.7 ROS 2 Compatibility
+### 2.7 ROS 2 Compatibility
 
 V1 的 ROS compatibility profile 精确限定为：
 
@@ -210,56 +205,52 @@ Fast DDS
 
 支持：
 
-* ROS Topic DDS naming；
-* ROS Service DDS naming；
-* DDS type name；
-* ROS-compatible CDR；
-* Topic QoS；
-* Service QoS；
-* request SampleIdentity；
-* related_sample_identity；
-* Client/Server correlation；
-* Service availability。
+- ROS Topic DDS naming；
+- ROS Service DDS naming；
+- DDS type name；
+- ROS-compatible CDR；
+- Topic QoS；
+- Service QoS；
+- request SampleIdentity；
+- related_sample_identity；
+- Client/Server correlation；
+- Service availability。
 
----
-
-## 2.8 V1 非目标
+### 2.8 V1 非目标
 
 V1 不实现：
 
-* ROS GraphCache；
-* ROS Graph public API；
-* topic names/types introspection；
-* service names/types introspection；
-* serialized message API；
-* public serialize / deserialize API；
-* loaned message；
-* zero-copy API；
-* content filtered topic；
-* message sequence take；
-* actual QoS query；
-* endpoint information；
-* public QoS compatibility query；
-* wait-for-all-acked；
-* public assert-liveliness；
-* network flow endpoint；
-* DDS Security public API；
-* Action；
-* callback；
-* Executor；
-* Future；
-* Python asyncio；
-* IDL parser；
-* code generator；
-* C API；
-* stable C ABI；
-* Cyclone DDS；
-* Connext；
-* middleware plugin abstraction。
+- ROS GraphCache；
+- ROS Graph public API；
+- topic names/types introspection；
+- service names/types introspection；
+- serialized message API；
+- public serialize / deserialize API；
+- loaned message；
+- zero-copy API；
+- content filtered topic；
+- message sequence take；
+- actual QoS query；
+- endpoint information；
+- public QoS compatibility query；
+- wait-for-all-acked；
+- public assert-liveliness；
+- network flow endpoint；
+- DDS Security public API；
+- Action；
+- callback；
+- Executor；
+- Future；
+- Python asyncio；
+- IDL parser；
+- code generator；
+- C API；
+- stable C ABI；
+- Cyclone DDS；
+- Connext；
+- middleware plugin abstraction。
 
----
-
-## 2.9 V1 RMW 基础功能矩阵
+### 2.9 V1 RMW 基础功能矩阵
 
 | 能力                               | V1 |
 | -------------------------------- | -: |
@@ -298,11 +289,13 @@ V1 不实现：
 | actual QoS                       |  ❌ |
 | Action                           |  ❌ |
 
----
+<a id="dmw-architecture"></a>
 
-# 3. 总体架构
+## 3. 总体架构
 
-## 3.1 系统分层
+本章先定义 DMW 在系统中的位置和 type-erased runtime boundary，再通过[公共 API 与对象模型](#dmw-public-object-model)冻结 public entity、value type、Factory 与 RAII 关系。
+
+### 3.1 系统分层
 
 ```text
 ┌───────────────────────────────────────────────────────┐
@@ -344,39 +337,31 @@ V1 不实现：
                         DDSI-RTPS
 ```
 
----
-
-## 3.2 Fast DDS 映射
+### 3.2 Fast DDS 映射
 
 ```text
 Context
    ↓
 DomainParticipant
 
-
 Publisher
    ↓
 DataWriter
-
 
 Subscriber
    ↓
 DataReader
 
-
 Client
    ├── request DataWriter
    └── response DataReader
-
 
 Server
    ├── request DataReader
    └── response DataWriter
 ```
 
----
-
-## 3.3 Non-template Runtime API
+### 3.3 Non-template Runtime API
 
 DMW runtime API 不使用消息模板类型：
 
@@ -400,15 +385,11 @@ class Publisher;
 
 typed API 属于：
 
-```text
-dclcpp
-```
+`dclcpp`
 
 而不是 DMW。
 
----
-
-## 3.4 Type Erasure
+### 3.4 Type Erasure
 
 Topic：
 
@@ -440,11 +421,9 @@ Result<void> Server::send_response(
     const void* response);
 ```
 
----
+### 3.5 Type-erased Pointer 公共契约
 
-## 3.5 Type-erased Pointer 公共契约
-
-### 3.5.1 非空要求
+#### 3.5.1 非空要求
 
 以下参数不得为 `nullptr`：
 
@@ -464,15 +443,11 @@ Server::send_response(..., response)
 
 如果指针为 `nullptr`：
 
-```text
-ErrorCode::InvalidArgument
-```
+`ErrorCode::InvalidArgument`
 
 DMW 不访问该指针。
 
----
-
-### 3.5.2 Concrete Type 前置条件
+#### 3.5.2 Concrete Type 前置条件
 
 传入的对象必须：
 
@@ -491,9 +466,7 @@ bar_publisher->publish(&wrong_message);
 
 如果 Publisher 实际绑定的是：
 
-```text
-Bar
-```
+`Bar`
 
 则属于调用者违反前置条件。
 
@@ -503,29 +476,23 @@ Bar
 
 这种错误不映射到：
 
-```text
-TypeMismatch
-```
+`TypeMismatch`
 
 而属于 programming contract violation。
 
 `dclcpp` typed API 必须通过模板类型消除正常用户路径上的这一风险。
 
----
-
-### 3.5.3 `TypeMismatch` 的用途
+#### 3.5.3 `TypeMismatch` 的用途
 
 `ErrorCode::TypeMismatch` 只用于 DMW 实际可验证的情况，例如：
 
-* 同一 DDS Topic name 注册了不同 wire type；
-* TypeRegistry 中同一 wire type name 对应不同 binding identity；
-* Service request / response descriptor 与已有 registry entry 冲突。
+- 同一 DDS Topic name 注册了不同 wire type；
+- TypeRegistry 中同一 wire type name 对应不同 binding identity；
+- Service request / response descriptor 与已有 registry entry 冲突。
 
 它不用于尝试识别任意 `void*` 的真实 C++ 动态类型。
 
----
-
-### 3.5.4 `take()` 输出状态
+#### 3.5.4 `take()` 输出状态
 
 如果：
 
@@ -535,9 +502,7 @@ subscriber.take(message, info)
 
 返回：
 
-```text
-success + TakeStatus::NoData
-```
+`success + TakeStatus::NoData`
 
 则：
 
@@ -561,27 +526,23 @@ InvalidState
 
 如果：
 
-1. native sample 已经被取出；
+1. DDS sample 已经被取出；
 2. 随后 deserialize 失败；
 
 则：
 
-* C++ output object 必须保持可析构的合法对象状态；
-* 具体字段内容允许 unspecified；
-* `MessageInfo` 允许 unspecified；
-* sample 允许已经从 DataReader history 中移除。
+- C++ output object 必须保持可析构的合法对象状态；
+- 具体字段内容允许 unspecified；
+- `MessageInfo` 允许 unspecified；
+- sample 允许已经从 DataReader history 中移除。
 
 该错误返回：
 
-```text
-DdsError
-```
+`DdsError`
 
 或与实际错误更匹配的 ErrorCode。
 
----
-
-### 3.5.5 Event 输出状态
+#### 3.5.5 Event 输出状态
 
 `Event::take(EventInfo&)` 使用相同规则：
 
@@ -592,17 +553,31 @@ NoData
 error before consuming status
     -> EventInfo unchanged
 
-error after native status consumption
+error after Fast DDS status consumption
     -> EventInfo valid but content unspecified
 ```
 
----
+#### 3.5.6 Service take 输出与有限扫描
 
-# 4. API 与对象模型
+`Client::take_response()` 与 `Server::take_request()` 对 payload、`RequestId` 和其它 public
+metadata 使用同一事务边界：`NoData` 或 middleware sample consumption 前的任何失败保持
+全部 caller output 不变；sample 已消费后的 metadata conversion、correlation、payload
+commit、Error 或允许传播的 C++ exception，只保证全部 output 仍 valid/destructible，字段
+内容可以 unspecified，sample 可以已经从 middleware history 移除。
 
-## 4.1 Public Type 分类
+需要过滤 invalid、foreign、duplicate 或不可关联 sample 的任意 public `take()`，单次调用
+必须使用有限的 call-start candidate budget：filtered sample 消耗 budget，并发新 arrival 不得
+延长本次调用；budget 耗尽且没有 returnable sample 时返回 `TakeStatus::NoData`。因此 NoData
+是“本次有限候选扫描未取得 public sample”，不保证返回瞬间 middleware history 绝对为空。
+后续调用可以继续处理剩余或新到达 sample。
 
-### Resource / Entity
+<a id="dmw-public-object-model"></a>
+
+### 3.6 公共 API 与对象模型
+
+#### 3.6.1 公共类型分类
+
+##### 3.6.1.1 Resource/Entity
 
 ```text
 Context
@@ -619,7 +594,7 @@ GuardCondition
 Event
 ```
 
-### Value / Descriptor / Result
+##### 3.6.1.2 Value/Descriptor/Result
 
 ```text
 ContextOptions
@@ -656,9 +631,7 @@ Error
 Result<T>
 ```
 
----
-
-## 4.2 Resource / Entity 语义
+#### 3.6.2 Resource/Entity 语义
 
 Resource/Entity 统一：
 
@@ -711,15 +684,11 @@ auto second = std::move(first);
 
 移动的是：
 
-```text
-unique_ptr
-```
+`unique_ptr`
 
 而不是 Publisher 对象本身。
 
----
-
-## 4.3 Public Factory
+#### 3.6.3 公共 Factory
 
 唯一 Factory 结构：
 
@@ -741,9 +710,7 @@ Publisher Subscriber Client  Server
      └ create_event ┘
 ```
 
----
-
-## 4.4 Factory 命名
+#### 3.6.4 Factory 命名
 
 冻结为：
 
@@ -777,16 +744,9 @@ Event
     Subscriber::create_event()
 ```
 
-禁止：
+不得提供 `create_subscription()` 或 `create_service()` 这类与当前实体命名和归属层级不一致的 Factory。
 
-```text
-create_subscription()
-create_service()
-```
-
----
-
-## 4.5 Factory 返回类型
+#### 3.6.5 Factory 返回类型
 
 统一：
 
@@ -801,9 +761,7 @@ Result<std::unique_ptr<Publisher>>
 Node::create_publisher(...);
 ```
 
----
-
-## 4.6 事务式创建
+#### 3.6.6 事务式创建
 
 流程：
 
@@ -833,19 +791,15 @@ public entity
 
 任何步骤失败不得返回：
 
-```text
-half-valid public object
-```
+`half-valid public object`
 
----
-
-## 4.7 Constructor
+#### 3.6.7 构造函数
 
 Resource/Entity constructor：
 
-* private；
-* `noexcept`；
-* 只包装完整有效的 `Impl`。
+- private；
+- `noexcept`；
+- 只包装完整有效的 `Impl`。
 
 ```cpp
 Publisher::Publisher(
@@ -862,9 +816,7 @@ Publisher publisher;
 publisher.initialize(...);
 ```
 
----
-
-## 4.8 `Impl::create()`
+#### 3.6.8 `Impl::create()`
 
 内部中间资源必须通过 local RAII handle 管理，例如：
 
@@ -886,9 +838,7 @@ reverse rollback
 
 不得依赖易遗漏的大段手写 rollback。
 
----
-
-## 4.9 `Impl::destroy()`
+#### 3.6.9 `Impl::destroy()`
 
 内部：
 
@@ -908,29 +858,23 @@ private:
 
 要求：
 
-* private；
-* `noexcept`；
-* idempotent；
-* best-effort；
-* 尽可能逆创建顺序销毁；
-* 某一步失败后继续其余 cleanup；
-* 不从析构抛异常。
+- private；
+- `noexcept`；
+- idempotent；
+- best-effort；
+- 尽可能逆创建顺序销毁；
+- 某一步失败后继续其余 cleanup；
+- 不从析构抛异常。
 
----
-
-## 4.10 Shared Internal State
+#### 3.6.10 共享内部状态
 
 public ownership：
 
-```text
-unique_ptr
-```
+`unique_ptr`
 
 与内部 dependency lifetime：
 
-```text
-shared_ptr / weak_ptr
-```
+`shared_ptr / weak_ptr`
 
 必须区分。
 
@@ -949,25 +893,367 @@ shared_ptr<ContextState>
 
 内部共享状态只用于：
 
-* teardown safety；
-* dependency lifetime；
-* concurrency coordination。
+- teardown safety；
+- dependency lifetime；
+- concurrency coordination。
 
 它不改变 public ownership。
 
----
+<a id="dmw-error-result"></a>
 
-# 5. Context 与 Node Runtime
+## 4. 错误、Result 与日志
 
-## 5.1 ContextOptions
+本章集中定义所有公共错误表示、`Result<T>` alternative 访问规则、exception boundary、timeout/NoData 区分和 logging 边界。其它章节不得重新定义这些通用规则。
+
+### 4.1 ErrorCode
+
+V1 冻结：
+
+```cpp
+enum class ErrorCode
+{
+    InvalidArgument,
+    InvalidState,
+    InvalidName,
+
+    TypeMismatch,
+
+    AlreadyExists,
+    NotFound,
+
+    AlreadyRegistered,
+    NotRegistered,
+
+    Busy,
+
+    Timeout,
+
+    Unsupported,
+
+    IncompatibleQos,
+
+    ParentDestroyed,
+
+    ResourceExhausted,
+
+    DdsError,
+
+    ContextShutdown
+};
+```
+
+不包含：
+
+`Ok`
+
+。
+
+### 4.2 Error
+
+```cpp
+class Error
+{
+public:
+    Error(
+        ErrorCode code,
+        std::string message);
+
+    ErrorCode
+    code() const noexcept;
+
+    std::string_view
+    message() const noexcept;
+
+private:
+    ErrorCode code_;
+    std::string message_;
+};
+```
+
+每个合法 Error 都表示失败。
+
+不存在：
+
+`Error{Ok}`
+
+。
+
+### 4.3 Result<T> 基础契约
+
+```cpp
+template<class T>
+class Result
+{
+public:
+    static Result success(T value);
+
+    static Result failure(Error error);
+
+    bool has_value() const noexcept;
+
+    explicit operator bool() const noexcept;
+
+    T& value() & noexcept;
+
+    const T& value() const & noexcept;
+
+    T&& value() && noexcept;
+
+    Error& error() & noexcept;
+
+    const Error& error() const & noexcept;
+
+    Error&& error() && noexcept;
+
+private:
+    // expected-like storage
+};
+```
+
+### 4.4 Result<T> Default Construction
+
+`Result<T>`：
+
+`not default constructible`
+
+。
+
+创建时必须明确是：
+
+```text
+success
+or
+failure
+```
+
+。
+
+### 4.5 Move-only Value
+
+`Result<T>` 必须支持 move-only T。
+
+例如：
+
+```cpp
+Result<std::unique_ptr<Node>>
+result = ...;
+
+if (!result) {
+    // result.error()
+}
+
+std::unique_ptr<Node> node =
+    std::move(result).value();
+```
+
+因此：
+
+```cpp
+T&& value() &&
+```
+
+是 V1 必需 public contract。
+
+### 4.6 Copy / Move Semantics
+
+`Result<T>`：
+
+- 如果 T copyable，则 Result copyable；
+- 如果 T 不可 copy，则 Result 不可 copy；
+- 如果 T movable，则 Result movable。
+
+`Error` 本身：
+
+- copyable；
+- movable。
+
+### 4.7 Wrong-alternative Access
+
+调用：
+
+```cpp
+result.value()
+```
+
+要求：
+
+`has_value() == true`
+
+。
+
+调用：
+
+```cpp
+result.error()
+```
+
+要求：
+
+`has_value() == false`
+
+。
+
+违反该前置条件属于 programming contract violation。
+
+DMW V1 定义：
+
+> 错误 alternative access 必须调用 `std::terminate()`；debug build 可以在 terminate 前触发 assertion。
+
+它：
+
+- 不抛 exception；
+- 不是 UB；
+- 不返回 fake value。
+
+### 4.8 Result<void>
+
+```cpp
+template<>
+class Result<void>
+{
+public:
+    static Result success();
+
+    static Result failure(Error error);
+
+    bool has_value() const noexcept;
+
+    explicit operator bool() const noexcept;
+
+    void value() const noexcept;
+
+    Error& error() & noexcept;
+
+    const Error& error() const & noexcept;
+
+    Error&& error() && noexcept;
+
+private:
+    // ...
+};
+```
+
+`value()` 只有在 success 状态合法。
+
+失败状态调用 `value()`：
+
+`std::terminate()`
+
+。
+
+### 4.9 Result 与异常
+
+DMW runtime expected failure：
+
+`不使用 C++ exception 传播`
+
+。
+
+例如：
+
+```text
+invalid configuration
+DDS create failure
+shutdown
+timeout
+```
+
+通过：
+
+`Result<T>`
+
+表达。
+
+内部无法恢复的 programming bug 可使用 assertion / terminate。
+
+#### 4.9.1 Public exception boundary
+
+只有 destructor、trivial observer 和实现能够保证不失败且不分配的操作使用
+`noexcept`。返回 `Result<T>` 的普通 public operation 默认不标 `noexcept`。
+
+边界规则固定为：
+
+```text
+expected middleware/configuration/lifecycle failure
+    -> Result<T>
+
+Fast DDS 可转换错误
+    -> Result<T>
+
+invalid argument
+    -> Result<T>
+
+std::bad_alloc
+    -> 允许作为 C++ exception 向上传播
+
+其他未预期 C++ exception
+    -> 允许向上传播；不可恢复 programming bug 可 terminate
+```
+
+未预期 exception 不得伪装成普通 DMW Error。V1 不提供 allocation-free Error，
+因此不定义 `ErrorCode::BadAllocation`。`ResourceExhausted` 只表达逻辑/中间件资源
+上限，例如 pending request 上限、token ID 耗尽或 DDS resource limit，不表示
+进程 heap OOM。
+
+### 4.10 Timeout 与 NoData
+
+```text
+Subscriber no sample
+    -> TakeStatus::NoData
+
+WaitSet timeout
+    -> WaitStatus::Timeout
+```
+
+均不是 Error。
+
+但 Service response discovery workaround 的：
+
+`response writer wait timeout`
+
+是一次 operation failure：
+
+`ErrorCode::Timeout`
+
+。
+
+### 4.11 Logging
+
+日志用于：
+
+- create/destroy；
+- rollback；
+- DDS error；
+- matched state；
+- service identity；
+- registry conflict；
+- WaitSet；
+- shutdown；
+- ROS compatibility。
+
+日志不能代替 Result。
+
+<a id="dmw-context-runtime"></a>
+
+## 5. Context 与 Node Runtime
+
+`Context` 是一个 Domain ID 和一个 DomainParticipant 的 runtime root；`Node` 是 logical entity。Context shutdown 改变运行状态，内部 shared state 只保证 teardown 安全，不延长 Active 状态。
+
+### 5.1 ContextOptions
 
 ```cpp
 struct ContextOptions
 {
     std::uint32_t domain_id{0};
     std::string participant_name;
+    CompatibilityProfile compatibility_profile{
+        CompatibilityProfile::NativeDds};
 };
 ```
+
+`CompatibilityProfile` 是 Context-scoped immutable property。它影响 Participant/Fast DDS
+container QoS、`SystemDefault` 解析、DDS naming 与 interoperability scope；同一 Context
+内的 endpoint 不得分别覆盖 profile。
 
 C++17 示例：
 
@@ -982,9 +1268,7 @@ auto context_result =
 
 本文档不使用 C++20 designated initializer。
 
----
-
-## 5.2 Context API
+### 5.2 Context API
 
 ```cpp
 class Context
@@ -1029,9 +1313,7 @@ private:
 };
 ```
 
----
-
-## 5.3 Context 与 DomainParticipant
+### 5.3 Context 与 DomainParticipant
 
 冻结：
 
@@ -1045,9 +1327,7 @@ private:
 
 不提供 public `Participant`。
 
----
-
-## 5.4 Multi-domain
+### 5.4 Multi-domain
 
 多个 Domain：
 
@@ -1076,9 +1356,7 @@ Process
     └── Participant(domain=10)
 ```
 
----
-
-## 5.5 Context 内部状态机
+### 5.5 Context 内部状态机
 
 内部冻结：
 
@@ -1110,15 +1388,13 @@ Shutdown
 
 `Destroyed` 是内部 resource lifetime 终点，不是 public runtime state。
 
----
+<a id="dmw-shutdown"></a>
 
-## 5.6 Shutdown 线性化点
+### 5.6 Shutdown 线性化点
 
 `shutdown()` 的线性化点是：
 
-```text
-Active -> ShuttingDown
-```
+`Active -> ShuttingDown`
 
 的原子状态转换。
 
@@ -1128,15 +1404,11 @@ Active -> ShuttingDown
 
 从此以后所有需要 Active runtime 的新操作，在完成参数合法性检查后返回：
 
-```text
-ContextShutdown
-```
+`ContextShutdown`
 
 。
 
----
-
-## 5.7 `is_shutdown()`
+### 5.7 `is_shutdown()`
 
 定义：
 
@@ -1153,29 +1425,23 @@ Shutdown
 
 `is_shutdown()`：
 
-* thread-safe；
-* 可与 `shutdown()` 并发；
-* 不抛异常。
+- thread-safe；
+- 可与 `shutdown()` 并发；
+- 不抛异常。
 
----
-
-## 5.8 重复 shutdown
+### 5.8 重复 shutdown
 
 `shutdown()` 是幂等 runtime transition。
 
 第一个线程：
 
-```text
-Active -> ShuttingDown
-```
+`Active -> ShuttingDown`
 
 并执行 shutdown propagation。
 
 其他线程如果观察到：
 
-```text
-ShuttingDown
-```
+`ShuttingDown`
 
 则等待该 shutdown attempt 完成。
 
@@ -1183,21 +1449,22 @@ ShuttingDown
 
 如果已经是：
 
-```text
-Shutdown
-```
+`Shutdown`
 
 再次调用 `shutdown()` 返回此前记录的 terminal shutdown result。
 
 因此：
 
-* 成功 shutdown 后重复调用继续 success；
-* 如果第一次 shutdown 完成但报告内部 cleanup error，后续调用返回相同 Error；
-* Context 状态不会因为 Error 回到 Active。
+- 成功 shutdown 后重复调用继续 success；
+- 如果第一次 shutdown 完成但报告内部 cleanup error，后续调用返回相同 Error；
+- Context 状态不会因为 Error 回到 Active。
 
----
+这是公共契约允许的通用实现能力，不要求 Fast DDS 实现刻意产生 cleanup Error。该实现可以在其
+已声明的 liveness/teardown assumptions 下实现更窄的“正常 runtime shutdown 恒为 success”
+子集。runtime 已提交 terminal result 后才发生的 Fast DDS final cleanup/delete failure，只进入
+diagnostic、conservative retention 或 quarantine，不得 retroactively 改变此前返回的 result。
 
-## 5.9 Shutdown propagation
+### 5.9 Shutdown propagation
 
 进入 ShuttingDown 后至少执行：
 
@@ -1206,50 +1473,42 @@ Shutdown
 3. 阻止新 WaitSet；
 4. 阻止新 GuardCondition；
 5. 通知所有 WaitSet；
-6. 打断 native wait；
-7. 等待 WaitSet 离开需要 Context Active 的 native wait；
+6. 打断 Fast DDS WaitSet wait；
+7. 等待 WaitSet 离开需要 Context Active 的 Fast DDS WaitSet wait；
 8. 标记 runtime Shutdown。
 
-如果某个 native wake 操作失败：
+如果某个 Fast DDS wake 操作失败：
 
-* Context 仍保持 ShuttingDown；
-* 必须继续其他 WaitSet；
-* 必须执行安全 fallback，例如 detach / condition invalidation；
-* 不允许恢复 Active。
+- Context 仍保持 ShuttingDown；
+- 必须继续其他 WaitSet；
+- 必须执行安全 fallback，例如 detach / condition invalidation；
+- 不允许恢复 Active。
 
 只有所有 registered WaitSet 已经：
 
 ```text
 woken
 or
-safely detached from active native wait
+safely detached from active Fast DDS WaitSet wait
 ```
 
 以后，状态才转换为：
 
-```text
-Shutdown
-```
+`Shutdown`
 
 。
 
 如果期间发生错误：
 
-```text
-shutdown() -> Error
-```
+`shutdown() -> Error`
 
 但：
 
-```text
-is_shutdown() == true
-```
+`is_shutdown() == true`
 
 。
 
----
-
-## 5.10 Context Destructor
+### 5.10 Context Destructor
 
 如果用户没有显式 shutdown：
 
@@ -1261,14 +1520,12 @@ best-effort shutdown_noexcept()
 
 错误：
 
-* 写日志；
-* 不抛异常。
+- 写日志；
+- 不抛异常。
 
 Context facade 析构不等于立刻删除 DomainParticipant。
 
----
-
-## 5.11 ContextState 最终销毁
+### 5.11 ContextState 最终销毁
 
 如果还有 child：
 
@@ -1301,9 +1558,7 @@ last reference released
 DomainParticipant destroyed
 ```
 
----
-
-## 5.12 Node
+### 5.12 Node
 
 ```cpp
 struct NodeOptions
@@ -1315,9 +1570,7 @@ struct NodeOptions
 
 Node 是 logical entity，不等于 Participant。
 
----
-
-## 5.13 Node API
+### 5.13 Node API
 
 ```cpp
 class Node
@@ -1374,9 +1627,7 @@ private:
 };
 ```
 
----
-
-## 5.14 Node 生命周期
+### 5.14 Node 生命周期
 
 内部：
 
@@ -1403,17 +1654,15 @@ subscriber->take(...);
 
 Node facade 析构后：
 
-* 不再创建 endpoint；
-* NodeState 保留 logical identity；
-* 最后一个 endpoint 释放后 NodeState 才最终释放。
+- 不再创建 endpoint；
+- NodeState 保留 logical identity；
+- 最后一个 endpoint 释放后 NodeState 才最终释放。
 
----
-
-## 5.15 全局错误优先级
+### 5.15 全局错误优先级
 
 所有 public runtime API 使用统一错误优先级：
 
-### 第一级：参数错误
+#### 5.15.1 第一级：参数错误
 
 首先检查可以安全检测的 public 参数错误：
 
@@ -1432,7 +1681,7 @@ InvalidName
 ...
 ```
 
-### 第二级：Context 状态
+#### 5.15.2 第二级：Context 状态
 
 参数有效后，如果 Context 已处于：
 
@@ -1444,19 +1693,15 @@ Shutdown
 
 返回：
 
-```text
-ContextShutdown
-```
+`ContextShutdown`
 
-### 第三级：Parent 状态
+#### 5.15.3 第三级：Parent 状态
 
 Context Active，但 parent endpoint 已被销毁：
 
-```text
-ParentDestroyed
-```
+`ParentDestroyed`
 
-### 第四级：Object-local 状态
+#### 5.15.4 第四级：Object-local 状态
 
 例如：
 
@@ -1467,7 +1712,7 @@ Busy
 NotFound
 ```
 
-### 第五级：Middleware runtime error
+#### 5.15.5 第五级：Middleware runtime error
 
 最后才是：
 
@@ -1478,11 +1723,11 @@ Timeout
 
 等底层错误。
 
----
+<a id="dmw-type-system"></a>
 
-# 6. 类型系统
+## 6. 类型系统
 
-## 6.1 Gid
+### 6.1 Gid
 
 Fast DDS GUID 不进入普通 public API。
 
@@ -1521,9 +1766,7 @@ Fast DDS GUID_t
 dmw::Gid
 ```
 
----
-
-## 6.2 MessageType
+### 6.2 MessageType
 
 `MessageType` 是一个 cheap-copy、可重新绑定的 runtime descriptor handle。
 
@@ -1571,9 +1814,7 @@ bool valid();
 
 存在的 MessageType 必须有效。
 
----
-
-## 6.3 `type_name()`
+### 6.3 `type_name()`
 
 `MessageType::type_name()` 表示：
 
@@ -1583,19 +1824,13 @@ bool valid();
 
 例如 ROS-compatible String：
 
-```text
-std_msgs::msg::dds_::String_
-```
+`std_msgs::msg::dds_::String_`
 
----
-
-## 6.4 Fast DDS Binding
+### 6.4 Fast DDS Binding
 
 专用 header：
 
-```text
-dmw/fastdds/message_type.hpp
-```
+`dmw/fastdds/message_type.hpp`
 
 提供：
 
@@ -1607,9 +1842,8 @@ class MessageTypeAccess
 {
 public:
     static Result<MessageType> create(
-        std::shared_ptr<
-            eprosima::fastdds::dds::TopicDataType>
-                type_support,
+        eprosima::fastdds::dds::TypeSupport
+            type_support,
         std::type_index binding_type);
 };
 
@@ -1652,9 +1886,7 @@ Fast DDS/Fast CDR 类型。
 
 普通 runtime consumer 不需要包含该 header。
 
----
-
-## 6.5 BindingIdentity
+### 6.5 BindingIdentity
 
 V1 TypeRegistry 不使用：
 
@@ -1678,24 +1910,20 @@ BindingIdentity
 ```text
 BindingIdentity
     =
-integration backend id
+binding implementation id
 +
 C++ PubSubType binding type identity
 ```
 
 V1 `dmw::fastdds_binding` 可以通过：
 
-```text
-std::type_index(typeid(PubSubTypeT))
-```
+`std::type_index(typeid(PubSubTypeT))`
 
 建立进程内 binding identity。
 
 因此 V1 Fast DDS binding 要求 RTTI 可用。
 
----
-
-## 6.6 MessageType 等价规则
+### 6.6 MessageType 等价规则
 
 两个独立构造的 MessageType：
 
@@ -1726,9 +1954,7 @@ V1 不进行结构化 wire-layout 比较。
 
 这种情况返回：
 
-```text
-TypeMismatch
-```
+`TypeMismatch`
 
 。
 
@@ -1736,9 +1962,7 @@ TypeMismatch
 
 > V1 不尝试证明两个不同 PubSubType 实现是否结构上 wire-equivalent。
 
----
-
-## 6.7 ServiceType
+### 6.7 ServiceType
 
 ```cpp
 class ServiceType
@@ -1762,18 +1986,27 @@ private:
 
 ServiceType：
 
-* 是可复制、可移动、可重新赋值的 value handle；
-* 其 request/response descriptor 指向的 binding 内容不可变；
-* copyable；
-* movable；
-* value descriptor；
-* 不拥有 DDS resource。
+- 是可复制、可移动、可重新赋值的 value handle；
+- 其 request/response descriptor 指向的 binding 内容不可变；
+- copyable；
+- movable；
+- value descriptor；
+- 不拥有 DDS resource。
 
----
+<a id="dmw-profile-qos"></a>
 
-# 7. QoS 与兼容模式
+## 7. CompatibilityProfile、Naming 与 QoS
 
-## 7.1 QoS Policies
+本章的概念顺序为：Context 选择 immutable `CompatibilityProfile`，profile 决定 logical name 到 Fast DDS name 的解析规则，并与 entity kind 共同解析 `SystemDefault` QoS。`Qos` value 本身不捕获 Context 或 profile。
+
+```text
+ContextOptions.compatibility_profile
+        -> resolved DDS naming
+        -> SystemDefault resolution
+        -> explicit DDS entity QoS
+```
+
+### 7.1 QoS 策略
 
 ```cpp
 enum class HistoryPolicy
@@ -1805,9 +2038,7 @@ enum class LivelinessPolicy
 };
 ```
 
----
-
-## 7.2 QosDuration
+### 7.2 QosDuration
 
 ```cpp
 class QosDuration
@@ -1842,17 +2073,13 @@ private:
 
 `value()` 的前置条件是：
 
-```text
-kind() == Kind::Finite
-```
+`kind() == Kind::Finite`
 
 对 `SystemDefault` 或 `Infinite` 调用 `value()` 属于 programming contract
 violation，必须调用 `std::terminate()`；debug build 可以在 terminate 前触发
 assertion。它不返回 sentinel，也不抛 exception。
 
----
-
-## 7.3 QosDuration 输入规则
+### 7.3 QosDuration 输入规则
 
 ```cpp
 QosDuration::finite(duration)
@@ -1860,21 +2087,15 @@ QosDuration::finite(duration)
 
 要求：
 
-```text
-duration >= 0
-```
+`duration >= 0`
 
 负值返回：
 
-```text
-InvalidArgument
-```
+`InvalidArgument`
 
 零是合法 finite duration。
 
----
-
-## 7.4 Duration → Fast DDS
+### 7.4 Duration → Fast DDS
 
 转换使用 checked conversion：
 
@@ -1888,21 +2109,15 @@ nanosecond remainder
 
 要求：
 
-```text
-0 <= nanosecond remainder < 1e9
-```
+`0 <= nanosecond remainder < 1e9`
 
 如果 seconds 超出目标 Fast DDS duration representation：
 
-```text
-InvalidArgument
-```
+`InvalidArgument`
 
 不得发生整数 wraparound。
 
----
-
-## 7.5 Qos API
+### 7.5 Qos API
 
 ```cpp
 class Qos
@@ -1957,16 +2172,15 @@ public:
 };
 ```
 
-`Qos()` 与 `Qos::system_default()` 完全等价，所有 policy 初始值均为
-`SystemDefault`；不存在依赖当前 Context 或 CompatibilityProfile 的隐藏默认值。
+`Qos()` 与 `Qos::system_default()` 完全等价，所有 policy 初始值均编码为
+`SystemDefault`；Qos value 本身不捕获 Context 或 profile。该 value 在 entity Factory 中
+按 parent Context 的 immutable `CompatibilityProfile` 与 entity kind 解析。
 
 所有可能失败的 Qos setter 都提供 strong guarantee：返回 Error 时，整个 Qos
 保持调用前状态。无失败返回值的 setter 必须以一次原子状态提交或等价方式避免
 向调用者暴露部分更新。
 
----
-
-## 7.6 `keep_last()` 不变量
+### 7.6 `keep_last()` 不变量
 
 ```cpp
 qos.keep_last(depth);
@@ -1974,21 +2188,15 @@ qos.keep_last(depth);
 
 要求：
 
-```text
-depth > 0
-```
+`depth > 0`
 
 否则：
 
-```text
-InvalidArgument
-```
+`InvalidArgument`
 
 且 Qos 保持调用前状态。
 
----
-
-## 7.7 KeepAll 与 Depth
+### 7.7 KeepAll 与 Depth
 
 调用：
 
@@ -2013,9 +2221,7 @@ keep_last(valid_depth);
 
 不隐式恢复旧 depth。
 
----
-
-## 7.8 SystemDefault
+### 7.8 SystemDefault
 
 `SystemDefault` 的最终解释由：
 
@@ -2027,39 +2233,30 @@ EntityKind
 
 共同决定，而不是 Qos 自身决定。
 
----
-
-## 7.9 NativeDds SystemDefault
+### 7.9 NativeDds SystemDefault
 
 在：
 
-```text
-CompatibilityProfile::NativeDds
-```
+`CompatibilityProfile::NativeDds`
 
 下：
 
-```text
-SystemDefault
-```
+`SystemDefault`
 
-映射到固定 Fast DDS baseline 的 vendor default。
+映射到 DMW 为当前 CompatibilityProfile、entity kind 和 Fast DDS version 冻结的 baseline。不得读取进程 XML default、
+环境变量、factory/participant mutable default profile 或其它 middleware runtime default。
 
----
-
-## 7.10 Ros2FastDdsHumble SystemDefault
+### 7.10 Ros2FastDdsHumble SystemDefault
 
 在：
 
-```text
-Ros2FastDdsHumble
-```
+`Ros2FastDdsHumble`
 
 下：
 
-* DMW V1 不读取 `RMW_FASTRTPS_USE_QOS_FROM_XML`；
-* 不加载 ROS 2 Fast DDS XML override；
-* `SystemDefault` 按本文第 13 章固定版本 baseline 的 Fast DDS defaults 解析。
+- DMW V1 不读取 `RMW_FASTRTPS_USE_QOS_FROM_XML`；
+- 不加载 ROS 2 Fast DDS XML override；
+- `SystemDefault` 按 [ROS 2 interoperability contract](#dmw-ros2-interop) 固定版本 baseline 的 Fast DDS defaults 解析。
 
 如果需要普通 ROS 2 默认 Topic QoS，应显式使用：
 
@@ -2073,9 +2270,7 @@ Qos::ros2_default();
 Qos::ros2_services_default();
 ```
 
----
-
-## 7.11 ROS 2 Default QoS
+### 7.11 ROS 2 Default QoS
 
 `Qos::ros2_default()`：
 
@@ -2090,9 +2285,7 @@ Liveliness   = SystemDefault
 Lease        = SystemDefault
 ```
 
----
-
-## 7.12 ROS 2 Service Default QoS
+### 7.12 ROS 2 Service Default QoS
 
 `Qos::ros2_services_default()`：
 
@@ -2109,21 +2302,15 @@ Lease        = SystemDefault
 
 这与 Humble RMW service default profile 的基础策略一致。
 
----
-
-## 7.13 Unsupported Policy
+### 7.13 Unsupported Policy
 
 如果 DMW public QoS 支持某 policy，但当前 Fast DDS baseline 无法表达：
 
-```text
-Unsupported
-```
+`Unsupported`
 
 如果 policy 值本身非法：
 
-```text
-InvalidArgument
-```
+`InvalidArgument`
 
 。
 
@@ -2133,21 +2320,15 @@ InvalidArgument
 
 endpoint 正常创建，但：
 
-```text
-matched count = 0
-```
+`matched count = 0`
 
 并可产生：
 
-```text
-IncompatibleQos Event
-```
+`IncompatibleQos Event`
 
 。
 
----
-
-## 7.14 CompatibilityProfile
+### 7.14 CompatibilityProfile
 
 ```cpp
 enum class CompatibilityProfile
@@ -2158,31 +2339,42 @@ enum class CompatibilityProfile
 };
 ```
 
----
+profile 的 public ownership 固定在 `ContextOptions::compatibility_profile`，Context 创建
+成功后不可修改。所有 public `topic_name()`、service name 或等价 observer 始终返回
+normalized logical DMW name，不返回 profile-specific resolved DDS name。
 
-# 8. Topic 通信
+设 logical FQN `/a/b` 对应 `path=a/b`，V1 resolved DDS naming 为：
 
-## 8.1 PublisherOptions / SubscriberOptions
+| Profile | Topic | Service request | Service response |
+| --- | --- | --- | --- |
+| `NativeDds` | `dmw/t/<path>` | `dmw/rq/<path>` | `dmw/rr/<path>` |
+| `Ros2FastDdsHumble` | `rt/<path>` | `rq/<path>Request` | `rr/<path>Reply` |
+
+profile 还决定可观察的 endpoint Fast DDS QoS behavior、service identity、matching/discovery
+behavior 与 wire-interoperability scope。完整 wire interoperability 要求 `MessageType` /
+`ServiceType` 同时提供兼容的 wire type name 与 CDR serializer；选择 profile 不表示 runtime
+能够自动认证任意 custom `TopicDataType`。
+
+<a id="dmw-topic"></a>
+
+## 8. Publisher 与 Subscriber
+
+### 8.1 PublisherOptions / SubscriberOptions
 
 ```cpp
 struct PublisherOptions
 {
-    CompatibilityProfile compatibility{
-        CompatibilityProfile::NativeDds
-    };
 };
 
 struct SubscriberOptions
 {
-    CompatibilityProfile compatibility{
-        CompatibilityProfile::NativeDds
-    };
 };
 ```
 
----
+两者继承 parent Context 的 immutable `CompatibilityProfile`，V1 不提供 endpoint-scoped
+profile override。
 
-## 8.2 Publisher API
+### 8.2 Publisher API
 
 ```cpp
 class Publisher
@@ -2225,9 +2417,7 @@ private:
 };
 ```
 
----
-
-## 8.3 Subscriber API
+### 8.3 Subscriber API
 
 ```cpp
 class Subscriber
@@ -2271,9 +2461,7 @@ private:
 };
 ```
 
----
-
-## 8.4 TakeStatus
+### 8.4 TakeStatus
 
 ```cpp
 enum class TakeStatus
@@ -2296,9 +2484,7 @@ success + NoData
 
 NoData 不是 Error。
 
----
-
-## 8.5 MessageInfo
+### 8.5 MessageInfo
 
 ```cpp
 struct MessageInfo
@@ -2317,9 +2503,17 @@ struct MessageInfo
 };
 ```
 
----
+字段语义固定为：
 
-## 8.6 matched Subscriber Count
+- `source_timestamp_ns`：middleware-provided source timestamp；不可获得或不可安全表示时为 `0`；
+- `received_timestamp_ns`：middleware-provided receive/reception timestamp；不可获得或不可安全表示时为 `0`，不得用本地 `steady_clock` 伪造；
+- `publisher_gid`：middleware publication identity；不可可靠获得时为 `Gid{}`；
+- `publication_sequence_number`：middleware publication/sample sequence；unknown/unavailable/不可安全表示时为 `std::nullopt`；
+- `reception_sequence_number`：独立 middleware reception sequence；middleware 不提供该独立概念时为 `std::nullopt`，不得以 publication sequence 冒充。
+
+具体 Fast DDS 字段来源与转换只属于 Fast DDS 实现规格。
+
+### 8.6 matched Subscriber Count
 
 ```cpp
 Result<std::size_t>
@@ -2332,13 +2526,11 @@ Publisher::matched_subscriber_count() const;
 
 它不是：
 
-* ROS Graph count；
-* 同名 Topic count；
-* discovery 历史累计数。
+- ROS Graph count；
+- 同名 Topic count；
+- discovery 历史累计数。
 
----
-
-## 8.7 matched Publisher Count
+### 8.7 matched Publisher Count
 
 ```cpp
 Result<std::size_t>
@@ -2347,9 +2539,7 @@ Subscriber::matched_publisher_count() const;
 
 返回当前 compatible matched DataWriter 数量。
 
----
-
-## 8.8 Match 条件
+### 8.8 Match 条件
 
 至少要求：
 
@@ -2363,15 +2553,11 @@ discovery completed
 
 才计入 matched count。
 
----
-
-## 8.9 Matched Count 时间语义
+### 8.9 Matched Count 时间语义
 
 matched count 是：
 
-```text
-query-time snapshot
-```
+`query-time snapshot`
 
 DDS discovery 异步，因此：
 
@@ -2385,9 +2571,7 @@ immediate matched_count()
 
 V1 不承诺等待 discovery convergence 的同步 API。
 
----
-
-## 8.10 Matched Count 并发
+### 8.10 Matched Count 并发
 
 允许与：
 
@@ -2401,22 +2585,21 @@ DDS discovery callbacks
 
 内部必须：
 
-* 使用 Fast DDS thread-safe query；
-* 或 listener 更新 atomic / synchronized state。
+- 使用 Fast DDS thread-safe query；
+- 或 listener 更新 atomic / synchronized state。
 
 DMW listener 不执行 user callback。
 
----
+<a id="dmw-service"></a>
 
-# 9. Service 通信
+## 9. Client 与 Server
 
-## 9.1 Service DDS 结构
+### 9.1 Service DDS 结构
 
 ```text
 Client
 ├── request DataWriter
 └── response DataReader
-
 
 Server
 ├── request DataReader
@@ -2427,34 +2610,26 @@ Client / Server 是一个整体 public primitive。
 
 不得把四个 endpoint 分散给上层自行组合。
 
----
-
-## 9.2 ClientOptions / ServerOptions
+### 9.2 ClientOptions / ServerOptions
 
 ```cpp
 struct ClientOptions
 {
-    CompatibilityProfile compatibility{
-        CompatibilityProfile::NativeDds
-    };
 };
 
 struct ServerOptions
 {
-    CompatibilityProfile compatibility{
-        CompatibilityProfile::NativeDds
-    };
-
     std::size_t max_pending_requests{1024};
 };
 ```
 
+Client/Server 继承 parent Context 的 immutable `CompatibilityProfile`，V1 不提供
+service-endpoint-scoped profile override。
+
 `max_pending_requests` 必须大于 0，否则 `create_server()` 返回
 `InvalidArgument`。
 
----
-
-## 9.3 RequestId
+### 9.3 RequestId
 
 V1 改为 profile-neutral：
 
@@ -2483,15 +2658,11 @@ struct RequestIdHash
 
 不再把字段命名为：
 
-```text
-writer_gid
-```
+`writer_gid`
 
 因为 `Ros2FastDdsHumble` 的 service workaround 中相关 GID 可能表示 Client response reader，而非 request writer。
 
----
-
-## 9.4 Client API
+### 9.4 Client API
 
 ```cpp
 class Client
@@ -2532,9 +2703,7 @@ private:
 };
 ```
 
----
-
-## 9.5 Server API
+### 9.5 Server API
 
 ```cpp
 class Server
@@ -2573,9 +2742,7 @@ private:
 };
 ```
 
----
-
-## 9.6 Server Pending Request Contract
+### 9.6 Server Pending Request Contract
 
 当：
 
@@ -2585,15 +2752,11 @@ take_request(...)
 
 成功返回：
 
-```text
-Taken
-```
+`Taken`
 
 后，Server 内部注册：
 
-```text
-RequestId -> Pending
-```
+`RequestId -> Pending`
 
 。
 
@@ -2605,33 +2768,25 @@ server.send_response(id, response);
 
 只允许对：
 
-```text
-当前该 Server Pending Request
-```
+`当前该 Server Pending Request`
 
 调用。
 
----
-
-## 9.7 Unknown / Duplicate RequestId
+### 9.7 Unknown / Duplicate RequestId
 
 如果：
 
-```text
-RequestId 不属于当前 pending set
-```
+`RequestId 不属于当前 pending set`
 
 包括：
 
-* 从未由该 Server take；
-* 已经成功 response；
-* 属于另一个 Server；
+- 从未由该 Server take；
+- 已经成功 response；
+- 属于另一个 Server；
 
 则：
 
-```text
-ErrorCode::NotFound
-```
+`ErrorCode::NotFound`
 
 。
 
@@ -2644,9 +2799,7 @@ DMW V1 不额外保留无限期 responded tombstone。
 这里的“再次使用”指应用再次调用 `send_response()`；它不表示 DMW 永久保存该
 RequestId 的 transport-level 去重记录。
 
----
-
-## 9.8 Concurrent send_response
+### 9.8 Concurrent send_response
 
 Server 内部 request state：
 
@@ -2662,15 +2815,11 @@ removed
 
 第二个线程对同一个：
 
-```text
-Responding RequestId
-```
+`Responding RequestId`
 
 调用 `send_response()`：
 
-```text
-Busy
-```
+`Busy`
 
 。
 
@@ -2684,50 +2833,40 @@ Timeout
 
 则状态恢复：
 
-```text
-Responding -> Pending
-```
+`Responding -> Pending`
 
 允许应用重试。
 
----
-
-## 9.9 Duplicate DDS Request Sample
+### 9.9 Duplicate DDS Request Sample
 
 如果底层重复收到相同 RequestId，而该 ID 已存在 Pending：
 
-* 不再次向 public API 返回同一个 request；
-* 该 sample 被视为重复 transport sample；
-* DMW 继续寻找下一个可用 request；
-* 没有其他 request 时返回 `NoData`。
+- 不再次向 public API 返回同一个 request；
+- 该 sample 被视为重复 transport sample；
+- DMW 继续寻找下一个可用 request；
+- 没有其他 request 时返回 `NoData`。
 
 V1 只保证 RequestId 处于 Pending/Responding 生命周期期间的 duplicate
 suppression。成功响应并移除 pending entry 后，V1 不保证对未来再次出现的同一
 DDS request sample 提供永久 at-most-once delivery；DDS/RTPS 正常可靠传输负责
 transport-level duplicate handling，DMW 不维护无界 tombstone 数据库。
 
----
+### 9.10 Pending Request 资源上限
 
-## 9.10 Pending Request 资源上限
-
-在调用 native `DataReader::take()` 之前，Server 必须在与 pending state 相同的
+在调用 Fast DDS `DataReader::take()` 之前，Server 必须在与 pending state 相同的
 同步域内原子预留一个 capacity slot。如果 pending/Responding entry 与已预留 slot
 之和已经达到：
 
-```text
-ServerOptions::max_pending_requests
-```
+`ServerOptions::max_pending_requests`
 
 则 `take_request()` 直接返回：
 
-```text
-ErrorCode::ResourceExhausted
-```
+`ErrorCode::ResourceExhausted`
 
 且不得从 DDS history 取出新的 request，从而形成有限 backpressure。处于
 `Responding` 的 entry 也计入该上限。
 
-native take 返回 `NoData` 或 Error 时必须释放预留 slot；取得 duplicate sample
+Fast DDS take 返回 `NoData` 或 Error 时必须释放预留 slot；取得 duplicate sample
 并抑制后也释放该 slot再继续查找；取得新 request 时才把 reservation 转换为
 Pending entry。由此多个并发 `take_request()` 也不得使容量超过配置上限。
 
@@ -2735,15 +2874,11 @@ Server 析构时清空全部 pending state。Context 进入 `ShuttingDown` 后�
 request 不再可响应，`send_response()` 按全局错误优先级返回
 `ContextShutdown`；最终资源销毁时清空这些 entry。
 
----
-
-## 9.11 Client Response Filtering
+### 9.11 Client Response Filtering
 
 DMW Client 必须过滤：
 
-```text
-not addressed to this Client
-```
+`not addressed to this Client`
 
 的 response。
 
@@ -2753,34 +2888,26 @@ not addressed to this Client
 
 因此：
 
-```text
-take_response()
-```
+`take_response()`
 
 只保证：
 
-* response 属于当前 Client identity；
-* RequestId 正确解析。
+- response 属于当前 Client identity；
+- RequestId 正确解析。
 
 它不保证：
 
-```text
-RequestId 当前仍存在于某个 dclcpp pending future table
-```
+`RequestId 当前仍存在于某个 dclcpp pending future table`
 
 。
 
 Future / timeout / pending request 生命周期属于：
 
-```text
-dclcpp::Client
-```
+`dclcpp::Client`
 
 。
 
----
-
-## 9.12 Service Availability
+### 9.12 Service Availability
 
 ```cpp
 Result<bool>
@@ -2800,9 +2927,7 @@ error
     -> discovery query failed
 ```
 
----
-
-## 9.13 Service Availability Pairing
+### 9.13 Service Availability Pairing
 
 禁止只判断：
 
@@ -2816,9 +2941,7 @@ response matched count > 0
 
 DMW 必须维护：
 
-```text
-ServiceDiscoveryRegistry
-```
+`ServiceDiscoveryRegistry`
 
 按照 remote participant identity 配对。
 
@@ -2844,9 +2967,7 @@ has compatible response DataWriter
 
 时，该 participant 才计为一个 available Server candidate。
 
----
-
-## 9.14 Same-participant 限制
+### 9.14 Same-participant 限制
 
 ROS 2 Humble Fast DDS wire discovery 并没有为 request DataReader / response DataWriter 暴露一个 DMW 可以直接使用的标准 service-instance pair ID。
 
@@ -2858,17 +2979,13 @@ DMW 不声称能够在没有完整 ROS Graph /额外 discovery metadata 的情�
 
 这属于 V1 明确且可测试的 availability contract，而不是未定义行为。
 
----
-
-## 9.15 Service Availability Discovery Race
+### 9.15 Service Availability Discovery Race
 
 endpoint discovery 是异步的。
 
 因此 Server 创建或销毁期间：
 
-```text
-service_is_available()
-```
+`service_is_available()`
 
 允许短暂返回旧 snapshot。
 
@@ -2884,11 +3001,13 @@ true
 
 这种跨 Participant 假阳性。
 
----
+<a id="dmw-waitset"></a>
 
-# 10. WaitSet 与同步机制
+## 10. WaitSet、GuardCondition 与 Event
 
-## 10.1 Waitable Entity
+本章统一定义同步模型：WaitSet 观察 waitable，Registration 协调并发 attach/detach，GuardCondition 使用 coalesced trigger，Event 使用独立 cursor 的 level-triggered readiness。WaitSet 不拥有注册实体。
+
+### 10.1 Waitable Entity
 
 V1：
 
@@ -2904,15 +3023,13 @@ GuardCondition
 
 Publisher 不直接 waitable。
 
----
-
-## 10.2 WaitTimeout
+### 10.2 WaitTimeout
 
 V1 不使用：
 
-* magic `-1`；
-* `nanoseconds::max()` sentinel；
-* `optional<duration>`；
+- magic `-1`；
+- `nanoseconds::max()` sentinel；
+- `optional<duration>`；
 
 表达 infinite wait。
 
@@ -2952,9 +3069,7 @@ private:
 `duration()` 的前置条件是 `kind() == Kind::Finite`。对 Poll 或 Infinite 调用属于
 programming contract violation，必须调用 `std::terminate()`。
 
----
-
-## 10.3 WaitTimeout 输入规则
+### 10.3 WaitTimeout 输入规则
 
 ```cpp
 WaitTimeout::finite(timeout)
@@ -2962,15 +3077,11 @@ WaitTimeout::finite(timeout)
 
 要求：
 
-```text
-timeout > 0
-```
+`timeout > 0`
 
 。
 
-```text
-timeout == 0
-```
+`timeout == 0`
 
 不表示 finite timeout，应显式：
 
@@ -2982,15 +3093,11 @@ WaitTimeout::poll()
 
 负值：
 
-```text
-InvalidArgument
-```
+`InvalidArgument`
 
 。
 
----
-
-## 10.4 WaitSet API
+### 10.4 WaitSet API
 
 ```cpp
 struct WaitSetOptions
@@ -3041,9 +3148,11 @@ private:
 };
 ```
 
----
+WaitSet 只能注册与自身属于同一 Context 的 waitable。跨 Context `add()` 返回
+`InvalidArgument`；该 argument error 优先于 Context state。失败不得创建 Registration、
+消耗 registration ID、修改 WaitSet topology 或修改 waitable registration state。
 
-## 10.5 Finite Wait Deadline
+### 10.5 Finite Wait Deadline
 
 finite wait 在进入 `wait()` 时，只计算一次 deadline：
 
@@ -3065,7 +3174,7 @@ control GuardCondition
 
 都不得重新开始完整 timeout。
 
-内部重新进入 native wait 前：
+内部重新进入 Fast DDS WaitSet wait 前：
 
 ```text
 remaining =
@@ -3076,21 +3185,15 @@ deadline - steady_clock::now()
 
 如果：
 
-```text
-remaining <= 0
-```
+`remaining <= 0`
 
 返回：
 
-```text
-WaitStatus::Timeout
-```
+`WaitStatus::Timeout`
 
 。
 
----
-
-## 10.6 Clock
+### 10.6 Clock
 
 finite timeout 必须使用：
 
@@ -3104,27 +3207,19 @@ std::chrono::steady_clock
 
 Humble RMW 也明确建议 wait timeout 基于 monotonic clock；这里将该建议提升为 DMW V1 的强制规范。
 
----
-
-## 10.7 Deadline Overflow
+### 10.7 Deadline Overflow
 
 计算：
 
-```text
-now + timeout
-```
+`now + timeout`
 
 如果超出 `steady_clock::time_point::max()`：
 
-```text
-deadline = time_point::max()
-```
+`deadline = time_point::max()`
 
 采用 saturating arithmetic，不允许整数 overflow。
 
----
-
-## 10.8 WaitToken
+### 10.8 WaitToken
 
 ```cpp
 enum class WaitableKind
@@ -3161,9 +3256,7 @@ private:
 };
 ```
 
----
-
-## 10.9 Invalid Token
+### 10.9 Invalid Token
 
 ```text
 wait_set_id == 0
@@ -3175,9 +3268,7 @@ registration_id == 0
 
 `WaitSet::add()` 永不返回 invalid token。
 
----
-
-## 10.10 WaitToken Scope
+### 10.10 WaitToken Scope
 
 WaitToken 只对创建它的 WaitSet 有效。
 
@@ -3192,29 +3283,21 @@ wait_set_b->remove(token);
 
 返回：
 
-```text
-InvalidArgument
-```
+`InvalidArgument`
 
 。
 
----
-
-## 10.11 Token Generation
+### 10.11 Token Generation
 
 每个 WaitSet：
 
-```text
-registration_id
-```
+`registration_id`
 
 单调递增且不复用。
 
 每个 WaitSet 自身：
 
-```text
-wait_set_id
-```
+`wait_set_id`
 
 来自 process-wide 单调唯一 ID allocator。
 
@@ -3224,15 +3307,11 @@ wait_set_id
 
 如果 64 位 ID 空间耗尽：
 
-```text
-ResourceExhausted
-```
+`ResourceExhausted`
 
 。
 
----
-
-## 10.12 Stale Token
+### 10.12 Stale Token
 
 如果 token 曾合法，但 registration 已：
 
@@ -3250,15 +3329,11 @@ wait_set->remove(token);
 
 返回：
 
-```text
-NotRegistered
-```
+`NotRegistered`
 
 。
 
----
-
-## 10.13 WaitResult Snapshot
+### 10.13 WaitResult Snapshot
 
 ```cpp
 enum class WaitStatus
@@ -3309,31 +3384,27 @@ WaitResult 表示：
 
 因此：
 
-```text
-WaitResult contains token
-```
+`WaitResult contains token`
 
 不保证：
 
-```text
-registration 在调用者读取 token 时仍然存在
-```
+`registration 在调用者读取 token 时仍然存在`
 
 。
 
 DMW 不允许通过 WaitToken 解引用 public entity。
 
+允许 `wait()` 已形成 Ready snapshot 后，并发 `remove(token)` 成功返回，再由 wait 把旧 token
+交给 caller。`remove()` 返回后必须保证实现层不会因该旧 snapshot 访问已释放的
+Registration/Waitable/DDS entity Info；它不撤回已经形成的 value snapshot。
+
 dclcpp Executor 必须维护自己的：
 
-```text
-WaitToken -> weak/high-level registration
-```
+`WaitToken -> weak/high-level registration`
 
 映射，并处理 stale token。
 
----
-
-## 10.14 一个 Waitable 一个 WaitSet
+### 10.14 一个 Waitable 一个 WaitSet
 
 V1：
 
@@ -3341,35 +3412,25 @@ V1：
 
 第二次 add：
 
-```text
-AlreadyRegistered
-```
+`AlreadyRegistered`
 
 。
 
----
-
-## 10.15 单 Active Wait
+### 10.15 单 Active Wait
 
 同一 WaitSet 同时最多一个：
 
-```text
-active wait()
-```
+`active wait()`
 
 。
 
 第二个并发 wait：
 
-```text
-Busy
-```
+`Busy`
 
 。
 
----
-
-## 10.16 add/remove 与 wait
+### 10.16 add/remove 与 wait
 
 允许：
 
@@ -3390,7 +3451,7 @@ add/remove
    ↓
 trigger control condition
    ↓
-wake native wait
+wake Fast DDS WaitSet wait
    ↓
 rebuild snapshot
    ↓
@@ -3399,9 +3460,7 @@ continue remaining original timeout
 
 control wakeup 不直接返回给 user。
 
----
-
-## 10.17 Non-owning Registration
+### 10.17 Non-owning Registration
 
 WaitSet 不拥有 waitable。
 
@@ -3413,9 +3472,7 @@ wait_set->add(*subscriber);
 
 内部不能长期保存：
 
-```text
-Subscriber*
-```
+`Subscriber*`
 
 作为唯一 registration identity。
 
@@ -3428,9 +3485,7 @@ RegistrationState
 
 。
 
----
-
-## 10.18 RegistrationState
+### 10.18 RegistrationState
 
 ```text
 Attached
@@ -3450,9 +3505,7 @@ WaitSet destructor
 
 只有一个线程执行真实 detach。
 
----
-
-## 10.19 Waitable 先析构
+### 10.19 Waitable 先析构
 
 ```text
 waitable Closing
@@ -3463,9 +3516,9 @@ trigger WaitSet control
       ↓
 drain active wait reference
       ↓
-detach native condition
+detach Fast DDS condition
       ↓
-destroy native endpoint
+destroy DDS endpoint
 ```
 
 waitable 析构必要时可以短暂阻塞。
@@ -3475,20 +3528,16 @@ waitable 析构必要时可以短暂阻塞。
 ```text
 public facade pointer
 WaitableState
-native Condition
+Fast DDS Condition
 ```
 
 引用。
 
----
-
-## 10.20 WaitSet 先析构
+### 10.20 WaitSet 先析构
 
 WaitSet 析构的前置条件是：
 
-```text
-该 WaitSet 没有 active wait()
-```
+`该 WaitSet 没有 active wait()`
 
 V1 不支持同一个 WaitSet facade 的析构与其自身 `wait()` 并发。Executor 关闭顺序
 必须是：
@@ -3510,16 +3559,14 @@ WaitSet destructor
       ↓
 invalidate registration
       ↓
-detach native conditions
+detach Fast DDS conditions
       ↓
-destroy native WaitSet
+destroy Fast DDS WaitSet
 ```
 
 waitable 继续有效。
 
----
-
-## 10.21 GuardCondition Public API
+### 10.21 GuardCondition Public API
 
 ```cpp
 struct GuardConditionOptions
@@ -3568,11 +3615,9 @@ reset();
 
 。
 
----
+### 10.22 GuardCondition 触发模型
 
-## 10.22 GuardCondition 触发模型
-
-Fast DDS native GuardCondition 的 trigger value 由应用设置，并持续保持直到再次修改；因此 DMW 必须在其上定义自己的消费语义。
+Fast DDS GuardCondition 的 trigger value 由应用设置，并持续保持直到再次修改；因此 DMW 必须在其上定义自己的消费语义。
 
 DMW V1 定义：
 
@@ -3587,9 +3632,7 @@ consumed_generation
 
 。
 
----
-
-## 10.23 Trigger 合并
+### 10.23 Trigger 合并
 
 每次：
 
@@ -3599,9 +3642,7 @@ guard.trigger();
 
 递增：
 
-```text
-trigger_generation
-```
+`trigger_generation`
 
 。
 
@@ -3615,17 +3656,13 @@ trigger
 
 V1 合并为：
 
-```text
-一次 WaitResult ready
-```
+`一次 WaitResult ready`
 
 而不是三个 ready event。
 
 GuardCondition 不是计数 semaphore。
 
----
-
-## 10.24 Trigger Before Registration
+### 10.24 Trigger Before Registration
 
 ```cpp
 guard->trigger();
@@ -3641,25 +3678,21 @@ wait_set->wait(...);
 
 > pending trigger 独立于 WaitSet registration 生命周期。
 
----
-
-## 10.25 自动消费
+### 10.25 自动消费
 
 当 WaitSet 确定 GuardCondition ready 时：
 
 1. snapshot 当前 `trigger_generation`；
 2. 将 token 放入 WaitResult；
 3. 在返回 WaitResult 前，把 `consumed_generation` 推进到 snapshot generation；
-4. 如果没有新 trigger，native GuardCondition reset 为 false；
-5. 如果期间出现新 trigger，则保持/重新设置 native trigger，使下一次 wait 仍能观察到 readiness。
+4. 如果没有新 trigger，Fast DDS GuardCondition reset 为 false；
+5. 如果期间出现新 trigger，则保持/重新设置 Fast DDS GuardCondition trigger，使下一次 wait 仍能观察到 readiness。
 
 因此：
 
 > WaitResult 返回后，该次已报告 readiness 已经消费。
 
----
-
-## 10.26 Trigger / Consume Race
+### 10.26 Trigger / Consume Race
 
 禁止：
 
@@ -3674,17 +3707,15 @@ Thread B trigger lost
 
 实现必须使用：
 
-* mutex；
-* generation counter；
-* atomic state machine；
+- mutex；
+- generation counter；
+- atomic state machine；
 
 之一保证：
 
 > trigger 与 consume 并发时新 trigger 永不丢失。
 
----
-
-## 10.27 Context Shutdown 与 GuardCondition
+### 10.27 Context Shutdown 与 GuardCondition
 
 Context 已：
 
@@ -3702,17 +3733,24 @@ guard.trigger()
 
 返回：
 
-```text
-ContextShutdown
-```
+`ContextShutdown`
 
 且不产生新的 pending trigger。
 
----
+### 10.28 GuardCondition logical commit
 
-# 11. Event 模型
+`GuardCondition::trigger()` 的 success linearization point 是 coalescing logical pending trigger
+的 commit。argument/Context/object validation 在此之前失败时返回对应 Error 且不产生
+trigger；一旦 logical commit 成功，public result 必须是 success。Fast DDS wake 只是通知机制，
+其 ReturnCode failure 或 exception 不得回滚 logical pending，也不得把已提交的 trigger 改报为
+operation failure。实现可以进入 degraded notification mode，但必须依靠 bounded
+wake/recheck 使 readiness 最终可观察。
 
-## 11.1 EventType
+<a id="dmw-event"></a>
+
+### 10.29 Event 模型
+
+#### 10.29.1 EventType
 
 ```cpp
 enum class EventType
@@ -3732,9 +3770,7 @@ enum class EventType
 
 matched state 不通过 Event 表达。
 
----
-
-## 11.2 EventInfo
+#### 10.29.2 EventInfo
 
 ```cpp
 struct DeadlineMissedInfo
@@ -3794,9 +3830,7 @@ using EventInfo =
         MessageLostInfo>;
 ```
 
----
-
-## 11.3 Event API
+#### 10.29.3 Event API
 
 ```cpp
 class Event
@@ -3844,9 +3878,7 @@ Event::Impl::~Impl()
 private noexcept idempotent Event::Impl::destroy()
 ```
 
----
-
-## 11.4 EventType 合法组合
+#### 10.29.4 EventType 合法组合
 
 合法组合固定为：
 
@@ -3861,12 +3893,10 @@ private noexcept idempotent Event::Impl::destroy()
 | Subscriber | `MessageLost` |
 
 EventType 本身受支持但与 parent kind 不匹配时，`create_event()` 返回
-`InvalidArgument`。`Unsupported` 只用于当前 backend/profile 根本不支持该能力的
+`InvalidArgument`。`Unsupported` 只用于当前 Fast DDS version/profile 根本不支持该能力的
 情况。Factory 失败时不创建半有效 Event。
 
----
-
-## 11.5 Event Parent
+#### 10.29.5 Event Parent
 
 Event 永久绑定：
 
@@ -3885,7 +3915,7 @@ invalidate EventState
     ↓
 auto-detach WaitSet
     ↓
-release native condition
+release Fast DDS condition
 ```
 
 之后：
@@ -3896,39 +3926,48 @@ event->take(...)
 
 在 Context Active 时返回：
 
-```text
-ParentDestroyed
-```
+`ParentDestroyed`
 
 。
 
 Context shutdown 优先于 ParentDestroyed。
 
----
+#### 10.29.6 Event history 与消费边界
 
-# 12. Registry 与 Discovery
+Event 只观察自身 Factory commit 后发生的对应 event changes。Factory 在 parent EventSource
+的同一同步域中把 cursor 初始化为 current cumulative state 并注册 EventState；commit 前的
+history 不 replay，commit 后的 update 必须可观察。同一 parent/type 的多个 Event 各有独立
+cursor，一个 Event 的 `take()` 不消费其它 Event。
 
-## 12.1 TypeRegistry 是 V1 Mandatory
+Event readiness 是 level-triggered：`WaitSet::wait()` 只返回 ready token，不推进 cursor、
+不构造或消费 `EventInfo`；只有 successful `Event::take()` 推进该 Event cursor。因此在 take
+前重复 wait 仍可报告同一 Event ready。GuardCondition 保持独立的 coalesced
+consume-on-wait 语义。
+
+若实现层无法继续安全表示某个 parent/type 的 cumulative state，该 source/type 永久
+exhausted：所有对应 Event 保持 logically ready，`Event::take()` 返回
+`ResourceExhausted` 且 cursor 不变。全局错误优先级仍适用，Context/parent state error 高于
+Event-local exhaustion。
+
+<a id="dmw-registry-discovery"></a>
+
+## 11. Registry 与 Discovery
+
+### 11.1 TypeRegistry 是 V1 Mandatory
 
 V1 不再使用：
 
-```text
-optional but recommended
-```
+`optional but recommended`
 
 措辞。
 
 每个 Context 必须具有 TypeRegistry。
 
----
-
-## 12.2 TypeRegistry Key
+### 11.2 TypeRegistry Key
 
 主 key：
 
-```text
-DDS wire type name
-```
+`DDS wire type name`
 
 entry 保存：
 
@@ -3940,9 +3979,7 @@ reference count
 
 。
 
----
-
-## 12.3 TypeRegistry 冲突
+### 11.3 TypeRegistry 冲突
 
 已有：
 
@@ -3960,9 +3997,7 @@ binding_identity = A
 
 ：
 
-```text
-reuse
-```
+`reuse`
 
 。
 
@@ -3975,15 +4010,11 @@ binding_identity = B
 
 ：
 
-```text
-TypeMismatch
-```
+`TypeMismatch`
 
 。
 
----
-
-## 12.4 TopicRegistry 是 V1 Mandatory
+### 11.4 TopicRegistry 是 V1 Mandatory
 
 每个 Context 必须具有 TopicRegistry。
 
@@ -4004,39 +4035,27 @@ reference count
 
 。
 
----
-
-## 12.5 TopicRegistry Conflict
+### 11.5 TopicRegistry Conflict
 
 如果同一：
 
-```text
-DDS topic name
-```
+`DDS topic name`
 
 已绑定：
 
-```text
-wire type A
-```
+`wire type A`
 
 再次尝试：
 
-```text
-wire type B
-```
+`wire type B`
 
 返回：
 
-```text
-TypeMismatch
-```
+`TypeMismatch`
 
 。
 
----
-
-## 12.6 Discovery
+### 11.6 Discovery
 
 V1 discovery 支持：
 
@@ -4052,9 +4071,7 @@ Service availability
 
 不暴露完整 public ROS Graph。
 
----
-
-## 12.7 ServiceDiscoveryRegistry
+### 11.7 ServiceDiscoveryRegistry
 
 内部维护：
 
@@ -4080,11 +4097,179 @@ CompatibilityProfile
 
 用于消除跨 Participant request/response 拼接导致的 availability 假阳性。
 
----
+<a id="dmw-concurrency"></a>
 
-# 13. ROS 2 Fast DDS Wire Contract
+## 12. 并发与对象销毁
 
-## 13.1 Compatibility Baseline
+### 12.1 Fast DDS Threads
+
+Fast DDS 负责内部：
+
+- discovery；
+- transport；
+- receive；
+- listener。
+
+DMW listener 不执行：
+
+```text
+user callback
+Python callback
+dclcpp callback
+```
+
+。
+
+### 12.2 Listener 允许行为
+
+只允许：
+
+```text
+update atomic state
+update discovery registry
+update matched count
+mark readiness
+trigger internal condition
+record diagnostic
+```
+
+。
+
+### 12.3 Public Operation 并发
+
+V1 要求以下 API 可以被不同应用线程并发调用：
+
+```text
+Publisher::publish()
+
+Subscriber::take()
+
+Publisher::matched_subscriber_count()
+
+Subscriber::matched_publisher_count()
+
+Client::send_request()
+
+Client::take_response()
+
+Client::service_is_available()
+
+Server::take_request()
+
+Server::send_response()
+    — 不同 RequestId
+
+GuardCondition::trigger()
+
+Event::take()
+```
+
+。
+
+同一 `RequestId` 的两个 `send_response()` 按 [Client/Server contract](#dmw-service) 返回 `Busy`。
+
+### 12.4 Object Destruction
+
+同一 public facade：
+
+```text
+ordinary API call
+↕
+destructor
+```
+
+不允许调用者无同步并发。
+
+例如：
+
+```text
+publish()
+↕
+publisher.reset()
+```
+
+调用者必须同步。
+
+### 12.5 WaitSet 特殊并发
+
+以下场景由 DMW 自己保证：
+
+```text
+WaitSet::wait()
+↕
+registered waitable destruction
+```
+
+。
+
+调用者不需要先 remove。
+
+该特例不包括：
+
+```text
+WaitSet::wait()
+↕
+同一 WaitSet::~WaitSet()
+```
+
+后者仍遵守 15.4；调用者必须先唤醒并同步 wait thread，再析构 WaitSet。
+
+### 12.6 Shutdown 并发
+
+允许：
+
+```text
+shutdown
+↕
+
+publish
+take
+matched count
+service operations
+wait
+```
+
+。
+
+每个操作：
+
+- 要么在线性化点之前完成正常操作；
+- 要么观察 Context 已关闭并返回 ContextShutdown。
+
+不得：
+
+```text
+UAF
+deadlock
+half-destroyed DDS resource access
+```
+
+。
+
+### 12.7 Factory 并发
+
+允许：
+
+```text
+Context::create_node
+Context::create_wait_set
+Context::create_guard_condition
+
+Node::create_publisher
+Node::create_subscriber
+Node::create_client
+Node::create_server
+```
+
+来自不同线程并发调用。
+
+Registry 必须同步。
+
+<a id="dmw-ros2-interop"></a>
+
+## 13. ROS 2 Fast DDS Wire Contract
+
+### 13.1 Compatibility Baseline
 
 `Ros2FastDdsHumble` 不是模糊的“兼容 Humble”。
 
@@ -4122,40 +4307,34 @@ compiler version
 
 更新任何 baseline dependency 时：
 
-> 必须重新运行第 17 章全部 ROS interoperability tests。
+> 必须重新运行[测试与验收](#dmw-verification)中的全部 ROS interoperability tests。
 
 未经重新验证，不自动扩展 `Ros2FastDdsHumble` compatibility guarantee。
 
----
-
-## 13.2 Source of Truth
+### 13.2 Source of Truth
 
 CompatibilityProfile 是以下三部分共同定义的可验证契约：
 
 1. 本文档明确冻结的规范；
 2. baseline manifest 固定的 reference implementation，包括
    `rmw_fastrtps_cpp`、`rosidl_typesupport_fastrtps_cpp`、Fast DDS 和 Fast CDR；
-3. 第 17 章 interoperability tests 的可复现结果。
+3. [测试与验收](#dmw-verification)中 interoperability tests 的可复现结果。
 
 三者不存在“文档无条件覆盖实现或测试”的简单优先级。任意两者冲突都属于：
 
-```text
-CompatibilityProfileDefect
-```
+`CompatibilityProfileDefect`
 
 必须先修复规范、profile implementation 或 test，使三者重新一致；冲突状态下
 不得把新的 baseline 标记为 Frozen，也不得声称已验证 wire compatibility。
 
 ROS 2 官方命名规范定义了 `rt`、`rq`、`rr` 等 DDS namespace prefix；`rmw_fastrtps` 官方文档也展示了诸如 `rq/add_two_intsRequest` 和 `rr/add_two_intsReply` 的实际 service endpoint 名称。
 
----
-
-## 13.3 ROS Name Validation
+### 13.3 ROS Name Validation
 
 `Ros2FastDdsHumble` 模式下 DMW V1 接受：
 
-* absolute name；
-* relative name。
+- absolute name；
+- relative name。
 
 V1 不支持由 DMW 自己展开：
 
@@ -4169,9 +4348,7 @@ substitution
 
 这些更高层 name expansion 属于 dclcpp。
 
----
-
-## 13.4 Node Namespace Normalization
+### 13.4 Node Namespace Normalization
 
 `NodeOptions::ns`：
 
@@ -4201,133 +4378,93 @@ unsupported "{...}"
 
 。
 
----
-
-## 13.5 Logical Name → FQN
+### 13.5 Logical Name → FQN
 
 用户名字：
 
-### Absolute
+#### 13.5.1 Absolute name
 
-```text
-/foo
-```
+`/foo`
 
 直接：
 
-```text
-/foo
-```
+`/foo`
 
 。
 
-### Relative
+#### 13.5.2 Relative name
 
 Node namespace：
 
-```text
-/robot
-```
+`/robot`
 
 topic：
 
-```text
-camera
-```
+`camera`
 
 解析：
 
-```text
-/robot/camera
-```
+`/robot/camera`
 
 。
 
----
-
-## 13.6 Topic DDS Name
+### 13.6 Topic DDS Name
 
 ROS Topic：
 
-```text
-/foo
-```
+`/foo`
 
 映射：
 
-```text
-rt/foo
-```
+`rt/foo`
 
 。
 
 ROS Topic：
 
-```text
-/robot/camera
-```
+`/robot/camera`
 
 映射：
 
-```text
-rt/robot/camera
-```
+`rt/robot/camera`
 
 。
 
----
-
-## 13.7 Service Request DDS Topic
+### 13.7 Service Request DDS Topic
 
 Service FQN：
 
-```text
-/add_two_ints
-```
+`/add_two_ints`
 
 request DDS topic：
 
-```text
-rq/add_two_intsRequest
-```
+`rq/add_two_intsRequest`
 
 。
 
 一般形式：
 
-```text
-"rq" + service_fqn + "Request"
-```
+`"rq" + service_fqn + "Request"`
 
 其中 `service_fqn` 以 `/` 开头。
 
----
-
-## 13.8 Service Response DDS Topic
+### 13.8 Service Response DDS Topic
 
 同一 Service：
 
-```text
-rr/add_two_intsReply
-```
+`rr/add_two_intsReply`
 
 一般形式：
 
-```text
-"rr" + service_fqn + "Reply"
-```
+`"rr" + service_fqn + "Reply"`
 
 。
 
----
-
-## 13.9 DDS Type Name
+### 13.9 DDS Type Name
 
 DMW V1 不在 runtime 根据：
 
-```text
-package/msg/Type
-```
+`package/msg/Type`
 
 字符串自己发明 DDS type name。
 
@@ -4335,41 +4472,29 @@ MessageType binding 必须已经包含 exact DDS wire type。
 
 例如：
 
-```text
-std_msgs::msg::dds_::String_
-```
+`std_msgs::msg::dds_::String_`
 
 。
 
 ROS 2 Fast DDS 使用这种 mangled DDS type naming；eProsima 的 ROS 2/DDS tooling 也以 `std_msgs::msg::dds_::String_` 作为典型 ROS 2 DDS type。
 
----
-
-## 13.10 ROS Service Request/Response Type
+### 13.10 ROS Service Request/Response Type
 
 例如：
 
-```text
-example_interfaces/srv/AddTwoInts
-```
+`example_interfaces/srv/AddTwoInts`
 
 request MessageType 应对应：
 
-```text
-example_interfaces::srv::dds_::AddTwoInts_Request_
-```
+`example_interfaces::srv::dds_::AddTwoInts_Request_`
 
 response MessageType 应对应：
 
-```text
-example_interfaces::srv::dds_::AddTwoInts_Response_
-```
+`example_interfaces::srv::dds_::AddTwoInts_Response_`
 
 具体 wire type name 由 ROS-compatible type binding 提供。
 
----
-
-## 13.11 CDR Representation
+### 13.11 CDR Representation
 
 Ros2FastDdsHumble Service payload：
 
@@ -4396,9 +4521,7 @@ related_sample_identity
 
 Humble `rmw_fastrtps` request/response 路径本身使用 Fast CDR `DDS_CDR` representation，并通过 sample identity metadata 完成 request/response correlation。
 
----
-
-## 13.12 Client Request Identity
+### 13.12 Client Request Identity
 
 在 `Ros2FastDdsHumble` 模式：
 
@@ -4433,9 +4556,7 @@ request sequence
 
 Humble `rmw_fastrtps` 正是把 response reader GUID 放进 request 的 `related_sample_identity.writer_guid`，并从 write 后的 sample identity 得到 sequence number。
 
----
-
-## 13.13 DMW `send_request()` 返回值
+### 13.13 DMW `send_request()` 返回值
 
 DMW 对外标准化：
 
@@ -4457,9 +4578,7 @@ Client take
 
 四个阶段使用同一 normalized RequestId。
 
----
-
-## 13.14 Server Take Request
+### 13.14 Server Take Request
 
 Server 收到 request 后读取：
 
@@ -4472,9 +4591,7 @@ SampleInfo.related_sample_identity
 
 如果：
 
-```text
-related_sample_identity.writer_guid
-```
+`related_sample_identity.writer_guid`
 
 不是 unknown：
 
@@ -4496,17 +4613,13 @@ sample_identity.writer_guid
 
 sequence：
 
-```text
-sample_identity.sequence_number
-```
+`sample_identity.sequence_number`
 
 。
 
 Humble `rmw_fastrtps` 也采用这一兼容处理：当 related identity 中存在 response reader GUID 时，用它替换 request identity 中的 writer GUID，以便后续正确将 response 定向回 Client。
 
----
-
-## 13.15 Server Send Response
+### 13.15 Server Send Response
 
 Server response：
 
@@ -4526,23 +4639,17 @@ request_id.sequence_number
 
 Humble `rmw_fastrtps` 的 `rmw_send_response` 也是把 request header GUID 和 sequence number写入 response `related_sample_identity`。
 
----
-
-## 13.16 Response-reader Discovery Workaround
+### 13.16 Response-reader Discovery Workaround
 
 如果：
 
-```text
-request_id.client_gid
-```
+`request_id.client_gid`
 
 表示 response DataReader GUID，则 Server response DataWriter 在写 response 前必须确保该 reader 已匹配。
 
 `Ros2FastDdsHumble` V1 固定：
 
-```text
-service response discovery timeout = 100 ms
-```
+`service response discovery timeout = 100 ms`
 
 该值来自 Fast DDS 2.6.12 `ReliabilityQosPolicy::max_blocking_time` baseline
 default。V1 Qos 尚未公开 reliability max blocking time，因此这里不从用户 Qos
@@ -4550,37 +4657,29 @@ default。V1 Qos 尚未公开 reliability max blocking time，因此这里不从
 
 等待语义固定为：
 
-```text
-deadline = steady_clock::now() + 100 ms
-```
+`deadline = steady_clock::now() + 100 ms`
 
-* 使用 monotonic `steady_clock`；
-* discovery/control wake 不重置原始 deadline；
-* Context 进入 `ShuttingDown` 必须立即中断并返回 `ContextShutdown`；
-* 同一 Server facade 的析构与 `send_response()` 不得并发；
-* 如果等待期间 discovery registry 已确认目标 Client response reader 消失，则按
+- 使用 monotonic `steady_clock`；
+- discovery/control wake 不重置原始 deadline；
+- Context 进入 `ShuttingDown` 必须立即中断并返回 `ContextShutdown`；
+- 同一 Server facade 的析构与 `send_response()` 不得并发；
+- 如果等待期间 discovery registry 已确认目标 Client response reader 消失，则按
   Humble workaround 语义视为 response 已不再需要发送并返回 success；
-* 否则 deadline 到期且目标仍未匹配时返回 `Timeout`。
+- 否则 deadline 到期且目标仍未匹配时返回 `Timeout`。
 
 超时：
 
-```text
-ErrorCode::Timeout
-```
+`ErrorCode::Timeout`
 
 。
 
 这是 Humble `rmw_fastrtps` 为 service request/reply discovery race 使用的兼容行为。
 
----
-
-## 13.17 Client Take Response
+### 13.17 Client Take Response
 
 Client 获取 response：
 
-```text
-response.related_sample_identity
-```
+`response.related_sample_identity`
 
 。
 
@@ -4596,9 +4695,9 @@ request_writer_gid
 
 不属于当前 Client 的 response：
 
-* 不返回给上层；
-* 丢弃/忽略；
-* 继续读取后续 sample。
+- 不返回给上层；
+- 丢弃/忽略；
+- 继续读取后续 sample。
 
 Humble `rmw_fastrtps` 的 response take 同样会根据 Client 自己的 reader/writer GUID 过滤 response。
 
@@ -4614,9 +4713,7 @@ RequestId {
 
 。
 
----
-
-## 13.18 Service QoS Contract
+### 13.18 Service QoS Contract
 
 标准 ROS Service compatibility test 使用：
 
@@ -4643,22 +4740,18 @@ Qos::ros2_services_default();
 
 。
 
----
-
-## 13.19 Fast DDS Implementation Defaults
+### 13.19 Fast DDS Implementation Defaults
 
 为了与固定 `rmw_fastrtps_cpp` baseline 行为尽量一致，Ros2FastDdsHumble integration 实现应以固定版本的 rmw_fastrtps 行为为参考，包括：
 
-* Fast DDS entity QoS mapping；
-* publication behavior；
-* history memory policy；
-* data sharing baseline。
+- Fast DDS entity QoS mapping；
+- publication behavior；
+- history memory policy；
+- data sharing baseline。
 
 当前官方 `rmw_fastrtps` 文档说明默认使用 synchronous publication mode，并设置 Fast DDS-specific history/data-sharing 行为；这些属于实现 baseline，而不是独立 public DMW QoS policy。
 
----
-
-## 13.20 Wire Compatibility 与 Graph Compatibility
+### 13.20 Wire Compatibility 与 Graph Compatibility
 
 ```text
 ROS wire compatibility
@@ -4686,563 +4779,13 @@ ros2 service list
 
 完整呈现 DMW logical Node。
 
----
+<a id="dmw-verification"></a>
 
-# 14. Error、Result 与 Logging
+## 14. 实现边界、测试与验收
 
-## 14.1 ErrorCode
+本章只规定代码组织边界和公共行为验收，不新增运行时语义。测试必须引用前述正文契约；若测试描述与正文冲突，以正文为准并修复测试。
 
-V1 冻结：
-
-```cpp
-enum class ErrorCode
-{
-    InvalidArgument,
-    InvalidState,
-    InvalidName,
-
-    TypeMismatch,
-
-    AlreadyExists,
-    NotFound,
-
-    AlreadyRegistered,
-    NotRegistered,
-
-    Busy,
-
-    Timeout,
-
-    Unsupported,
-
-    IncompatibleQos,
-
-    ParentDestroyed,
-
-    ResourceExhausted,
-
-    DdsError,
-
-    ContextShutdown
-};
-```
-
-不包含：
-
-```text
-Ok
-```
-
-。
-
----
-
-## 14.2 Error
-
-```cpp
-class Error
-{
-public:
-    Error(
-        ErrorCode code,
-        std::string message);
-
-    ErrorCode
-    code() const noexcept;
-
-    std::string_view
-    message() const noexcept;
-
-private:
-    ErrorCode code_;
-    std::string message_;
-};
-```
-
-每个合法 Error 都表示失败。
-
-不存在：
-
-```text
-Error{Ok}
-```
-
-。
-
----
-
-## 14.3 Result<T> 基础契约
-
-```cpp
-template<class T>
-class Result
-{
-public:
-    static Result success(T value);
-
-    static Result failure(Error error);
-
-    bool has_value() const noexcept;
-
-    explicit operator bool() const noexcept;
-
-    T& value() & noexcept;
-
-    const T& value() const & noexcept;
-
-    T&& value() && noexcept;
-
-    Error& error() & noexcept;
-
-    const Error& error() const & noexcept;
-
-    Error&& error() && noexcept;
-
-private:
-    // expected-like storage
-};
-```
-
----
-
-## 14.4 Result<T> Default Construction
-
-`Result<T>`：
-
-```text
-not default constructible
-```
-
-。
-
-创建时必须明确是：
-
-```text
-success
-or
-failure
-```
-
-。
-
----
-
-## 14.5 Move-only Value
-
-`Result<T>` 必须支持 move-only T。
-
-例如：
-
-```cpp
-Result<std::unique_ptr<Node>>
-result = ...;
-
-if (!result) {
-    // result.error()
-}
-
-std::unique_ptr<Node> node =
-    std::move(result).value();
-```
-
-因此：
-
-```cpp
-T&& value() &&
-```
-
-是 V1 必需 public contract。
-
----
-
-## 14.6 Copy / Move Semantics
-
-`Result<T>`：
-
-* 如果 T copyable，则 Result copyable；
-* 如果 T 不可 copy，则 Result 不可 copy；
-* 如果 T movable，则 Result movable。
-
-`Error` 本身：
-
-* copyable；
-* movable。
-
----
-
-## 14.7 Wrong-alternative Access
-
-调用：
-
-```cpp
-result.value()
-```
-
-要求：
-
-```text
-has_value() == true
-```
-
-。
-
-调用：
-
-```cpp
-result.error()
-```
-
-要求：
-
-```text
-has_value() == false
-```
-
-。
-
-违反该前置条件属于 programming contract violation。
-
-DMW V1 定义：
-
-> 错误 alternative access 必须调用 `std::terminate()`；debug build 可以在 terminate 前触发 assertion。
-
-它：
-
-* 不抛 exception；
-* 不是 UB；
-* 不返回 fake value。
-
----
-
-## 14.8 Result<void>
-
-```cpp
-template<>
-class Result<void>
-{
-public:
-    static Result success();
-
-    static Result failure(Error error);
-
-    bool has_value() const noexcept;
-
-    explicit operator bool() const noexcept;
-
-    void value() const noexcept;
-
-    Error& error() & noexcept;
-
-    const Error& error() const & noexcept;
-
-    Error&& error() && noexcept;
-
-private:
-    // ...
-};
-```
-
-`value()` 只有在 success 状态合法。
-
-失败状态调用 `value()`：
-
-```text
-std::terminate()
-```
-
-。
-
----
-
-## 14.9 Result 与 Exception
-
-DMW runtime expected failure：
-
-```text
-不使用 C++ exception 传播
-```
-
-。
-
-例如：
-
-```text
-invalid configuration
-DDS create failure
-shutdown
-timeout
-```
-
-通过：
-
-```text
-Result<T>
-```
-
-表达。
-
-内部无法恢复的 programming bug 可使用 assertion / terminate。
-
-### Public exception boundary
-
-只有 destructor、trivial observer 和实现能够保证不失败且不分配的操作使用
-`noexcept`。返回 `Result<T>` 的普通 public operation 默认不标 `noexcept`。
-
-边界规则固定为：
-
-```text
-expected middleware/configuration/lifecycle failure
-    -> Result<T>
-
-Fast DDS 可转换错误
-    -> Result<T>
-
-invalid argument
-    -> Result<T>
-
-std::bad_alloc
-    -> 允许作为 C++ exception 向上传播
-
-其他未预期 C++ exception
-    -> 允许向上传播；不可恢复 programming bug 可 terminate
-```
-
-未预期 exception 不得伪装成普通 DMW Error。V1 不提供 allocation-free Error，
-因此不定义 `ErrorCode::BadAllocation`。`ResourceExhausted` 只表达逻辑/中间件资源
-上限，例如 pending request 上限、token ID 耗尽或 DDS resource limit，不表示
-进程 heap OOM。
-
----
-
-## 14.10 Timeout 与 NoData
-
-```text
-Subscriber no sample
-    -> TakeStatus::NoData
-
-WaitSet timeout
-    -> WaitStatus::Timeout
-```
-
-均不是 Error。
-
-但 Service response discovery workaround 的：
-
-```text
-response writer wait timeout
-```
-
-是一次 operation failure：
-
-```text
-ErrorCode::Timeout
-```
-
-。
-
----
-
-## 14.11 Logging
-
-日志用于：
-
-* create/destroy；
-* rollback；
-* DDS error；
-* matched state；
-* service identity；
-* registry conflict；
-* WaitSet；
-* shutdown；
-* ROS compatibility。
-
-日志不能代替 Result。
-
----
-
-# 15. 线程模型与并发语义
-
-## 15.1 Fast DDS Threads
-
-Fast DDS 负责内部：
-
-* discovery；
-* transport；
-* receive；
-* listener。
-
-DMW listener 不执行：
-
-```text
-user callback
-Python callback
-dclcpp callback
-```
-
-。
-
----
-
-## 15.2 Listener 允许行为
-
-只允许：
-
-```text
-update atomic state
-update discovery registry
-update matched count
-mark readiness
-trigger internal condition
-record diagnostic
-```
-
-。
-
----
-
-## 15.3 Public Operation 并发
-
-V1 要求以下 API 可以被不同应用线程并发调用：
-
-```text
-Publisher::publish()
-
-Subscriber::take()
-
-Publisher::matched_subscriber_count()
-
-Subscriber::matched_publisher_count()
-
-Client::send_request()
-
-Client::take_response()
-
-Client::service_is_available()
-
-Server::take_request()
-
-Server::send_response()
-    — 不同 RequestId
-
-GuardCondition::trigger()
-
-Event::take()
-```
-
-。
-
-同一 RequestId 的两个 `send_response()` 按第 9 章返回 Busy。
-
----
-
-## 15.4 Object Destruction
-
-同一 public facade：
-
-```text
-ordinary API call
-↕
-destructor
-```
-
-不允许调用者无同步并发。
-
-例如：
-
-```text
-publish()
-↕
-publisher.reset()
-```
-
-调用者必须同步。
-
----
-
-## 15.5 WaitSet 特殊并发
-
-以下场景由 DMW 自己保证：
-
-```text
-WaitSet::wait()
-↕
-registered waitable destruction
-```
-
-。
-
-调用者不需要先 remove。
-
-该特例不包括：
-
-```text
-WaitSet::wait()
-↕
-同一 WaitSet::~WaitSet()
-```
-
-后者仍遵守 15.4；调用者必须先唤醒并同步 wait thread，再析构 WaitSet。
-
----
-
-## 15.6 Shutdown 并发
-
-允许：
-
-```text
-shutdown
-↕
-
-publish
-take
-matched count
-service operations
-wait
-```
-
-。
-
-每个操作：
-
-* 要么在线性化点之前完成正常操作；
-* 要么观察 Context 已关闭并返回 ContextShutdown。
-
-不得：
-
-```text
-UAF
-deadlock
-half-destroyed native resource access
-```
-
-。
-
----
-
-## 15.7 Factory 并发
-
-允许：
-
-```text
-Context::create_node
-Context::create_wait_set
-Context::create_guard_condition
-
-Node::create_publisher
-Node::create_subscriber
-Node::create_client
-Node::create_server
-```
-
-来自不同线程并发调用。
-
-Registry 必须同步。
-
----
-
-# 16. 实现组织与构建
-
-## 16.1 目录结构
+### 14.1 目录结构
 
 ```text
 dmw/
@@ -5336,12 +4879,21 @@ dmw/
         ├── node_state.hpp
         ├── waitable_state.hpp
         ├── registration_state.hpp
-        └── service_discovery_state.hpp
+        ├── service_discovery_state.hpp
+        │
+        └── fastdds/
+            ├── participant_info.hpp
+            ├── data_reader_info.hpp
+            ├── data_writer_info.hpp
+            ├── guard_condition_info.hpp
+            ├── condition_info.hpp
+            ├── control_guard_info.hpp
+            └── wait_set_info.hpp
 ```
 
----
+`src/impl/fastdds/` 中的类型位于 `dmw::impl::fastdds`，用于持有 Fast DDS entity 及其生命周期信息。`ContextState`、`NodeState`、`WaitableState` 和 `RegistrationState` 等 runtime/concurrency authority 仍位于 `dmw::impl`。该目录和命名空间只是编译期依赖边界，不引入多 DDS 实现或 runtime dispatch。
 
-## 16.2 Fast DDS Boundary
+### 14.2 Fast DDS Boundary
 
 普通 public headers 不出现：
 
@@ -5354,15 +4906,11 @@ eprosima::fastcdr::*
 
 唯一 integration boundary：
 
-```text
-dmw/fastdds/message_type.hpp
-```
+`dmw/fastdds/message_type.hpp`
 
 。
 
----
-
-## 16.3 PImpl Naming
+### 14.3 PImpl Naming
 
 采用：
 
@@ -5392,23 +4940,17 @@ RegistrationState
 
 。
 
----
-
-## 16.4 Targets
+### 14.4 Targets
 
 Runtime：
 
-```text
-dmw::dmw
-```
+`dmw::dmw`
 
 。
 
 Type binding：
 
-```text
-dmw::fastdds_binding
-```
+`dmw::fastdds_binding`
 
 。
 
@@ -5441,11 +4983,9 @@ target_link_libraries(dclcpp
 
 。
 
----
+### 14.5 测试与验收
 
-# 17. 测试与验收
-
-## 17.1 Result Tests
+#### 14.5.1 Result Tests
 
 必须覆盖：
 
@@ -5485,9 +5025,7 @@ no ErrorCode::BadAllocation translation
 
 。
 
----
-
-## 17.2 Context Tests
+#### 14.5.2 Context Tests
 
 ```text
 create success
@@ -5509,6 +5047,10 @@ Context destroyed before children
 children operations -> ContextShutdown
 
 children destruction safe
+
+ContextOptions profile is immutable after create
+
+all child endpoint options inherit Context profile
 ```
 
 。
@@ -5516,16 +5058,14 @@ children destruction safe
 模拟 shutdown wake failure 时：
 
 ```text
-state remains shutdown
-error returned
+runtime remains non-Active
+terminal Result follows the declared Fast DDS shutdown subset
 no blocked infinite WaitSet remains
 ```
 
 。
 
----
-
-## 17.3 Type-erased API Tests
+#### 14.5.3 Type-erased API Tests
 
 覆盖：
 
@@ -5538,23 +5078,17 @@ send_response(nullptr)
 
 ：
 
-```text
-InvalidArgument
-```
+`InvalidArgument`
 
 。
 
 覆盖：
 
-```text
-NoData
-```
+`NoData`
 
 时 output unchanged。
 
----
-
-## 17.4 QoS Tests
+#### 14.5.4 QoS Tests
 
 覆盖：
 
@@ -5590,9 +5124,7 @@ failing setter -> entire Qos unchanged
 
 。
 
----
-
-## 17.5 Topic Tests
+#### 14.5.5 Topic Tests
 
 ```text
 basic pub/sub
@@ -5612,9 +5144,7 @@ transient local
 
 。
 
----
-
-## 17.6 Matched Count Tests
+#### 14.5.6 Matched Count Tests
 
 Publisher：
 
@@ -5632,15 +5162,11 @@ Subscriber 对称。
 
 QoS incompatible endpoint：
 
-```text
-must not count as matched
-```
+`must not count as matched`
 
 。
 
----
-
-## 17.7 Service Tests
+#### 14.5.7 Service Tests
 
 覆盖：
 
@@ -5662,9 +5188,7 @@ service availability
 
 。
 
----
-
-## 17.8 Server Request Tracking
+#### 14.5.8 Server Request Tracking
 
 覆盖：
 
@@ -5694,7 +5218,7 @@ max_pending_requests == 0
 
 pending count reaches limit
     -> take_request ResourceExhausted
-    -> native sample remains in DDS history
+    -> DDS sample remains in DDS history
 
 duplicate DDS sample while Pending
     -> suppressed
@@ -5704,6 +5228,15 @@ duplicate after successful response
 
 Server destruction / Context shutdown
     -> pending state safely cleared or made unusable
+
+NoData / pre-consumption error
+    -> payload + RequestId unchanged
+
+post-consumption Error / exception
+    -> payload + RequestId valid/destructible
+
+continuous filtered arrivals
+    -> one take terminates at its call-start finite budget
 ```
 
 。
@@ -5719,9 +5252,7 @@ Context shutdown -> immediate ContextShutdown
 target reader confirmed gone -> success without write
 ```
 
----
-
-## 17.9 Service Availability Pairing
+#### 14.5.9 Service Availability Pairing
 
 构造：
 
@@ -5735,9 +5266,7 @@ Participant B:
 
 必须：
 
-```text
-service_is_available() == false
-```
+`service_is_available() == false`
 
 。
 
@@ -5751,15 +5280,11 @@ response Writer
 
 ：
 
-```text
-eventually true
-```
+`eventually true`
 
 。
 
----
-
-## 17.10 Wait Timeout Tests
+#### 14.5.10 Wait Timeout Tests
 
 覆盖：
 
@@ -5790,21 +5315,15 @@ topology wake at 60ms
 
 总等待时间仍以原始：
 
-```text
-100ms deadline
-```
+`100ms deadline`
 
 为基准，不得变成：
 
-```text
-160ms / 200ms / ...
-```
+`160ms / 200ms / ...`
 
 。
 
----
-
-## 17.11 WaitToken Tests
+#### 14.5.11 WaitToken Tests
 
 覆盖：
 
@@ -5814,6 +5333,8 @@ default token invalid
 add -> valid
 
 wrong WaitSet remove -> InvalidArgument
+
+cross-Context add -> InvalidArgument with no token/topology mutation
 
 removed token -> NotRegistered
 
@@ -5826,9 +5347,7 @@ WaitSet id never reused
 
 。
 
----
-
-## 17.12 GuardCondition / Event Tests
+#### 14.5.12 GuardCondition / Event Tests
 
 覆盖：
 
@@ -5853,6 +5372,9 @@ remove then re-add with pending trigger
 Context shutdown
     -> trigger returns ContextShutdown
 
+Fast DDS wake failure after logical trigger commit
+    -> trigger success and readiness remains logically pending
+
 Publisher + each publisher EventType -> success
 
 Subscriber + each subscriber EventType -> success
@@ -5864,13 +5386,19 @@ Subscriber + publisher-only EventType -> InvalidArgument
 Event create rollback
 
 Event parent destroyed -> ParentDestroyed
+
+event history before Factory commit -> not replayed
+
+wait reports Event repeatedly until successful Event::take
+
+two Events of same parent/type -> independent cursors
+
+Event source exhaustion -> remains ready; take ResourceExhausted; cursor unchanged
 ```
 
 。
 
----
-
-## 17.13 WaitSet Teardown Tests
+#### 14.5.13 WaitSet Teardown Tests
 
 ```text
 wait + Subscriber destruction
@@ -5901,17 +5429,15 @@ second wait -> Busy
 ```text
 no UAF
 no deadlock
-no stale native condition access
+no stale Fast DDS condition access
 ```
 
 。
 
 不测试也不支持同一 WaitSet facade 的 `wait()` 与析构无同步并发；该场景违反
-10.20/15.4 的调用者前置条件。
+[WaitSet 与对象销毁契约](#dmw-waitset)定义的调用者前置条件。
 
----
-
-## 17.14 Registry Tests
+#### 14.5.14 Registry Tests
 
 TypeRegistry：
 
@@ -5941,11 +5467,9 @@ different type
 
 。
 
----
+#### 14.5.15 ROS Topic Interoperability
 
-## 17.15 ROS Topic Interoperability
-
-固定第 13.1 节 baseline。
+使用 [ROS 2 interoperability contract](#dmw-ros2-interop) 固定的 baseline。
 
 验证：
 
@@ -5979,9 +5503,7 @@ matched count
 
 。
 
----
-
-## 17.16 ROS Service Interoperability
+#### 14.5.16 ROS Service Interoperability
 
 验证：
 
@@ -6025,9 +5547,7 @@ service availability
 
 。
 
----
-
-## 17.17 Version Regression Test
+#### 14.5.17 Version Regression Test
 
 升级：
 
@@ -6052,9 +5572,7 @@ Fast CDR
 
 未完成 interoperability regression，不得修改：
 
-```text
-Ros2FastDdsHumble validated baseline
-```
+`Ros2FastDdsHumble validated baseline`
 
 。
 
@@ -6062,11 +5580,13 @@ Ros2FastDdsHumble validated baseline
 commit、Debian package revision、OS image digest、architecture 和 compiler version
 均与测试报告一致。
 
----
+<a id="dmw-frozen-invariants"></a>
 
-# 18. V1 冻结项与总结
+## 15. Frozen Invariant 索引与附录
 
-## 18.1 Architecture
+本章是正文契约的审查索引，不是第二份 normative specification。每一项都必须能够回溯到前述正文；若简述与正文冲突，以正文为准，并必须修复本索引。编号用于评审和测试追踪，不得被实现当作独立语义来源。
+
+### 15.1 架构
 
 1. C++17。
 2. Fast DDS-only。
@@ -6081,9 +5601,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 11. 多 Domain 通过多个 Context。
 12. Node 是 logical entity。
 
----
-
-## 18.2 Factory / Ownership
+### 15.2 Factory 与 Ownership
 
 13. Resource/Entity Factory 返回 `Result<std::unique_ptr<T>>`。
 14. Resource/Entity non-copyable、non-movable。
@@ -6098,9 +5616,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 23. 不使用两阶段初始化。
 24. 不提供 public destroy。
 
----
-
-## 18.3 Resource Lifecycle
+### 15.3 Resource 生命周期
 
 25. `Impl::create()` 事务式创建。
 26. local RAII rollback。
@@ -6114,9 +5630,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 34. Context facade 可以早于 children。
 35. Context shutdown 后 child 仍可安全析构。
 
----
-
-## 18.4 Result / Error
+### 15.4 Result 与 Error
 
 36. `Result<T>` public contract 已冻结。
 37. 支持 move-only T。
@@ -6128,20 +5642,16 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 43. wrong alternative access 调用 terminate。
 44. runtime expected error 不使用 exception；`std::bad_alloc` 允许传播，V1 不定义 `BadAllocation` ErrorCode。
 
----
-
-## 18.5 Type Erasure
+### 15.5 Type Erasure
 
 45. nullptr 返回 InvalidArgument。
 46. concrete type 必须与 MessageType 匹配。
 47. wrong concrete type 属于调用者 contract violation。
 48. TypeMismatch 不用于运行时检查任意 `void*`。
-49. NoData 时 output unchanged。
-50. native consume 后 deserialize error 时 output valid but unspecified。
+49. 所有 take 的 NoData / pre-consumption failure 保持全部 output unchanged。
+50. Fast DDS consume 后的 Error/exception 保证 output valid/destructible but unspecified；过滤使用 call-start finite budget。
 
----
-
-## 18.6 Context Shutdown
+### 15.6 Context Shutdown
 
 51. 内部状态为 Active / ShuttingDown / Shutdown。
 52. Active→ShuttingDown 是 shutdown linearization point。
@@ -6153,9 +5663,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 58. shutdown 必须唤醒或安全 detach 所有 active WaitSet。
 59. ContextShutdown 是统一 lifecycle error。
 
----
-
-## 18.7 Type / Registry
+### 15.7 Type / Registry
 
 60. MessageType 是可重新绑定的 cheap-copy handle，其指向的 binding descriptor 不可变。
 61. MessageType 不存在 invalid default state。
@@ -6167,23 +5675,19 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 67. 相同 wire name + different binding identity 返回 TypeMismatch。
 68. V1 不做结构化 wire-layout equivalence。
 
----
-
-## 18.8 QoS
+### 15.8 QoS
 
 69. negative QosDuration 非法；只有 Finite duration 可调用 `value()`。
 70. duration conversion 必须 checked；`Qos()` 等价于 `system_default()`，失败 setter 保持整个 Qos 不变，并提供全部基础 policy getter。
 71. keep_last depth 必须 > 0。
 72. KeepAll canonical depth 为 0。
-73. SystemDefault 由 CompatibilityProfile 解析。
+73. SystemDefault 由 Context 的 immutable CompatibilityProfile + entity kind + frozen Fast DDS baseline 解析，不读取 runtime/XML mutable default。
 74. Ros2FastDdsHumble 不读取 ROS XML overrides。
 75. 提供 `ros2_default()`。
 76. 提供 `ros2_services_default()`。
 77. incompatible remote QoS 不导致本地 create failure。
 
----
-
-## 18.9 Topic
+### 15.9 Topic
 
 78. Publisher 支持 matched Subscriber count。
 79. Subscriber 支持 matched Publisher count。
@@ -6191,9 +5695,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 81. matched count 不依赖 ROS Graph。
 82. incompatible endpoint 不计入 matched count。
 
----
-
-## 18.10 Service
+### 15.10 Service
 
 83. Client = request Writer + response Reader。
 84. Server = request Reader + response Writer。
@@ -6201,7 +5703,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 86. Client/Server 整体 rollback。
 87. Client/Server 整体销毁。
 88. RequestId = client_gid + sequence。
-89. Server 只允许响应自己 pending 的 RequestId；pending 有正数上限，满时在 native take 前返回 ResourceExhausted。
+89. Server 只允许响应自己 pending 的 RequestId；pending 有正数上限，满时在 Fast DDS take 前返回 ResourceExhausted。
 90. unknown / already responded ID 返回 NotFound。
 91. concurrent response 同 ID 返回 Busy。
 92. response write failure后 request 恢复 Pending；V1 只在 Pending/Responding 生命周期内去重。
@@ -6211,9 +5713,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 96. availability 必须按 remote Participant 配对 request/response endpoint。
 97. 不允许跨 Participant 拼接产生 availability true。
 
----
-
-## 18.11 WaitSet
+### 15.11 WaitSet
 
 98. WaitTimeout 使用唯一 value type。
 99. Poll / Finite / Infinite 明确区分；只有 Finite 可调用 `duration()`。
@@ -6225,33 +5725,29 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 105. token 在进程生命周期不复用。
 106. stale token 返回 NotRegistered。
 107. wrong WaitSet token 返回 InvalidArgument。
-108. WaitResult 是不可非法构造的 readiness snapshot：Ready 非空、Timeout 为空。
+108. WaitResult 是不可非法构造的 readiness snapshot：Ready 非空、Timeout 为空；remove 不撤回已形成的 stale value snapshot。
 109. 一个 waitable 同时只能加入一个 WaitSet。
 110. 同一 WaitSet 同时一个 active wait。
 111. add/remove 可以与 wait 并发。
 112. WaitSet 非 owning。
 113. waitable 析构自动 detach。
-114. WaitSet 析构自动 detach，但前置条件是自身没有 active wait；不支持自身 `wait()` 与析构并发。
+114. WaitSet 析构自动 detach，但前置条件是自身没有 active wait；不支持自身 `wait()` 与析构并发；跨 Context add 返回 InvalidArgument且无状态变化。
 
----
-
-## 18.12 GuardCondition / Event
+### 15.12 GuardCondition / Event
 
 115. GuardCondition 只有 trigger，无 public reset。
 116. GuardCondition 使用 pending-trigger semantics。
 117. 多 trigger 在消费前合并。
 118. trigger before registration 必须可观察。
-119. WaitResult 返回前自动消费本次 trigger。
+119. WaitResult 返回前自动消费本次 trigger；logical trigger commit 后 Fast DDS wake failure不改变 public success。
 120. concurrent trigger/consume 不得丢 trigger。
 121. Event 是 persistent endpoint-bound entity。
 122. EventInfo 使用 variant。
-123. Event 具有完整 PImpl 生命周期和固定 parent/EventType 合法组合；Parent endpoint 销毁后返回 ParentDestroyed。
+123. Event 具有完整 PImpl 生命周期和固定 parent/EventType 合法组合；Parent endpoint 销毁后返回 ParentDestroyed；Event 不 replay pre-creation history、保持 level-triggered，只有 successful take 消费独立 cursor，source exhaustion保持 ready并返回 ResourceExhausted。
 
----
+### 15.13 ROS 2 Compatibility
 
-## 18.13 ROS 2 Compatibility
-
-124. Compatibility profile 名称为 `Ros2FastDdsHumble`。
+124. Compatibility profile 名称为 `Ros2FastDdsHumble`；profile 由 ContextOptions 唯一持有且创建后 immutable，endpoint options 不提供 override。
 125. compatibility 由规范、manifest 固定的 reference implementation 和 interoperability tests 共同定义。
 126. ROS relative name 先解析成 FQN。
 127. Topic DDS name 使用 `rt`。
@@ -6268,16 +5764,12 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 138. V1 保证 wire compatibility，不保证完整 Graph compatibility。
 139. dependency baseline 更新必须重新做 interoperability regression 并归档完整可复现 manifest。
 
----
-
-## 18.14 C++17
+### 15.14 C++17
 
 140. 全部 public 示例必须符合标准 C++17。
 141. 文档禁止使用 C++20 designated initializer。
 
----
-
-## 18.15 最终架构
+### 15.15 最终架构
 
 ```text
                      Context
@@ -6301,21 +5793,17 @@ Context
    ↓
 DomainParticipant
 
-
 Publisher
    ↓
 DataWriter
-
 
 Subscriber
    ↓
 DataReader
 
-
 Client
    ├── Request DataWriter
    └── Response DataReader
-
 
 Server
    ├── Request DataReader
@@ -6357,9 +5845,7 @@ Action
 
 明确留给后续版本。
 
----
-
-# 结论
+## 结论
 
 DMW V1 的核心目标不是复制完整 ROS 2 RMW API，而是：
 
@@ -6379,7 +5865,7 @@ Shared internal state 保证：
 
 WaitSet contract 保证：
 
-> endpoint 与 WaitSet 任一侧先销毁都不会产生悬空 native condition。
+> endpoint 与 WaitSet 任一侧先销毁都不会产生悬空 Fast DDS condition。
 
 `Result<T>` contract 保证：
 

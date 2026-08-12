@@ -8,6 +8,7 @@
 #include <string>
 #include <utility>
 
+#include "dmw/compatibility.hpp"
 #include "dmw/guard_condition.hpp"
 #include "dmw/node.hpp"
 #include "dmw/result.hpp"
@@ -19,12 +20,13 @@ namespace dmw {
 struct ContextOptions {
     std::uint32_t domain_id{0};
     std::string participant_name;
+    CompatibilityProfile compatibility_profile{CompatibilityProfile::NativeDds};
 };
 
 /// Root of one DMW runtime and exactly one DDS domain participant.
 class DMW_PUBLIC Context {
 public:
-    /// Transactionally create an active Context or return an Error.
+    /// Transactionally create an active Context with an immutable compatibility profile.
     static Result<std::unique_ptr<Context>> create(const ContextOptions& options);
 
     ~Context() noexcept;

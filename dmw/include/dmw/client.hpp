@@ -7,7 +7,6 @@
 #include <string_view>
 #include <utility>
 
-#include "dmw/compatibility.hpp"
 #include "dmw/request_id.hpp"
 #include "dmw/result.hpp"
 #include "dmw/take_status.hpp"
@@ -17,9 +16,8 @@ namespace dmw {
 
 class Node;
 
-struct ClientOptions {
-    CompatibilityProfile compatibility{CompatibilityProfile::NativeDds};
-};
+/// Endpoint-local client options; compatibility is inherited from the parent Context.
+struct ClientOptions {};
 
 /// Type-erased service client and WaitSet waitable.
 class DMW_PUBLIC Client {
@@ -43,6 +41,7 @@ public:
 
 private:
     friend class Node;
+    friend class WaitSet;
 
     class Impl;
 

@@ -12,6 +12,7 @@
 namespace dmw {
 
 class Context;
+class WaitSet;
 
 /// Reserved extension point for GuardCondition creation.
 struct GuardConditionOptions {};
@@ -30,6 +31,7 @@ public:
 
 private:
     friend class Context;
+    friend class WaitSet;
 
     class Impl;
 

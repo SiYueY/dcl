@@ -15,6 +15,7 @@ namespace dmw {
 
 class Publisher;
 class Subscriber;
+class WaitSet;
 
 /// Persistent endpoint-bound status event.
 class DMW_PUBLIC Event {
@@ -36,6 +37,7 @@ public:
 private:
     friend class Publisher;
     friend class Subscriber;
+    friend class WaitSet;
 
     class Impl;
 
