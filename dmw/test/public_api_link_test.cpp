@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
-
 #include "dmw/client.hpp"
 #include "dmw/context.hpp"
 #include "dmw/event.hpp"

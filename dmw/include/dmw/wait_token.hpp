@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__WAIT_TOKEN_HPP_
-#define DMW__WAIT_TOKEN_HPP_
+#ifndef DMW_WAIT_TOKEN_HPP_
+#define DMW_WAIT_TOKEN_HPP_
 
 #include <cstdint>
 
@@ -42,4 +40,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW__WAIT_TOKEN_HPP_
+#endif  // DMW_WAIT_TOKEN_HPP_

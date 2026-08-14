@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__EVENT_INFO_HPP_
-#define DMW__EVENT_INFO_HPP_
+#ifndef DMW_EVENT_INFO_HPP_
+#define DMW_EVENT_INFO_HPP_
 
 #include <cstddef>
 #include <cstdint>
@@ -63,4 +61,4 @@ using EventInfo = std::variant<
 
 }  // namespace dmw
 
-#endif  // DMW__EVENT_INFO_HPP_
+#endif  // DMW_EVENT_INFO_HPP_

@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__IMPL__READER_WAIT_STATE_HPP_
-#define DMW__IMPL__READER_WAIT_STATE_HPP_
+#ifndef DMW_IMPL__READER_WAIT_STATE_HPP_
+#define DMW_IMPL__READER_WAIT_STATE_HPP_
 
 #include <atomic>
 #include <condition_variable>
@@ -141,4 +139,4 @@ struct ReaderWaitState {
 }  // namespace impl
 }  // namespace dmw
 
-#endif  // DMW__IMPL__READER_WAIT_STATE_HPP_
+#endif  // DMW_IMPL__READER_WAIT_STATE_HPP_

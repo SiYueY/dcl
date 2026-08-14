@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__MESSAGE_INFO_HPP_
-#define DMW__MESSAGE_INFO_HPP_
+#ifndef DMW_MESSAGE_INFO_HPP_
+#define DMW_MESSAGE_INFO_HPP_
 
 #include <cstdint>
 #include <optional>
@@ -21,4 +19,4 @@ struct MessageInfo {
 
 }  // namespace dmw
 
-#endif  // DMW__MESSAGE_INFO_HPP_
+#endif  // DMW_MESSAGE_INFO_HPP_

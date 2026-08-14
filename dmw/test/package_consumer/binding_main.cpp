@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
-
 #include <functional>
 
 #include "dmw/fastdds/message_type.hpp"

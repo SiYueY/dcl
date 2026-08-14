@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__WAIT_TIMEOUT_HPP_
-#define DMW__WAIT_TIMEOUT_HPP_
+#ifndef DMW_WAIT_TIMEOUT_HPP_
+#define DMW_WAIT_TIMEOUT_HPP_
 
 #include <chrono>
 #include <exception>
@@ -51,4 +49,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW__WAIT_TIMEOUT_HPP_
+#endif  // DMW_WAIT_TIMEOUT_HPP_

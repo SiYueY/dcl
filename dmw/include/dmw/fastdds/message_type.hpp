@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__FASTDDS__MESSAGE_TYPE_HPP_
-#define DMW__FASTDDS__MESSAGE_TYPE_HPP_
+#ifndef DMW_FASTDDS__MESSAGE_TYPE_HPP_
+#define DMW_FASTDDS__MESSAGE_TYPE_HPP_
 
 #include <memory>
 #include <type_traits>
@@ -47,4 +45,4 @@ Result<MessageType> make_message_type() {
 
 }  // namespace dmw
 
-#endif  // DMW__FASTDDS__MESSAGE_TYPE_HPP_
+#endif  // DMW_FASTDDS__MESSAGE_TYPE_HPP_

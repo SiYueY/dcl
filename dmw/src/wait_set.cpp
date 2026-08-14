@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
-
 #include "dmw/wait_set.hpp"
 
 #include <atomic>

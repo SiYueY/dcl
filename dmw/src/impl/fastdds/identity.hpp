@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__IMPL__FASTDDS__IDENTITY_HPP_
-#define DMW__IMPL__FASTDDS__IDENTITY_HPP_
+#ifndef DMW_IMPL__FASTDDS__IDENTITY_HPP_
+#define DMW_IMPL__FASTDDS__IDENTITY_HPP_
 
 #include <algorithm>
 #include <cstdint>
@@ -81,4 +79,4 @@ inline std::optional<std::uint64_t> publication_sequence_number(
 }  // namespace impl
 }  // namespace dmw
 
-#endif  // DMW__IMPL__FASTDDS__IDENTITY_HPP_
+#endif  // DMW_IMPL__FASTDDS__IDENTITY_HPP_

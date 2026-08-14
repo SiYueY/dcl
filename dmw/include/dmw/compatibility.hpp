@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__COMPATIBILITY_HPP_
-#define DMW__COMPATIBILITY_HPP_
+#ifndef DMW_COMPATIBILITY_HPP_
+#define DMW_COMPATIBILITY_HPP_
 
 namespace dmw {
 
@@ -10,4 +8,4 @@ enum class CompatibilityProfile { NativeDds, Ros2FastDdsHumble };
 
 }  // namespace dmw
 
-#endif  // DMW__COMPATIBILITY_HPP_
+#endif  // DMW_COMPATIBILITY_HPP_

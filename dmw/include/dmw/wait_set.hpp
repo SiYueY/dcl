@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__WAIT_SET_HPP_
-#define DMW__WAIT_SET_HPP_
+#ifndef DMW_WAIT_SET_HPP_
+#define DMW_WAIT_SET_HPP_
 
 #include <memory>
 #include <utility>
@@ -60,4 +58,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW__WAIT_SET_HPP_
+#endif  // DMW_WAIT_SET_HPP_

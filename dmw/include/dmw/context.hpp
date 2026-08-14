@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__CONTEXT_HPP_
-#define DMW__CONTEXT_HPP_
+#ifndef DMW_CONTEXT_HPP_
+#define DMW_CONTEXT_HPP_
 
 #include <cstdint>
 #include <memory>
@@ -60,4 +58,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW__CONTEXT_HPP_
+#endif  // DMW_CONTEXT_HPP_

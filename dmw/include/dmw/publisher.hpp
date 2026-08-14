@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__PUBLISHER_HPP_
-#define DMW__PUBLISHER_HPP_
+#ifndef DMW_PUBLISHER_HPP_
+#define DMW_PUBLISHER_HPP_
 
 #include <cstddef>
 #include <memory>
@@ -52,4 +50,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW__PUBLISHER_HPP_
+#endif  // DMW_PUBLISHER_HPP_

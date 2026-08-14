@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__IMPL__LOCK_RANK_HPP_
-#define DMW__IMPL__LOCK_RANK_HPP_
+#ifndef DMW_IMPL__LOCK_RANK_HPP_
+#define DMW_IMPL__LOCK_RANK_HPP_
 
 #include <array>
 #include <cassert>
@@ -97,4 +95,4 @@ private:
 
 }  // namespace dmw::impl
 
-#endif  // DMW__IMPL__LOCK_RANK_HPP_
+#endif  // DMW_IMPL__LOCK_RANK_HPP_

@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__MESSAGE_TYPE_HPP_
-#define DMW__MESSAGE_TYPE_HPP_
+#ifndef DMW_MESSAGE_TYPE_HPP_
+#define DMW_MESSAGE_TYPE_HPP_
 
 #include <memory>
 #include <string_view>
@@ -38,4 +36,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW__MESSAGE_TYPE_HPP_
+#endif  // DMW_MESSAGE_TYPE_HPP_

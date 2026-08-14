@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__VISIBILITY_CONTROL_HPP_
-#define DMW__VISIBILITY_CONTROL_HPP_
+#ifndef DMW_VISIBILITY_CONTROL_HPP_
+#define DMW_VISIBILITY_CONTROL_HPP_
 
 #if defined _WIN32 || defined __CYGWIN__
 #ifdef __GNUC__
@@ -29,4 +27,4 @@
 #endif
 #endif
 
-#endif  // DMW__VISIBILITY_CONTROL_HPP_
+#endif  // DMW_VISIBILITY_CONTROL_HPP_

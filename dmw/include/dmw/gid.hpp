@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__GID_HPP_
-#define DMW__GID_HPP_
+#ifndef DMW_GID_HPP_
+#define DMW_GID_HPP_
 
 #include <array>
 #include <cstddef>
@@ -33,4 +31,4 @@ struct GidHash {
 
 }  // namespace dmw
 
-#endif  // DMW__GID_HPP_
+#endif  // DMW_GID_HPP_

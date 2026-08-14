@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__GUARD_CONDITION_HPP_
-#define DMW__GUARD_CONDITION_HPP_
+#ifndef DMW_GUARD_CONDITION_HPP_
+#define DMW_GUARD_CONDITION_HPP_
 
 #include <memory>
 #include <utility>
@@ -42,4 +40,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW__GUARD_CONDITION_HPP_
+#endif  // DMW_GUARD_CONDITION_HPP_

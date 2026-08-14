@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__ERROR_HPP_
-#define DMW__ERROR_HPP_
+#ifndef DMW_ERROR_HPP_
+#define DMW_ERROR_HPP_
 
 #include <string>
 #include <string_view>
@@ -45,4 +43,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW__ERROR_HPP_
+#endif  // DMW_ERROR_HPP_

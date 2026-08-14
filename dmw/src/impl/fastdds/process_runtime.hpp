@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__IMPL__FASTDDS__PROCESS_RUNTIME_HPP_
-#define DMW__IMPL__FASTDDS__PROCESS_RUNTIME_HPP_
+#ifndef DMW_IMPL__FASTDDS__PROCESS_RUNTIME_HPP_
+#define DMW_IMPL__FASTDDS__PROCESS_RUNTIME_HPP_
 
 #include <memory>
 #include <mutex>
@@ -111,4 +109,4 @@ private:
 }  // namespace impl
 }  // namespace dmw
 
-#endif  // DMW__IMPL__FASTDDS__PROCESS_RUNTIME_HPP_
+#endif  // DMW_IMPL__FASTDDS__PROCESS_RUNTIME_HPP_

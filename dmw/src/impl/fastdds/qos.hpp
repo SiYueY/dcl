@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__IMPL__FASTDDS__QOS_HPP_
-#define DMW__IMPL__FASTDDS__QOS_HPP_
+#ifndef DMW_IMPL__FASTDDS__QOS_HPP_
+#define DMW_IMPL__FASTDDS__QOS_HPP_
 
 #include <cstdint>
 #include <limits>
@@ -134,4 +132,4 @@ inline Result<eprosima::fastdds::dds::DataReaderQos> make_reader_qos(
 }  // namespace impl
 }  // namespace dmw
 
-#endif  // DMW__IMPL__FASTDDS__QOS_HPP_
+#endif  // DMW_IMPL__FASTDDS__QOS_HPP_

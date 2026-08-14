@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__QOS_HPP_
-#define DMW__QOS_HPP_
+#ifndef DMW_QOS_HPP_
+#define DMW_QOS_HPP_
 
 #include <chrono>
 #include <cstddef>
@@ -176,4 +174,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW__QOS_HPP_
+#endif  // DMW_QOS_HPP_

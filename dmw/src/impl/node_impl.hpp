@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__IMPL__NODE_IMPL_HPP_
-#define DMW__IMPL__NODE_IMPL_HPP_
+#ifndef DMW_IMPL__NODE_IMPL_HPP_
+#define DMW_IMPL__NODE_IMPL_HPP_
 
 #include <memory>
 #include <string>
@@ -25,4 +23,4 @@ public:
 
 }  // namespace dmw
 
-#endif  // DMW__IMPL__NODE_IMPL_HPP_
+#endif  // DMW_IMPL__NODE_IMPL_HPP_

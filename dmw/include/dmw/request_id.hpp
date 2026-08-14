@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__REQUEST_ID_HPP_
-#define DMW__REQUEST_ID_HPP_
+#ifndef DMW_REQUEST_ID_HPP_
+#define DMW_REQUEST_ID_HPP_
 
 #include <cstddef>
 #include <cstdint>
@@ -36,4 +34,4 @@ struct RequestIdHash {
 
 }  // namespace dmw
 
-#endif  // DMW__REQUEST_ID_HPP_
+#endif  // DMW_REQUEST_ID_HPP_

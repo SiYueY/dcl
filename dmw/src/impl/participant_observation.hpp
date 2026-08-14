@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__IMPL__PARTICIPANT_OBSERVATION_HPP_
-#define DMW__IMPL__PARTICIPANT_OBSERVATION_HPP_
+#ifndef DMW_IMPL__PARTICIPANT_OBSERVATION_HPP_
+#define DMW_IMPL__PARTICIPANT_OBSERVATION_HPP_
 
 #include <atomic>
 #include <cstdint>

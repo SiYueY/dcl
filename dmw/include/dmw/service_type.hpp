@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__SERVICE_TYPE_HPP_
-#define DMW__SERVICE_TYPE_HPP_
+#ifndef DMW_SERVICE_TYPE_HPP_
+#define DMW_SERVICE_TYPE_HPP_
 
 #include <utility>
 
@@ -26,4 +24,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW__SERVICE_TYPE_HPP_
+#endif  // DMW_SERVICE_TYPE_HPP_

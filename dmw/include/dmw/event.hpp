@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__EVENT_HPP_
-#define DMW__EVENT_HPP_
+#ifndef DMW_EVENT_HPP_
+#define DMW_EVENT_HPP_
 
 #include <memory>
 #include <utility>
@@ -48,4 +46,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW__EVENT_HPP_
+#endif  // DMW_EVENT_HPP_

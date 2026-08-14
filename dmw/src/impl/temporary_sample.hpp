@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__IMPL__TEMPORARY_SAMPLE_HPP_
-#define DMW__IMPL__TEMPORARY_SAMPLE_HPP_
+#ifndef DMW_IMPL__TEMPORARY_SAMPLE_HPP_
+#define DMW_IMPL__TEMPORARY_SAMPLE_HPP_
 
 #include <utility>
 
@@ -75,4 +73,4 @@ private:
 }  // namespace impl
 }  // namespace dmw
 
-#endif  // DMW__IMPL__TEMPORARY_SAMPLE_HPP_
+#endif  // DMW_IMPL__TEMPORARY_SAMPLE_HPP_

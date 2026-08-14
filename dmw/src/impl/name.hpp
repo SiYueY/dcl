@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__IMPL__NAME_HPP_
-#define DMW__IMPL__NAME_HPP_
+#ifndef DMW_IMPL__NAME_HPP_
+#define DMW_IMPL__NAME_HPP_
 
 #include <string>
 #include <string_view>
@@ -57,4 +55,4 @@ inline Result<std::string> resolve_name(std::string_view node_namespace, std::st
 }  // namespace impl
 }  // namespace dmw
 
-#endif  // DMW__IMPL__NAME_HPP_
+#endif  // DMW_IMPL__NAME_HPP_

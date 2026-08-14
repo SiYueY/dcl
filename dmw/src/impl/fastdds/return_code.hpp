@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__IMPL__FASTDDS__RETURN_CODE_HPP_
-#define DMW__IMPL__FASTDDS__RETURN_CODE_HPP_
+#ifndef DMW_IMPL__FASTDDS__RETURN_CODE_HPP_
+#define DMW_IMPL__FASTDDS__RETURN_CODE_HPP_
 
 #include <string>
 #include <utility>

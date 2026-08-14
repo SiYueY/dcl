@@ -1,7 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-
-#ifndef DMW__TAKE_STATUS_HPP_
-#define DMW__TAKE_STATUS_HPP_
+#ifndef DMW_TAKE_STATUS_HPP_
+#define DMW_TAKE_STATUS_HPP_
 
 namespace dmw {
 
@@ -10,4 +8,4 @@ enum class TakeStatus { Taken, NoData };
 
 }  // namespace dmw
 
-#endif  // DMW__TAKE_STATUS_HPP_
+#endif  // DMW_TAKE_STATUS_HPP_
