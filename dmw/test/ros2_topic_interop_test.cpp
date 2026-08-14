@@ -79,7 +79,11 @@ private:
 
 template <typename Predicate>
 bool wait_until(Predicate&& predicate) {
-    for (int attempt = 0; attempt < 100; ++attempt) {
+    // Cross-participant discovery and the first reliable delivery may share
+    // the same Fast DDS discovery cycle on loaded CI hosts.  Five seconds is
+    // deliberately a deadline, not a polling policy: success normally
+    // returns on the first 10 ms iteration after the event.
+    for (int attempt = 0; attempt < 500; ++attempt) {
         if (predicate()) {
             return true;
         }
@@ -138,11 +142,13 @@ int main() {
 
         std_msgs::msg::String from_ros;
         from_ros.data = "from ros2";
-        ros_publisher->publish(from_ros);
-
         std_msgs::msg::String dmw_received;
         dmw::MessageInfo message_info;
-        assert(wait_until([&subscriber, &dmw_received, &message_info] {
+        assert(wait_until([&ros_publisher, &from_ros, &subscriber, &dmw_received, &message_info] {
+            // Endpoint matching precedes every fully established reliable
+            // writer-reader route on some Fast DDS discovery cycles.  Keep
+            // publishing the identical sample until the route accepts it.
+            ros_publisher->publish(from_ros);
             auto take = subscriber.value()->take(&dmw_received, message_info);
             assert(take);
             return take.value() == dmw::TakeStatus::Taken;
@@ -151,8 +157,8 @@ int main() {
 
         std_msgs::msg::String from_dmw;
         from_dmw.data = "from dmw";
-        assert(publisher.value()->publish(&from_dmw));
-        assert(wait_until([&ros_node, &ros_received] {
+        assert(wait_until([&publisher, &from_dmw, &ros_node, &ros_received] {
+            assert(publisher.value()->publish(&from_dmw));
             rclcpp::spin_some(ros_node);
             return ros_received == "from dmw";
         }));

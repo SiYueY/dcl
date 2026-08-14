@@ -3,12 +3,15 @@
 #include "impl/event_parent_state.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 #include <fastdds/dds/publisher/DataWriterListener.hpp>
 #include <fastdds/dds/subscriber/DataReaderListener.hpp>
 
 #include "dmw/error.hpp"
+#include "impl/fastdds/process_runtime.hpp"
+#include "impl/fastdds/return_code.hpp"
 
 namespace dmw {
 namespace impl {
@@ -83,6 +86,43 @@ void accumulate(EventInfo& total, const EventInfo& update) noexcept {
     }
 }
 
+class CallbackInFlightGate {
+public:
+    class Guard {
+    public:
+        Guard() noexcept = default;
+        explicit Guard(CallbackInFlightGate* gate) noexcept : gate_(gate) {}
+        Guard(const Guard&) = delete;
+        Guard& operator=(const Guard&) = delete;
+        ~Guard() {
+            if (gate_ == nullptr) return;
+            std::lock_guard lock(gate_->mutex_);
+            --gate_->in_flight_;
+            if (gate_->in_flight_ == 0) gate_->cv_.notify_all();
+        }
+        explicit operator bool() const noexcept { return gate_ != nullptr; }
+    private:
+        CallbackInFlightGate* gate_{nullptr};
+    };
+
+    Guard enter() noexcept {
+        std::lock_guard lock(mutex_);
+        if (!accepting_) return Guard{};
+        ++in_flight_;
+        return Guard(this);
+    }
+    void close_and_drain() noexcept {
+        std::unique_lock lock(mutex_);
+        accepting_ = false;
+        cv_.wait(lock, [this] { return in_flight_ == 0; });
+    }
+private:
+    RankedMutex<LockRank::ListenerState> mutex_;
+    std::condition_variable_any cv_;
+    bool accepting_{true};
+    std::size_t in_flight_{0};
+};
+
 }  // namespace
 
 class EventParentState::WriterListener final : public eprosima::fastdds::dds::DataWriterListener {
@@ -93,6 +133,8 @@ public:
     void on_offered_deadline_missed(
         eprosima::fastdds::dds::DataWriter*,
         const eprosima::fastdds::dds::OfferedDeadlineMissedStatus& status) override {
+        const auto callback = callbacks_.enter();
+        if (!callback) return;
         if (const auto source = source_.lock()) {
             source->update(
                 EventType::OfferedDeadlineMissed,
@@ -105,6 +147,8 @@ public:
     void on_offered_incompatible_qos(
         eprosima::fastdds::dds::DataWriter*,
         const eprosima::fastdds::dds::OfferedIncompatibleQosStatus& status) override {
+        const auto callback = callbacks_.enter();
+        if (!callback) return;
         if (const auto source = source_.lock()) {
             source->update(
                 EventType::OfferedIncompatibleQos,
@@ -118,6 +162,8 @@ public:
     void on_liveliness_lost(
         eprosima::fastdds::dds::DataWriter*,
         const eprosima::fastdds::dds::LivelinessLostStatus& status) override {
+        const auto callback = callbacks_.enter();
+        if (!callback) return;
         if (const auto source = source_.lock()) {
             source->update(
                 EventType::LivelinessLost,
@@ -127,8 +173,11 @@ public:
         }
     }
 
+    void close_and_drain() noexcept { callbacks_.close_and_drain(); }
+
 private:
     std::weak_ptr<EventParentState> source_;
+    CallbackInFlightGate callbacks_;
 };
 
 class EventParentState::ReaderListener final : public eprosima::fastdds::dds::DataReaderListener {
@@ -139,6 +188,8 @@ public:
     void on_requested_deadline_missed(
         eprosima::fastdds::dds::DataReader*,
         const eprosima::fastdds::dds::RequestedDeadlineMissedStatus& status) override {
+        const auto callback = callbacks_.enter();
+        if (!callback) return;
         if (const auto source = source_.lock()) {
             source->update(
                 EventType::RequestedDeadlineMissed,
@@ -151,6 +202,8 @@ public:
     void on_liveliness_changed(
         eprosima::fastdds::dds::DataReader*,
         const eprosima::fastdds::dds::LivelinessChangedStatus& status) override {
+        const auto callback = callbacks_.enter();
+        if (!callback) return;
         if (const auto source = source_.lock()) {
             source->update(
                 EventType::LivelinessChanged,
@@ -163,6 +216,8 @@ public:
     void on_requested_incompatible_qos(
         eprosima::fastdds::dds::DataReader*,
         const eprosima::fastdds::dds::RequestedIncompatibleQosStatus& status) override {
+        const auto callback = callbacks_.enter();
+        if (!callback) return;
         if (const auto source = source_.lock()) {
             source->update(
                 EventType::RequestedIncompatibleQos,
@@ -176,6 +231,8 @@ public:
     void on_sample_lost(
         eprosima::fastdds::dds::DataReader*,
         const eprosima::fastdds::dds::SampleLostStatus& status) override {
+        const auto callback = callbacks_.enter();
+        if (!callback) return;
         if (const auto source = source_.lock()) {
             source->update(
                 EventType::MessageLost,
@@ -185,8 +242,11 @@ public:
         }
     }
 
+    void close_and_drain() noexcept { callbacks_.close_and_drain(); }
+
 private:
     std::weak_ptr<EventParentState> source_;
+    CallbackInFlightGate callbacks_;
 };
 
 EventParentState::~EventParentState() noexcept = default;
@@ -194,10 +254,24 @@ EventParentState::~EventParentState() noexcept = default;
 EventParentState::EventParentState(std::shared_ptr<fastdds::ContextState> context) noexcept
 : context_state(std::move(context)) {}
 
+void EventParentState::drain_listeners() noexcept {
+    if (writer_listener_) writer_listener_->close_and_drain();
+    if (reader_listener_) reader_listener_->close_and_drain();
+}
+
+void EventParentState::quarantine_listeners() noexcept {
+    if (writer_listener_) {
+        fastdds::DmwProcessRuntime::instance().retain_writer_listener(std::move(writer_listener_));
+    }
+    if (reader_listener_) {
+        fastdds::DmwProcessRuntime::instance().retain_reader_listener(std::move(reader_listener_));
+    }
+}
+
 Result<void> EventParentState::attach(eprosima::fastdds::dds::DataWriter& writer) {
     WriterListener* listener = nullptr;
     {
-        std::unique_lock<std::mutex> lock(mutex);
+        std::unique_lock lock(mutex);
         listener_cv_.wait(
             lock, [this] { return writer_listener_state_ != ListenerInstallState::Installing; });
         if (writer_listener_state_ == ListenerInstallState::Attached) {
@@ -219,14 +293,14 @@ Result<void> EventParentState::attach(eprosima::fastdds::dds::DataWriter& writer
     try {
         result = writer.set_listener(listener);
     } catch (...) {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard lock(mutex);
         writer_listener_.reset();
         writer_listener_state_ = ListenerInstallState::Detached;
         listener_cv_.notify_all();
         throw;
     }
     {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard lock(mutex);
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
             writer_listener_state_ = ListenerInstallState::Attached;
         } else {
@@ -237,7 +311,7 @@ Result<void> EventParentState::attach(eprosima::fastdds::dds::DataWriter& writer
     listener_cv_.notify_all();
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<void>::failure(
-            Error(ErrorCode::DdsError, "Fast DDS failed to set a writer listener"));
+            fastdds::return_code_error(result, "Fast DDS failed to set a writer listener"));
     }
     return Result<void>::success();
 }
@@ -245,7 +319,7 @@ Result<void> EventParentState::attach(eprosima::fastdds::dds::DataWriter& writer
 Result<void> EventParentState::attach(eprosima::fastdds::dds::DataReader& reader) {
     ReaderListener* listener = nullptr;
     {
-        std::unique_lock<std::mutex> lock(mutex);
+        std::unique_lock lock(mutex);
         listener_cv_.wait(
             lock, [this] { return reader_listener_state_ != ListenerInstallState::Installing; });
         if (reader_listener_state_ == ListenerInstallState::Attached) {
@@ -267,14 +341,14 @@ Result<void> EventParentState::attach(eprosima::fastdds::dds::DataReader& reader
     try {
         result = reader.set_listener(listener);
     } catch (...) {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard lock(mutex);
         reader_listener_.reset();
         reader_listener_state_ = ListenerInstallState::Detached;
         listener_cv_.notify_all();
         throw;
     }
     {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard lock(mutex);
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
             reader_listener_state_ = ListenerInstallState::Attached;
         } else {
@@ -285,15 +359,16 @@ Result<void> EventParentState::attach(eprosima::fastdds::dds::DataReader& reader
     listener_cv_.notify_all();
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<void>::failure(
-            Error(ErrorCode::DdsError, "Fast DDS failed to set a reader listener"));
+            fastdds::return_code_error(result, "Fast DDS failed to set a reader listener"));
     }
     return Result<void>::success();
 }
 
 std::uint64_t EventParentState::register_event(
     EventType type, const std::shared_ptr<GuardConditionState>& event) {
-    std::lock_guard<std::mutex> lock(mutex);
-    if (next_event_registration_id_ == 0) {
+    std::lock_guard lock(mutex);
+    if (exhausted_.load(std::memory_order_acquire) || next_event_registration_id_ == 0) {
+        exhausted_.store(true, std::memory_order_release);
         return 0;
     }
     const auto registration_id = next_event_registration_id_++;
@@ -305,7 +380,7 @@ void EventParentState::unregister_event(std::uint64_t registration_id) noexcept 
     if (registration_id == 0) {
         return;
     }
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard lock(mutex);
     const auto event =
         std::find_if(events.begin(), events.end(), [registration_id](const auto& record) {
             return record.registration_id == registration_id;
@@ -316,12 +391,12 @@ void EventParentState::unregister_event(std::uint64_t registration_id) noexcept 
 }
 
 std::size_t EventParentState::event_registration_count() const noexcept {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard lock(mutex);
     return events.size();
 }
 
 EventParentState::Snapshot EventParentState::snapshot(EventType type) const {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard lock(mutex);
     const auto& current = slot(type);
     return Snapshot{
         current.generation == 0 ? empty_event_info(type) : current.info, current.generation};
@@ -329,20 +404,33 @@ EventParentState::Snapshot EventParentState::snapshot(EventType type) const {
 
 void EventParentState::update(EventType type, EventInfo info) noexcept {
     std::uint64_t notification_limit = 0;
+    bool notify_all = false;
     {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard lock(mutex);
+        if (exhausted_.load(std::memory_order_acquire)) return;
         auto& current = slot(type);
-        if (current.generation == 0) {
-            current.info = std::move(info);
-        } else {
-            accumulate(current.info, info);
-        }
-        ++current.generation;
-        notification_limit = next_event_registration_id_ - 1;
-        for (const auto& record : events) {
-            if (record.type == type) {
+        if (current.generation == std::numeric_limits<std::uint64_t>::max()) {
+            exhausted_.store(true, std::memory_order_release);
+            notify_all = true;
+            notification_limit = next_event_registration_id_ - 1;
+            for (const auto& record : events) {
                 if (const auto event = record.event.lock()) {
                     event->pending.store(true, std::memory_order_release);
+                }
+            }
+        } else {
+            if (current.generation == 0) {
+                current.info = std::move(info);
+            } else {
+                accumulate(current.info, info);
+            }
+            ++current.generation;
+            notification_limit = next_event_registration_id_ - 1;
+            for (const auto& record : events) {
+                if (record.type == type) {
+                    if (const auto event = record.event.lock()) {
+                        event->pending.store(true, std::memory_order_release);
+                    }
                 }
             }
         }
@@ -352,11 +440,11 @@ void EventParentState::update(EventType type, EventInfo info) noexcept {
     while (previous_registration_id < notification_limit) {
         std::shared_ptr<GuardConditionState> event;
         {
-            std::lock_guard<std::mutex> lock(mutex);
+            std::lock_guard lock(mutex);
             const auto next = std::find_if(
                 events.begin(), events.end(),
-                [type, notification_limit, previous_registration_id](const EventRecord& record) {
-                    return record.type == type &&
+                [type, notify_all, notification_limit, previous_registration_id](const EventRecord& record) {
+                    return (notify_all || record.type == type) &&
                            record.registration_id > previous_registration_id &&
                            record.registration_id <= notification_limit;
                 });

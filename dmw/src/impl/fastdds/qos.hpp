@@ -8,6 +8,7 @@
 
 #include <fastdds/dds/publisher/qos/DataWriterQos.hpp>
 #include <fastdds/dds/subscriber/qos/DataReaderQos.hpp>
+#include <fastdds/rtps/attributes/HistoryAttributes.h>
 #include <fastdds/rtps/common/Time_t.h>
 
 #include "dmw/qos.hpp"
@@ -104,6 +105,14 @@ inline Result<eprosima::fastdds::dds::DataWriterQos> make_writer_qos(
     auto result = apply_common_qos(source, profile, target);
     if (!result)
         return Result<eprosima::fastdds::dds::DataWriterQos>::failure(std::move(result.error()));
+    if (profile == CompatibilityProfile::Ros2FastDdsHumble) {
+        target.endpoint().history_memory_policy =
+            eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
+        target.publish_mode().kind = eprosima::fastrtps::SYNCHRONOUS_PUBLISH_MODE;
+        target.data_sharing().off();
+        // This is a frozen rmw_fastrtps compatibility value, not a public DMW QoS policy.
+        target.reliability().max_blocking_time = eprosima::fastrtps::Duration_t(0, 100000000U);
+    }
     return Result<eprosima::fastdds::dds::DataWriterQos>::success(std::move(target));
 }
 
@@ -113,6 +122,11 @@ inline Result<eprosima::fastdds::dds::DataReaderQos> make_reader_qos(
     auto result = apply_common_qos(source, profile, target);
     if (!result)
         return Result<eprosima::fastdds::dds::DataReaderQos>::failure(std::move(result.error()));
+    if (profile == CompatibilityProfile::Ros2FastDdsHumble) {
+        target.endpoint().history_memory_policy =
+            eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
+        target.data_sharing().off();
+    }
     return Result<eprosima::fastdds::dds::DataReaderQos>::success(std::move(target));
 }
 

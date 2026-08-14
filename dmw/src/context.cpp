@@ -9,6 +9,7 @@
 #include <fastdds/dds/domain/DomainParticipant.hpp>
 #include <fastdds/dds/domain/DomainParticipantFactory.hpp>
 #include <fastdds/dds/domain/qos/DomainParticipantQos.hpp>
+#include <fastdds/rtps/attributes/HistoryAttributes.h>
 #include <fastdds/dds/topic/Topic.hpp>
 #include <fastdds/dds/topic/TypeSupport.hpp>
 
@@ -16,6 +17,8 @@
 #include "impl/context_impl.hpp"
 #include "dmw/fastdds/message_type.hpp"
 #include "impl/fastdds/context_state.hpp"
+#include "impl/fastdds/process_runtime.hpp"
+#include "impl/fastdds/return_code.hpp"
 #include "impl/guard_condition_impl.hpp"
 #include "impl/name.hpp"
 #include "impl/node_impl.hpp"
@@ -23,6 +26,19 @@
 namespace dmw {
 
 namespace {
+
+bool same_duration(QosDuration left, QosDuration right) noexcept {
+    return left.kind() == right.kind() &&
+           (left.kind() != QosDuration::Kind::Finite || left.value() == right.value());
+}
+
+bool same_topic_qos(const Qos& left, const Qos& right) noexcept {
+    return left.history() == right.history() && left.depth() == right.depth() &&
+           left.reliability() == right.reliability() && left.durability() == right.durability() &&
+           left.liveliness() == right.liveliness() && same_duration(left.deadline(), right.deadline()) &&
+           same_duration(left.lifespan(), right.lifespan()) &&
+           same_duration(left.liveliness_lease_duration(), right.liveliness_lease_duration());
+}
 
 class ParticipantCreationGuard {
 public:
@@ -33,12 +49,19 @@ public:
 
     ~ParticipantCreationGuard() noexcept {
         if (participant_ != nullptr) {
+            bool deleted = false;
             try {
-                participant_->delete_contained_entities();
-                factory_->delete_participant(participant_);
+                const auto contained = participant_->delete_contained_entities();
+                const auto participant = contained == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK
+                    ? factory_->delete_participant(participant_)
+                    : contained;
+                deleted = participant == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
             } catch (...) {
-                // Factory rollback is best effort.  The original creation
-                // exception remains the observable failure.
+                deleted = false;
+            }
+            if (!deleted) {
+                impl::fastdds::DmwProcessRuntime::instance().retain_participant(
+                    factory_, participant_);
             }
         }
     }
@@ -72,17 +95,67 @@ ContextState::ContextState(
 
 ContextState::~ContextState() noexcept {
     if (participant_ != nullptr) {
-        try {
-            participant_->delete_contained_entities();
-        } catch (...) {
-            // Destruction is best effort.  A later participant deletion may
-            // still release resources that were not individually deleted.
+        bool listener_safe_to_destroy = participant_listener_ == nullptr;
+        if (participant_listener_) {
+            try {
+                listener_safe_to_destroy = participant_->set_listener(nullptr) ==
+                                           eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
+            } catch (...) {
+                listener_safe_to_destroy = false;
+            }
+            if (listener_safe_to_destroy) participant_listener_->close_and_drain();
         }
-        try {
-            factory_->delete_participant(participant_);
-        } catch (...) {
-            // A failed Fast DDS cleanup must not escape a noexcept destructor.
+        if (!listener_safe_to_destroy) {
+            // An unconfirmed detach leaves Fast DDS free to enter the
+            // listener.  Do not attempt contained-entity or participant
+            // deletion in that state: retain both at the process barrier.
+            DmwProcessRuntime::instance().retain_participant(
+                factory_, participant_, std::move(participant_listener_));
+            participant_ = nullptr;
+            publisher_ = nullptr;
+            subscriber_ = nullptr;
+            return;
         }
+        bool deleted = false;
+        try {
+            const auto contained = participant_->delete_contained_entities();
+            if (contained == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+                deleted = factory_->delete_participant(participant_) ==
+                          eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
+            }
+        } catch (...) {
+        }
+        if (!deleted) {
+            DmwProcessRuntime::instance().retain_participant(
+                factory_, participant_, std::move(participant_listener_));
+        } else {
+            participant_listener_.reset();
+        }
+        participant_ = nullptr;
+        publisher_ = nullptr;
+        subscriber_ = nullptr;
+    }
+}
+
+Result<void> ContextState::install_discovery_listener() noexcept {
+    std::unique_ptr<ParticipantObservationListener> listener;
+    try {
+        listener = std::make_unique<ParticipantObservationListener>(
+            participant_observations_, remote_endpoints_, target_readers_);
+        const auto result = participant_->set_listener(listener.get());
+        if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+            DmwProcessRuntime::instance().retain_participant_listener(std::move(listener));
+            return Result<void>::failure(
+                return_code_error(result, "Fast DDS failed to install discovery listener"));
+        }
+        participant_listener_ = std::move(listener);
+        return Result<void>::success();
+    } catch (...) {
+        // A throwing listener install has no reliable attachment evidence.
+        // Keep any already-created listener alive for the Fast DDS process
+        // barrier.  If construction threw, listener is simply null.
+        DmwProcessRuntime::instance().retain_participant_listener(std::move(listener));
+        return Result<void>::failure(Error(ErrorCode::DdsError, "Fast DDS discovery listener setup failed"));
     }
 }
 
@@ -167,7 +240,7 @@ bool ContextState::is_shutdown() const noexcept {
 
 ContextState::OperationGuard::~OperationGuard() noexcept {
     if (state_ != nullptr) {
-        std::lock_guard<std::mutex> lock(state_->operation_mutex_);
+        std::lock_guard lock(state_->operation_mutex_);
         --state_->active_operations_;
         if (state_->active_operations_ == 0) {
             state_->operation_cv_.notify_all();
@@ -182,7 +255,7 @@ ContextState::OperationGuard& ContextState::OperationGuard::operator=(
     OperationGuard&& other) noexcept {
     if (this != &other) {
         if (state_ != nullptr) {
-            std::lock_guard<std::mutex> lock(state_->operation_mutex_);
+            std::lock_guard lock(state_->operation_mutex_);
             --state_->active_operations_;
             if (state_->active_operations_ == 0) {
                 state_->operation_cv_.notify_all();
@@ -194,7 +267,7 @@ ContextState::OperationGuard& ContextState::OperationGuard::operator=(
 }
 
 ContextState::OperationGuard ContextState::try_acquire_operation() noexcept {
-    std::lock_guard<std::mutex> lock(operation_mutex_);
+    std::lock_guard lock(operation_mutex_);
     if (shutdown_.load(std::memory_order_acquire)) {
         return OperationGuard{};
     }
@@ -204,37 +277,58 @@ ContextState::OperationGuard ContextState::try_acquire_operation() noexcept {
 
 void ContextState::shutdown() noexcept {
     {
-        std::lock_guard<std::mutex> lock(operation_mutex_);
+        std::unique_lock lock(operation_mutex_);
         if (shutdown_.load(std::memory_order_acquire)) {
+            operation_cv_.wait(lock, [this] { return shutdown_complete_; });
             return;
         }
         shutdown_.store(true, std::memory_order_release);
     }
 
-    decltype(shutdown_callbacks_) callbacks;
+    decltype(shutdown_children_) children;
     {
-        std::lock_guard<std::mutex> lock(shutdown_callbacks_mutex_);
-        callbacks.swap(shutdown_callbacks_);
+        std::lock_guard lock(shutdown_children_mutex_);
+        shutdown_execution_state_ = ShutdownExecutionState::RequestingChildren;
+        for (const auto& entry : shutdown_children_) {
+            entry.second->requested = true;
+        }
+        children.swap(shutdown_children_);
     }
-    for (auto& callback : callbacks) {
+    // A child acknowledges the shutdown request by returning from its
+    // callback.  Holding a shared record means concurrent unregistration
+    // cannot cancel a request already committed to this shutdown attempt.
+    for (const auto& entry : children) {
+        const auto& child = entry.second;
         try {
-            callback.second();
+            child->callback();
         } catch (...) {
             // Shutdown is noexcept. A best-effort notification must not prevent
             // later waitables from observing the terminal Context state.
         }
+        {
+            std::lock_guard lock(shutdown_children_mutex_);
+            child->acknowledged = true;
+        }
     }
-    std::unique_lock<std::mutex> lock(operation_mutex_);
+    {
+        std::lock_guard lock(shutdown_children_mutex_);
+        shutdown_execution_state_ = ShutdownExecutionState::Draining;
+        shutdown_execution_state_ = ShutdownExecutionState::Complete;
+    }
+    std::unique_lock lock(operation_mutex_);
     operation_cv_.wait(lock, [this] { return active_operations_ == 0; });
+    shutdown_complete_ = true;
+    lock.unlock();
+    operation_cv_.notify_all();
 }
 
 std::uint64_t ContextState::register_shutdown_callback(std::function<void()> callback) {
-    std::lock_guard<std::mutex> lock(shutdown_callbacks_mutex_);
+    std::lock_guard lock(shutdown_children_mutex_);
     if (shutdown_.load(std::memory_order_acquire) || next_shutdown_callback_id_ == 0) {
         return 0;
     }
     const auto id = next_shutdown_callback_id_++;
-    shutdown_callbacks_.emplace(id, std::move(callback));
+    shutdown_children_.emplace(id, std::make_shared<ShutdownChild>(std::move(callback)));
     return id;
 }
 
@@ -242,15 +336,15 @@ void ContextState::unregister_shutdown_callback(std::uint64_t id) noexcept {
     if (id == 0) {
         return;
     }
-    std::lock_guard<std::mutex> lock(shutdown_callbacks_mutex_);
-    shutdown_callbacks_.erase(id);
+    std::lock_guard lock(shutdown_children_mutex_);
+    shutdown_children_.erase(id);
 }
 
 Result<ContextState::TypeLease> ContextState::acquire_type(const MessageType& type) {
     const std::string type_name(type.type_name());
     const auto binding_type = dmw::fastdds::MessageTypeAccess::binding_type(type);
     {
-        std::unique_lock<std::mutex> lock(registry_mutex_);
+        std::unique_lock lock(type_registry_mutex_);
         while (true) {
             const auto type_it = registered_types_.find(type_name);
             if (type_it == registered_types_.end()) {
@@ -269,7 +363,7 @@ Result<ContextState::TypeLease> ContextState::acquire_type(const MessageType& ty
                 return Result<TypeLease>::failure(
                     Error(ErrorCode::DdsError, "DDS type registration state is indeterminate"));
             }
-            registry_cv_.wait(lock);
+            type_registry_cv_.wait(lock);
         }
     }
 
@@ -278,18 +372,18 @@ Result<ContextState::TypeLease> ContextState::acquire_type(const MessageType& ty
         result = participant_->register_type(dmw::fastdds::MessageTypeAccess::type_support(type));
     } catch (...) {
         {
-            std::lock_guard<std::mutex> lock(registry_mutex_);
+            std::lock_guard lock(type_registry_mutex_);
             const auto type_it = registered_types_.find(type_name);
             if (type_it != registered_types_.end()) {
                 type_it->second.phase = RegistryEntryPhase::Orphaned;
             }
         }
-        registry_cv_.notify_all();
+        type_registry_cv_.notify_all();
         throw;
     }
 
     {
-        std::lock_guard<std::mutex> lock(registry_mutex_);
+        std::lock_guard lock(type_registry_mutex_);
         const auto type_it = registered_types_.find(type_name);
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
             type_it->second.phase = RegistryEntryPhase::Active;
@@ -298,33 +392,42 @@ Result<ContextState::TypeLease> ContextState::acquire_type(const MessageType& ty
             registered_types_.erase(type_it);
         }
     }
-    registry_cv_.notify_all();
+    type_registry_cv_.notify_all();
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<TypeLease>::failure(
-            Error(ErrorCode::DdsError, "Fast DDS failed to register the message type"));
+            return_code_error(result, "Fast DDS failed to register the message type"));
     }
     return Result<TypeLease>::success(TypeLease(this, type_name));
 }
 
 Result<ContextState::TopicLease> ContextState::acquire_topic(
-    const MessageType& type, const std::string& dds_topic_name) {
+    const MessageType& type, const std::string& dds_topic_name, const Qos& qos) {
     const std::string type_name(type.type_name());
     auto type_lease = acquire_type(type);
     if (!type_lease) return Result<TopicLease>::failure(std::move(type_lease.error()));
 
     bool create_topic = false;
     {
-        std::unique_lock<std::mutex> lock(registry_mutex_);
+        std::unique_lock lock(topic_registry_mutex_);
         while (true) {
+            if (topic_registry_degraded_) {
+                return Result<TopicLease>::failure(
+                    Error(ErrorCode::DdsError, "DDS topic registry is degraded"));
+            }
             const auto topic_it = topics_.find(dds_topic_name);
             if (topic_it == topics_.end()) {
-                topics_.emplace(dds_topic_name, RegisteredTopic(type_name));
+                topics_.emplace(dds_topic_name, RegisteredTopic(type_name, qos));
                 create_topic = true;
                 break;
             }
             if (topic_it->second.wire_type_name != type_name) {
                 return Result<TopicLease>::failure(
                     Error(ErrorCode::TypeMismatch, "DDS topic already has a different wire type"));
+            }
+            if (!same_topic_qos(topic_it->second.qos, qos)) {
+                topic_registry_degraded_ = true;
+                return Result<TopicLease>::failure(
+                    Error(ErrorCode::DdsError, "DDS topic has conflicting canonical QoS"));
             }
             if (topic_it->second.phase == RegistryEntryPhase::Active) {
                 ++topic_it->second.endpoint_reference_count;
@@ -335,7 +438,7 @@ Result<ContextState::TopicLease> ContextState::acquire_topic(
                 return Result<TopicLease>::failure(
                     Error(ErrorCode::DdsError, "DDS topic creation state is indeterminate"));
             }
-            registry_cv_.wait(lock);
+            topic_registry_cv_.wait(lock);
         }
     }
 
@@ -346,13 +449,13 @@ Result<ContextState::TopicLease> ContextState::acquire_topic(
                 dds_topic_name, type_name, eprosima::fastdds::dds::TOPIC_QOS_DEFAULT);
         } catch (...) {
             {
-                std::lock_guard<std::mutex> lock(registry_mutex_);
+                std::lock_guard lock(topic_registry_mutex_);
                 const auto topic_it = topics_.find(dds_topic_name);
                 if (topic_it != topics_.end()) {
                     topic_it->second.phase = RegistryEntryPhase::Orphaned;
                 }
             }
-            registry_cv_.notify_all();
+            topic_registry_cv_.notify_all();
             // A throwing Fast DDS create call can leave an indeterminate DDS
             // side effect.  Retain its TypeSupport until Context teardown.
             type_lease.value().disarm();
@@ -360,7 +463,7 @@ Result<ContextState::TopicLease> ContextState::acquire_topic(
         }
 
         {
-            std::lock_guard<std::mutex> lock(registry_mutex_);
+            std::lock_guard lock(topic_registry_mutex_);
             const auto topic_it = topics_.find(dds_topic_name);
             if (topic == nullptr) {
                 topics_.erase(topic_it);
@@ -370,7 +473,7 @@ Result<ContextState::TopicLease> ContextState::acquire_topic(
                 topic_it->second.endpoint_reference_count = 1;
             }
         }
-        registry_cv_.notify_all();
+        topic_registry_cv_.notify_all();
         if (topic == nullptr) {
             return Result<TopicLease>::failure(
                 Error(ErrorCode::DdsError, "Fast DDS failed to create the topic"));
@@ -386,7 +489,7 @@ Result<ContextState::TopicLease> ContextState::acquire_topic(
 bool ContextState::release_topic(std::string topic_name) noexcept {
     eprosima::fastdds::dds::Topic* topic = nullptr;
     {
-        std::lock_guard<std::mutex> lock(registry_mutex_);
+        std::lock_guard lock(topic_registry_mutex_);
         const auto topic_it = topics_.find(topic_name);
         if (topic_it == topics_.end() || topic_it->second.endpoint_reference_count == 0) {
             return false;
@@ -409,31 +512,31 @@ bool ContextState::release_topic(std::string topic_name) noexcept {
     }
     if (!deleted) {
         {
-            std::lock_guard<std::mutex> lock(registry_mutex_);
+            std::lock_guard lock(topic_registry_mutex_);
             const auto topic_it = topics_.find(topic_name);
             if (topic_it != topics_.end()) {
                 topic_it->second.phase = RegistryEntryPhase::Orphaned;
             }
         }
-        registry_cv_.notify_all();
+        topic_registry_cv_.notify_all();
         return false;
     }
 
     {
-        std::lock_guard<std::mutex> lock(registry_mutex_);
+        std::lock_guard lock(topic_registry_mutex_);
         const auto topic_it = topics_.find(topic_name);
         if (topic_it != topics_.end()) {
             topics_.erase(topic_it);
         }
     }
-    registry_cv_.notify_all();
+    topic_registry_cv_.notify_all();
     return true;
 }
 
 void ContextState::release_type(std::string type_name) noexcept {
     bool unregister_type = false;
     {
-        std::lock_guard<std::mutex> lock(registry_mutex_);
+        std::lock_guard lock(type_registry_mutex_);
         const auto type_it = registered_types_.find(type_name);
         if (type_it == registered_types_.end() || type_it->second.endpoint_reference_count == 0) {
             return;
@@ -456,7 +559,7 @@ void ContextState::release_type(std::string type_name) noexcept {
         unregistered = false;
     }
     {
-        std::lock_guard<std::mutex> lock(registry_mutex_);
+        std::lock_guard lock(type_registry_mutex_);
         const auto type_it = registered_types_.find(type_name);
         if (type_it == registered_types_.end()) {
             return;
@@ -467,7 +570,7 @@ void ContextState::release_type(std::string type_name) noexcept {
             type_it->second.phase = RegistryEntryPhase::Orphaned;
         }
     }
-    registry_cv_.notify_all();
+    type_registry_cv_.notify_all();
 }
 
 }  // namespace fastdds
@@ -476,6 +579,12 @@ void ContextState::release_type(std::string type_name) noexcept {
 Result<std::unique_ptr<Context>> Context::create(const ContextOptions& options) {
     auto* factory = eprosima::fastdds::dds::DomainParticipantFactory::get_instance();
     eprosima::fastdds::dds::DomainParticipantQos qos;
+    if (options.compatibility_profile == CompatibilityProfile::Ros2FastDdsHumble) {
+        qos.wire_protocol().builtin.readerHistoryMemoryPolicy =
+            eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
+        qos.wire_protocol().builtin.writerHistoryMemoryPolicy =
+            eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
+    }
     if (!options.participant_name.empty()) {
         qos.name(options.participant_name);
     }
@@ -498,8 +607,12 @@ Result<std::unique_ptr<Context>> Context::create(const ContextOptions& options) 
     auto state = std::make_shared<impl::fastdds::ContextState>(
         factory, participant, publisher, subscriber, options.domain_id,
         options.compatibility_profile);
-    auto impl = std::make_unique<Impl>(std::move(state));
+    // From this point ContextState is the sole owner, including listener
+    // installation failure paths.
     participant_guard.release();
+    auto discovery = state->install_discovery_listener();
+    if (!discovery) return Result<std::unique_ptr<Context>>::failure(std::move(discovery.error()));
+    auto impl = std::make_unique<Impl>(std::move(state));
     return Result<std::unique_ptr<Context>>::success(
         std::unique_ptr<Context>(new Context(std::move(impl))));
 }

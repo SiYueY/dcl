@@ -12,6 +12,8 @@
 #include "impl/event_impl.hpp"
 #include "impl/endpoint_impl.hpp"
 #include "impl/fastdds/identity.hpp"
+#include "impl/fastdds/process_runtime.hpp"
+#include "impl/fastdds/return_code.hpp"
 #include "impl/temporary_sample.hpp"
 
 namespace dmw {
@@ -32,13 +34,17 @@ std::int64_t to_nanoseconds(const eprosima::fastrtps::rtps::Time_t& time) noexce
 Subscriber::Impl::~Impl() noexcept {
     event_parent_->close();
     if (reader_ != nullptr) {
+        bool listener_detached = false;
         try {
-            reader_->set_listener(nullptr);
+            listener_detached = reader_->set_listener(nullptr) ==
+                                eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
+            if (listener_detached) event_parent_->drain_listeners();
         } catch (...) {
-            // Listener removal is best effort; WaitSet detachment still has
-            // to run before this reader can be released.
+            listener_detached = false;
         }
-        if (wait_state_->close()) {
+        if (!listener_detached) event_parent_->quarantine_listeners();
+        const bool reader_closed = wait_state_->close();
+        if (listener_detached && reader_closed) {
             try {
                 state_->subscriber()->delete_datareader(reader_);
             } catch (...) {
@@ -70,7 +76,8 @@ Result<TakeStatus> Subscriber::take(void* message, MessageInfo& info) {
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_NO_DATA)
             return Result<TakeStatus>::success(TakeStatus::NoData);
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
-            return Result<TakeStatus>::failure(Error(ErrorCode::DdsError, "Fast DDS take failed"));
+            return Result<TakeStatus>::failure(
+                impl::fastdds::return_code_error(result, "Fast DDS take failed"));
         if (!sample_info.valid_data) continue;
 
         auto committed = sample.value().commit_to(message);
@@ -104,10 +111,10 @@ Result<std::size_t> Subscriber::matched_publisher_count() const {
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
     eprosima::fastdds::dds::SubscriptionMatchedStatus status;
-    if (impl_->reader_->get_subscription_matched_status(status) !=
-        eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+    const auto result = impl_->reader_->get_subscription_matched_status(status);
+    if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<std::size_t>::failure(
-            Error(ErrorCode::DdsError, "Fast DDS matched publication query failed"));
+            impl::fastdds::return_code_error(result, "Fast DDS matched publication query failed"));
     }
     return Result<std::size_t>::success(static_cast<std::size_t>(status.current_count));
 }

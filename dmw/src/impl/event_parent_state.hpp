@@ -17,6 +17,7 @@
 #include "dmw/event_info.hpp"
 #include "dmw/result.hpp"
 #include "impl/guard_condition_impl.hpp"
+#include "impl/lock_rank.hpp"
 
 namespace dmw {
 namespace impl {
@@ -54,13 +55,21 @@ public:
     void unregister_event(std::uint64_t registration_id) noexcept;
     std::size_t event_registration_count() const noexcept;
     Snapshot snapshot(EventType type) const;
+    bool is_exhausted() const noexcept { return exhausted_.load(std::memory_order_acquire); }
     void update(EventType type, EventInfo info) noexcept;
+    /// Called after the owning DDS endpoint has detached its listener and
+    /// before the endpoint is deleted.
+    void drain_listeners() noexcept;
+    /// Transfers listeners whose DDS detach could not be confirmed to the
+    /// process quarantine.  Their weak source then expires safely while DDS
+    /// retains the raw listener binding in a Context-owned endpoint.
+    void quarantine_listeners() noexcept;
 
     void close() noexcept {
         alive.store(false, std::memory_order_release);
         std::vector<EventRecord> records;
         {
-            std::lock_guard<std::mutex> lock(mutex);
+            std::lock_guard lock(mutex);
             records.swap(events);
         }
         for (const auto& record : records) {
@@ -74,7 +83,7 @@ public:
 
     std::shared_ptr<fastdds::ContextState> context_state;
     std::atomic<bool> alive{true};
-    mutable std::mutex mutex;
+    mutable RankedMutex<LockRank::EndpointRuntime> mutex;
 
 private:
     EventSlot& slot(EventType type) noexcept;
@@ -83,7 +92,8 @@ private:
     EventSlot slots_[7];
     std::vector<EventRecord> events;
     std::uint64_t next_event_registration_id_{1};
-    std::condition_variable listener_cv_;
+    std::atomic<bool> exhausted_{false};
+    std::condition_variable_any listener_cv_;
     ListenerInstallState writer_listener_state_{ListenerInstallState::Detached};
     ListenerInstallState reader_listener_state_{ListenerInstallState::Detached};
     std::unique_ptr<WriterListener> writer_listener_;

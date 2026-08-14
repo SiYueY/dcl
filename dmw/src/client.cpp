@@ -3,6 +3,7 @@
 #include "dmw/client.hpp"
 
 #include <memory>
+#include <new>
 #include <string_view>
 #include <utility>
 #include <fastdds/dds/subscriber/SampleInfo.hpp>
@@ -10,6 +11,8 @@
 
 #include "dmw/error.hpp"
 #include "impl/fastdds/identity.hpp"
+#include "impl/fastdds/process_runtime.hpp"
+#include "impl/fastdds/return_code.hpp"
 #include "impl/service_impl.hpp"
 #include "impl/temporary_sample.hpp"
 
@@ -17,27 +20,44 @@ namespace dmw {
 
 Client::Impl::~Impl() noexcept {
     if (response_reader_ != nullptr) {
+        bool listener_detached = false;
         try {
-            response_reader_->set_listener(nullptr);
+            listener_detached = response_reader_->set_listener(nullptr) ==
+                                eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
+            if (listener_detached) response_listener_->close_and_drain();
         } catch (...) {
-            // WaitSet detachment remains required even when listener removal
-            // is not confirmed.
+            listener_detached = false;
         }
-        if (response_wait_state_->close()) {
+        // WaitSet detachment is independent of listener ownership.
+        const bool reader_closed = response_wait_state_->close();
+        if (listener_detached && reader_closed) {
             try {
                 state_->subscriber()->delete_datareader(response_reader_);
             } catch (...) {
                 // The Context container remains the conservative ownership barrier.
             }
         }
+        if (!listener_detached) {
+            impl::fastdds::DmwProcessRuntime::instance().retain_reader_listener(
+                std::move(response_listener_));
+        }
         response_reader_ = nullptr;
     }
     if (request_writer_ != nullptr) {
+        bool listener_detached = false;
         try {
-            request_writer_->set_listener(nullptr);
-            state_->publisher()->delete_datawriter(request_writer_);
+            listener_detached = request_writer_->set_listener(nullptr) ==
+                                eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
+            if (listener_detached) {
+                request_listener_->close_and_drain();
+                state_->publisher()->delete_datawriter(request_writer_);
+            }
         } catch (...) {
-            // The Context container remains the conservative ownership barrier.
+            listener_detached = false;
+        }
+        if (!listener_detached) {
+            impl::fastdds::DmwProcessRuntime::instance().retain_writer_listener(
+                std::move(request_listener_));
         }
         request_writer_ = nullptr;
     }
@@ -93,7 +113,7 @@ Result<TakeStatus> Client::take_response(void* response, RequestId& request_id) 
             return Result<TakeStatus>::success(TakeStatus::NoData);
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
             return Result<TakeStatus>::failure(
-                Error(ErrorCode::DdsError, "Fast DDS response take failed"));
+                impl::fastdds::return_code_error(result, "Fast DDS response take failed"));
         if (!info.valid_data) continue;
         const auto& related_guid = info.related_sample_identity.writer_guid();
         if (related_guid != impl_->request_writer_->guid() &&
@@ -122,7 +142,14 @@ Result<bool> Client::service_is_available() const {
         return Result<bool>::failure(
             Error(ErrorCode::DdsError, "Service discovery state is unavailable"));
     }
-    return Result<bool>::success(impl_->match_state_->has_candidate());
+    try {
+        return Result<bool>::success(impl_->match_state_->has_candidate());
+    } catch (const std::bad_alloc&) {
+        // The service state is snapshotted before lower-ranked discovery
+        // registries are inspected.  Keep allocation failure inside Result.
+        return Result<bool>::failure(
+            Error(ErrorCode::ResourceExhausted, "Service availability snapshot allocation failed"));
+    }
 }
 
 }  // namespace dmw

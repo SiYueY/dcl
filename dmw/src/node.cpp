@@ -13,6 +13,7 @@
 #include "dmw/error.hpp"
 #include "impl/endpoint_impl.hpp"
 #include "impl/fastdds/qos.hpp"
+#include "impl/fastdds/process_runtime.hpp"
 #include "impl/name.hpp"
 #include "impl/node_impl.hpp"
 #include "impl/service_impl.hpp"
@@ -48,6 +49,44 @@ void delete_reader_noexcept(
         state.subscriber()->delete_datareader(reader);
     } catch (...) {
         // See delete_writer_noexcept().
+    }
+}
+
+template <typename Listener>
+void delete_writer_listener_noexcept(
+    impl::fastdds::ContextState& state, eprosima::fastdds::dds::DataWriter* writer,
+    std::unique_ptr<Listener>& listener) noexcept {
+    if (writer == nullptr) return;
+    bool detached = false;
+    try {
+        detached = writer->set_listener(nullptr) ==
+                   eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
+        if (detached && listener) listener->close_and_drain();
+        if (detached) state.publisher()->delete_datawriter(writer);
+    } catch (...) {
+        detached = false;
+    }
+    if (!detached) {
+        impl::fastdds::DmwProcessRuntime::instance().retain_writer_listener(std::move(listener));
+    }
+}
+
+template <typename Listener>
+void delete_reader_listener_noexcept(
+    impl::fastdds::ContextState& state, eprosima::fastdds::dds::DataReader* reader,
+    std::unique_ptr<Listener>& listener) noexcept {
+    if (reader == nullptr) return;
+    bool detached = false;
+    try {
+        detached = reader->set_listener(nullptr) ==
+                   eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
+        if (detached && listener) listener->close_and_drain();
+        if (detached) state.subscriber()->delete_datareader(reader);
+    } catch (...) {
+        detached = false;
+    }
+    if (!detached) {
+        impl::fastdds::DmwProcessRuntime::instance().retain_reader_listener(std::move(listener));
     }
 }
 
@@ -87,7 +126,7 @@ Result<std::unique_ptr<Publisher>> Node::create_publisher(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
     auto topic = impl_->context_state_->acquire_topic(
-        type, dds_topic_name(*impl_->context_state_, logical_name.value()));
+        type, dds_topic_name(*impl_->context_state_, logical_name.value()), qos);
     if (!topic) {
         return Result<std::unique_ptr<Publisher>>::failure(std::move(topic.error()));
     }
@@ -99,9 +138,9 @@ Result<std::unique_ptr<Publisher>> Node::create_publisher(
     }
     std::unique_ptr<Publisher::Impl> endpoint_impl;
     try {
-        endpoint_impl = std::make_unique<Publisher::Impl>(
+        endpoint_impl = std::unique_ptr<Publisher::Impl>(new Publisher::Impl(
             impl_->context_state_, writer, std::move(logical_name.value()), type,
-            std::move(topic.value()));
+            std::move(topic.value())));
     } catch (...) {
         delete_writer_noexcept(*impl_->context_state_, writer);
         throw;
@@ -127,7 +166,7 @@ Result<std::unique_ptr<Subscriber>> Node::create_subscriber(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
     auto topic = impl_->context_state_->acquire_topic(
-        type, dds_topic_name(*impl_->context_state_, logical_name.value()));
+        type, dds_topic_name(*impl_->context_state_, logical_name.value()), qos);
     if (!topic) {
         return Result<std::unique_ptr<Subscriber>>::failure(std::move(topic.error()));
     }
@@ -139,9 +178,9 @@ Result<std::unique_ptr<Subscriber>> Node::create_subscriber(
     }
     std::unique_ptr<Subscriber::Impl> endpoint_impl;
     try {
-        endpoint_impl = std::make_unique<Subscriber::Impl>(
+        endpoint_impl = std::unique_ptr<Subscriber::Impl>(new Subscriber::Impl(
             impl_->context_state_, reader, std::move(logical_name.value()), type,
-            std::move(topic.value()));
+            std::move(topic.value())));
     } catch (...) {
         delete_reader_noexcept(*impl_->context_state_, reader);
         throw;
@@ -165,17 +204,22 @@ Result<std::unique_ptr<Client>> Node::create_client(
     if (!operation)
         return Result<std::unique_ptr<Client>>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    const auto request_topic_name =
+        service_topic_name(*impl_->context_state_, logical_name.value(), true);
+    const auto response_topic_name =
+        service_topic_name(*impl_->context_state_, logical_name.value(), false);
     auto request_topic = impl_->context_state_->acquire_topic(
-        type.request_type(),
-        service_topic_name(*impl_->context_state_, logical_name.value(), true));
+        type.request_type(), request_topic_name, qos);
     if (!request_topic)
         return Result<std::unique_ptr<Client>>::failure(std::move(request_topic.error()));
     auto response_topic = impl_->context_state_->acquire_topic(
-        type.response_type(),
-        service_topic_name(*impl_->context_state_, logical_name.value(), false));
+        type.response_type(), response_topic_name, qos);
     if (!response_topic)
         return Result<std::unique_ptr<Client>>::failure(std::move(response_topic.error()));
-    auto match_state = std::make_shared<impl::ServiceMatchState>();
+    auto match_state = std::make_shared<impl::ServiceMatchState>(
+        impl_->context_state_->participant_observations(), impl_->context_state_->remote_endpoints(),
+        request_topic_name, std::string(type.request_type().type_name()), response_topic_name,
+        std::string(type.response_type().type_name()));
     auto request_listener =
         std::make_unique<impl::RequestWriterMatchListener>(std::weak_ptr(match_state));
     auto response_listener =
@@ -188,20 +232,20 @@ Result<std::unique_ptr<Client>> Node::create_client(
     auto* reader = impl_->context_state_->subscriber()->create_datareader(
         response_topic.value().get(), reader_qos.value(), response_listener.get());
     if (reader == nullptr) {
-        delete_writer_noexcept(*impl_->context_state_, writer);
+        delete_writer_listener_noexcept(*impl_->context_state_, writer, request_listener);
         return Result<std::unique_ptr<Client>>::failure(
             Error(ErrorCode::DdsError, "Fast DDS failed to create response reader"));
     }
     std::unique_ptr<Client::Impl> client_impl;
     try {
-        client_impl = std::make_unique<Client::Impl>(
+        client_impl = std::unique_ptr<Client::Impl>(new Client::Impl(
             impl_->context_state_, writer, reader, std::move(logical_name.value()),
             type.response_type(), std::move(match_state), std::move(request_listener),
             std::move(response_listener), std::move(request_topic.value()),
-            std::move(response_topic.value()));
+            std::move(response_topic.value())));
     } catch (...) {
-        delete_reader_noexcept(*impl_->context_state_, reader);
-        delete_writer_noexcept(*impl_->context_state_, writer);
+        delete_reader_listener_noexcept(*impl_->context_state_, reader, response_listener);
+        delete_writer_listener_noexcept(*impl_->context_state_, writer, request_listener);
         throw;
     }
     return Result<std::unique_ptr<Client>>::success(
@@ -229,15 +273,24 @@ Result<std::unique_ptr<Server>> Node::create_server(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     auto request_topic = impl_->context_state_->acquire_topic(
         type.request_type(),
-        service_topic_name(*impl_->context_state_, logical_name.value(), true));
+        service_topic_name(*impl_->context_state_, logical_name.value(), true), qos);
     if (!request_topic)
         return Result<std::unique_ptr<Server>>::failure(std::move(request_topic.error()));
     auto response_topic = impl_->context_state_->acquire_topic(
         type.response_type(),
-        service_topic_name(*impl_->context_state_, logical_name.value(), false));
+        service_topic_name(*impl_->context_state_, logical_name.value(), false), qos);
     if (!response_topic)
         return Result<std::unique_ptr<Server>>::failure(std::move(response_topic.error()));
-    auto response_match_state = std::make_shared<impl::ResponseWriterMatchState>();
+    auto response_match_state = std::make_shared<impl::ResponseWriterMatchState>(
+        impl_->context_state_->participant_observations(), impl_->context_state_->target_readers());
+    impl_->context_state_->participant_observations()->add_dependency_wake(
+        [weak = std::weak_ptr<impl::ResponseWriterMatchState>(response_match_state)] {
+            if (const auto state = weak.lock()) state->notify_dependency_change();
+        });
+    impl_->context_state_->target_readers()->add_dependency_wake(
+        [weak = std::weak_ptr<impl::ResponseWriterMatchState>(response_match_state)] {
+            if (const auto state = weak.lock()) state->notify_dependency_change();
+        });
     auto response_match_listener =
         std::make_unique<impl::ResponseWriterMatchListener>(std::weak_ptr(response_match_state));
     auto* reader = impl_->context_state_->subscriber()->create_datareader(
@@ -254,13 +307,14 @@ Result<std::unique_ptr<Server>> Node::create_server(
     }
     std::unique_ptr<Server::Impl> server_impl;
     try {
-        server_impl = std::make_unique<Server::Impl>(
+        server_impl = std::unique_ptr<Server::Impl>(new Server::Impl(
             impl_->context_state_, reader, writer, std::move(logical_name.value()),
             options.max_pending_requests, type.request_type(), std::move(response_match_state),
             std::move(response_match_listener), std::move(request_topic.value()),
-            std::move(response_topic.value()));
+            std::move(response_topic.value())));
     } catch (...) {
-        delete_writer_noexcept(*impl_->context_state_, writer);
+        delete_writer_listener_noexcept(
+            *impl_->context_state_, writer, response_match_listener);
         delete_reader_noexcept(*impl_->context_state_, reader);
         throw;
     }

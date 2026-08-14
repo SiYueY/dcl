@@ -9838,3 +9838,40 @@ ProcessTerminalQuarantine
 - Discovery registry 的 per-entry rebuild/generation/late-callback FSM；
 - Context final teardown 的 exactly-once executor；
 - Participant permanent delete failure 后 backing 的保活者。
+
+## 附录 A. 非规范性：V1 当前实现收敛状态
+
+> 本附录是实现状态说明，**不属于上述规范性 requirement**，不修改任何条款的
+> required behavior，也不把当前保守实现视为规范替代。详细的 source-bound 审计见
+> [DMW Fast DDS V1 实现基线最终审计](dmw_fastdds_closure_audit.md)。
+
+当前工作树已闭合一组重点可观察行为：
+
+- `Ros2FastDdsHumble` profile 对 reader/writer history reallocation、同步 publication、
+  data sharing off 和 Reliable writer 100 ms blocking timeout 的私有冻结；
+- server pending capacity 的 `available -> full -> available` WaitSet topology mutation，
+  从而避免 unread request 在满容量时持续唤醒 WaitSet；
+- response 的 exact target reader/participant Removed 后 no-write success，以及一次计算的
+  100 ms response discovery deadline；
+- participant tombstone、GuidPrefix reuse 的 capability degradation、Guard generation 合并、
+  Event 独立 cursor/registration exhaustion、WaitSet add allocation rollback；
+- 无法确认 listener/participant 或 reader/WaitSet 安全删除时的保守 retention。
+
+以下内容仍是**部分实现**，因此本实现不得宣称与本规格全量等价：
+
+| 规格机制 | 当前实现的边界 |
+| --- | --- |
+| §2.2、§2.18–2.24 process runtime / ChildRegistry | 有 process-lifetime retention、shutdown child map 和并发 shutdown 等待；没有预分配 intrusive ChildRegistry、request-all/ack-all generation 或 executor-failure 完整协议。 |
+| §4.13–4.18 canonical TopicQos | 已映射公开 QoS 和 Humble overrides；没有 13-policy canonical `TopicQosFingerprint`。 |
+| §5 discovery/listener | 有 participant/remote/target registry 与一部分 callback gate；没有所有 listener 的双 drain、精确 rebuild 和 final teardown 证明。 |
+| §6.8–6.9 reader lifecycle | close 时保留不安全对象；没有 `DeleteDeferredByWaitSet` registry 和由删除证据驱动的完整 retry FSM。 |
+| §8.19–8.26 WaitSet failure model | 有 poison/repair 和 retain 路径；没有 RetiredWaitSetRegistry、historical Info ownership 与完整 attach/detach indeterminate/control guard replacement 协议。 |
+| §8.32–8.43 Guard/Event failure modes | generation/cursor 主路径存在；logical-only degradation、全耗尽和所有 degraded lifecycle 未齐全。 |
+| §9.17 terminal quarantine | 有 process-lifetime participant/listener retention；没有 no-allocation intrusive full entity graph quarantine 或 `ProcessBindingQuarantine`。 |
+| §10 lock/ReturnCode | rank wrapper 和部分集中映射存在；没有全路径 17-rank 证明或 operation-specific mapping matrix。 |
+| §11 verification | 已有常规 CTest 与 DDS/ROS 2 integration；缺少规定的故障注入、sanitizer、跨进程 teardown 和性能回归矩阵。 |
+
+这些隔离/保留路径只保障“无法证明 Fast DDS object 已删除时不提前释放 backing”的安全属性；
+它们不满足规范所要求的完整清理状态机、allocation-free quarantine handoff 或故障可诊断性。
+后续任一实现或规范变更都必须重新生成 source digest 并重做审计；在 §11 验证矩阵和表中
+未闭合机制完成前，本文仍保持 `Frozen Candidate`。

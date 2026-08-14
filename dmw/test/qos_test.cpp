@@ -9,8 +9,16 @@
 
 #include "dmw/qos.hpp"
 #include "impl/fastdds/qos.hpp"
+#include "impl/fastdds/return_code.hpp"
 
 int main() {
+    using ReturnCode = eprosima::fastrtps::types::ReturnCode_t;
+    assert(dmw::impl::fastdds::map_return_code(ReturnCode::RETCODE_OUT_OF_RESOURCES) ==
+           dmw::ErrorCode::ResourceExhausted);
+    assert(dmw::impl::fastdds::map_return_code(ReturnCode::RETCODE_INCONSISTENT_POLICY) ==
+           dmw::ErrorCode::IncompatibleQos);
+    assert(dmw::impl::fastdds::map_return_code(ReturnCode::RETCODE_TIMEOUT) ==
+           dmw::ErrorCode::Timeout);
     dmw::Qos qos;
     assert(qos.keep_last(7));
     qos.reliable().transient_local();
@@ -71,6 +79,19 @@ int main() {
     assert(
         ros_writer.value().reliability().kind == eprosima::fastdds::dds::RELIABLE_RELIABILITY_QOS);
     assert(ros_writer.value().durability().kind == eprosima::fastdds::dds::VOLATILE_DURABILITY_QOS);
+    assert(ros_writer.value().endpoint().history_memory_policy ==
+           eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE);
+    assert(ros_writer.value().publish_mode().kind ==
+           eprosima::fastrtps::SYNCHRONOUS_PUBLISH_MODE);
+    assert(ros_writer.value().data_sharing().kind() == eprosima::fastdds::dds::DataSharingKind::OFF);
+    assert(ros_writer.value().reliability().max_blocking_time.seconds == 0);
+    assert(ros_writer.value().reliability().max_blocking_time.nanosec == 100000000U);
+    const auto ros_reader = dmw::impl::fastdds::make_reader_qos(
+        dmw::Qos{}, dmw::CompatibilityProfile::Ros2FastDdsHumble);
+    assert(ros_reader);
+    assert(ros_reader.value().endpoint().history_memory_policy ==
+           eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE);
+    assert(ros_reader.value().data_sharing().kind() == eprosima::fastdds::dds::DataSharingKind::OFF);
 
     return 0;
 }

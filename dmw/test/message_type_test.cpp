@@ -112,11 +112,14 @@ int main() {
         wait_set.value()->wait(dmw::WaitTimeout::poll()).value().status() ==
         dmw::WaitStatus::Timeout);
     assert(guard.value()->trigger());
+    assert(guard.value()->trigger());
     auto guard_ready = wait_set.value()->wait(dmw::WaitTimeout::poll());
     assert(guard_ready);
     assert(guard_ready.value().status() == dmw::WaitStatus::Ready);
     assert(guard_ready.value().ready().size() == 1);
     assert(guard_ready.value().ready().front() == guard_token.value());
+    assert(wait_set.value()->wait(dmw::WaitTimeout::poll()).value().status() ==
+           dmw::WaitStatus::Timeout);
     assert(wait_set.value()->remove(guard_token.value()));
 
     auto auto_detach_guard = context.value()->create_guard_condition();
@@ -185,10 +188,14 @@ int main() {
         }
         assert(cross_context_matched);
         int cross_context_message = 3;
-        assert(cross_context_publisher.value()->publish(&cross_context_message));
         dmw::MessageInfo cross_context_info;
         bool cross_context_received = false;
-        for (int attempt = 0; attempt < 30 && !cross_context_received; ++attempt) {
+        for (int attempt = 0; attempt < 250 && !cross_context_received; ++attempt) {
+            // A matched writer is not always past the first reliable route
+            // establishment cycle on loaded DDS hosts.  Re-publish the same
+            // sample while waiting; success still requires a real remote
+            // take, not merely a match notification.
+            assert(cross_context_publisher.value()->publish(&cross_context_message));
             auto take =
                 cross_context_subscriber.value()->take(&cross_context_message, cross_context_info);
             assert(take);
@@ -694,6 +701,10 @@ int main() {
         node.value()->create_server(service_type, "capacity", dmw::Qos{}, single_pending_options);
     assert(capacity_client);
     assert(capacity_server);
+    auto capacity_wait_set = context.value()->create_wait_set();
+    assert(capacity_wait_set);
+    auto capacity_wait_token = capacity_wait_set.value()->add(*capacity_server.value());
+    assert(capacity_wait_token);
     bool capacity_service_available = false;
     for (int attempt = 0; attempt < 30 && !capacity_service_available; ++attempt) {
         auto available = capacity_client.value()->service_is_available();
@@ -729,9 +740,17 @@ int main() {
         capacity_server.value()->take_request(&next_capacity_request, next_capacity_request_id);
     assert(!capacity_exhausted);
     assert(capacity_exhausted.error().code() == dmw::ErrorCode::ResourceExhausted);
+    // The second request remains unread in Fast DDS history, but a full
+    // Server must remove its reader condition from the blocking topology.
+    auto full_wait = capacity_wait_set.value()->wait(dmw::WaitTimeout::poll());
+    assert(full_wait);
+    assert(full_wait.value().status() == dmw::WaitStatus::Timeout);
 
     int capacity_response = 201;
     assert(capacity_server.value()->send_response(first_capacity_request_id, &capacity_response));
+    auto available_wait = capacity_wait_set.value()->wait(dmw::WaitTimeout::poll());
+    assert(available_wait);
+    assert(available_wait.value().status() == dmw::WaitStatus::Ready);
     bool second_capacity_taken = false;
     for (int attempt = 0; attempt < 30 && !second_capacity_taken; ++attempt) {
         auto take =
@@ -760,6 +779,22 @@ int main() {
     auto rejected_node = context.value()->create_node(node_options);
     assert(!rejected_node);
     assert(rejected_node.error().code() == dmw::ErrorCode::ContextShutdown);
+
+    dmw::ContextOptions conflict_context_options;
+    conflict_context_options.domain_id = 79;
+    auto conflict_context = dmw::Context::create(conflict_context_options);
+    assert(conflict_context);
+    auto conflict_node = conflict_context.value()->create_node(node_options);
+    assert(conflict_node);
+    auto conflict_publisher = conflict_node.value()->create_publisher(
+        generated.value(), "fingerprint", dmw::Qos{});
+    assert(conflict_publisher);
+    dmw::Qos conflicting_topic_qos;
+    conflicting_topic_qos.reliable();
+    auto incompatible_subscriber = conflict_node.value()->create_subscriber(
+        generated.value(), "fingerprint", conflicting_topic_qos);
+    assert(!incompatible_subscriber);
+    assert(incompatible_subscriber.error().code() == dmw::ErrorCode::DdsError);
 
     auto null_result = dmw::fastdds::MessageTypeAccess::create({}, typeid(NamedTopicDataType));
     assert(!null_result);

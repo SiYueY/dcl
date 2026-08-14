@@ -22,7 +22,10 @@
 
 #include "dmw/compatibility.hpp"
 #include "dmw/message_type.hpp"
+#include "dmw/qos.hpp"
 #include "dmw/result.hpp"
+#include "impl/lock_rank.hpp"
+#include "impl/participant_observation.hpp"
 
 namespace dmw {
 namespace impl {
@@ -137,11 +140,30 @@ public:
     void shutdown() noexcept;
     std::uint64_t register_shutdown_callback(std::function<void()> callback);
     void unregister_shutdown_callback(std::uint64_t id) noexcept;
+    Result<void> install_discovery_listener() noexcept;
+    std::shared_ptr<ParticipantObservationRegistry> participant_observations() const noexcept {
+        return participant_observations_;
+    }
+    std::shared_ptr<RemoteEndpointRegistry> remote_endpoints() const noexcept {
+        return remote_endpoints_;
+    }
+    std::shared_ptr<TargetReaderObservationRegistry> target_readers() const noexcept {
+        return target_readers_;
+    }
 
-    Result<TopicLease> acquire_topic(const MessageType& type, const std::string& dds_topic_name);
+    Result<TopicLease> acquire_topic(
+        const MessageType& type, const std::string& dds_topic_name, const Qos& qos);
 
 private:
+    enum class ShutdownExecutionState { Running, RequestingChildren, Draining, Complete };
     enum class RegistryEntryPhase { Creating, Active, Retiring, Orphaned };
+
+    struct ShutdownChild {
+        explicit ShutdownChild(std::function<void()> value) : callback(std::move(value)) {}
+        std::function<void()> callback;
+        bool requested{false};
+        bool acknowledged{false};
+    };
 
     struct RegisteredType {
         RegisteredType(MessageType descriptor, std::type_index identity) noexcept
@@ -154,9 +176,11 @@ private:
     };
 
     struct RegisteredTopic {
-        explicit RegisteredTopic(std::string type_name) : wire_type_name(std::move(type_name)) {}
+        RegisteredTopic(std::string type_name, Qos value)
+        : wire_type_name(std::move(type_name)), qos(std::move(value)) {}
 
         std::string wire_type_name;
+        Qos qos;
         eprosima::fastdds::dds::Topic* topic{nullptr};
         RegistryEntryPhase phase{RegistryEntryPhase::Creating};
         std::size_t endpoint_reference_count{0};
@@ -173,16 +197,28 @@ private:
     const std::uint32_t domain_id_;
     const CompatibilityProfile compatibility_profile_;
     std::atomic<bool> shutdown_{false};
-    std::mutex operation_mutex_;
-    std::condition_variable operation_cv_;
+    bool shutdown_complete_{false};
+    RankedMutex<LockRank::ContextRuntime> operation_mutex_;
+    std::condition_variable_any operation_cv_;
     std::size_t active_operations_{0};
-    std::mutex shutdown_callbacks_mutex_;
+    RankedMutex<LockRank::ChildRegistry> shutdown_children_mutex_;
     std::uint64_t next_shutdown_callback_id_{1};
-    std::unordered_map<std::uint64_t, std::function<void()>> shutdown_callbacks_;
-    std::mutex registry_mutex_;
-    std::condition_variable registry_cv_;
+    std::unordered_map<std::uint64_t, std::shared_ptr<ShutdownChild>> shutdown_children_;
+    ShutdownExecutionState shutdown_execution_state_{ShutdownExecutionState::Running};
+    RankedMutex<LockRank::TypeRegistry> type_registry_mutex_;
+    std::condition_variable_any type_registry_cv_;
+    RankedMutex<LockRank::TopicRegistry> topic_registry_mutex_;
+    std::condition_variable_any topic_registry_cv_;
+    bool topic_registry_degraded_{false};
     std::unordered_map<std::string, RegisteredType> registered_types_;
     std::unordered_map<std::string, RegisteredTopic> topics_;
+    std::shared_ptr<ParticipantObservationRegistry> participant_observations_{
+        std::make_shared<ParticipantObservationRegistry>()};
+    std::shared_ptr<RemoteEndpointRegistry> remote_endpoints_{
+        std::make_shared<RemoteEndpointRegistry>()};
+    std::shared_ptr<TargetReaderObservationRegistry> target_readers_{
+        std::make_shared<TargetReaderObservationRegistry>()};
+    std::unique_ptr<ParticipantObservationListener> participant_listener_;
 };
 
 }  // namespace fastdds

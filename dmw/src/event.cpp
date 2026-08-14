@@ -59,6 +59,10 @@ Result<TakeStatus> Event::take(EventInfo& info) {
         return Result<TakeStatus>::failure(
             Error(ErrorCode::ParentDestroyed, "Event parent is destroyed"));
     }
+    if (impl_->parent_->is_exhausted()) {
+        return Result<TakeStatus>::failure(
+            Error(ErrorCode::ResourceExhausted, "Event generation or registration ID is exhausted"));
+    }
     const auto current = impl_->parent_->snapshot(impl_->type_);
     if (current.generation == impl_->cursor_.generation) {
         return Result<TakeStatus>::success(TakeStatus::NoData);

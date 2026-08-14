@@ -16,6 +16,7 @@
 #include "dmw/server.hpp"
 #include "impl/fastdds/context_state.hpp"
 #include "impl/reader_wait_state.hpp"
+#include "impl/lock_rank.hpp"
 #include "impl/service_match_state.hpp"
 
 namespace dmw {
@@ -90,6 +91,27 @@ public:
       response_topic_lease_(std::move(response_topic_lease)) {}
     ~Impl() noexcept;
 
+    bool reserve_request_slot(bool& became_full) noexcept {
+        std::lock_guard lock(pending_mutex_);
+        if (pending_.size() + reservations_ >= max_pending_requests_) return false;
+        ++reservations_;
+        became_full = pending_.size() + reservations_ == max_pending_requests_;
+        return true;
+    }
+
+    bool release_request_reservation() noexcept {
+        std::lock_guard lock(pending_mutex_);
+        --reservations_;
+        return pending_.size() + reservations_ + 1 == max_pending_requests_;
+    }
+
+    bool release_pending_request(const RequestId& request_id) noexcept {
+        std::lock_guard lock(pending_mutex_);
+        const auto was_full = pending_.size() + reservations_ == max_pending_requests_;
+        pending_.erase(request_id);
+        return was_full;
+    }
+
     std::shared_ptr<impl::fastdds::ContextState> state_;
     eprosima::fastdds::dds::DataReader* request_reader_;
     eprosima::fastdds::dds::DataWriter* response_writer_;
@@ -101,7 +123,7 @@ public:
     std::shared_ptr<impl::ReaderWaitState> request_wait_state_;
     impl::fastdds::ContextState::TopicLease request_topic_lease_;
     impl::fastdds::ContextState::TopicLease response_topic_lease_;
-    std::mutex pending_mutex_;
+    impl::RankedMutex<impl::LockRank::PendingRequest> pending_mutex_;
     std::size_t reservations_{0};
     std::unordered_map<RequestId, PendingRequest, RequestIdHash> pending_;
 };

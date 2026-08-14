@@ -7,6 +7,7 @@
 #include <thread>
 
 #include "impl/fastdds/context_state.hpp"
+#include "impl/reader_wait_state.hpp"
 
 int main() {
     auto state = std::make_shared<dmw::impl::fastdds::ContextState>(
@@ -43,6 +44,7 @@ int main() {
     auto operation = second_state->try_acquire_operation();
     assert(operation);
     std::atomic<bool> shutdown_complete{false};
+    std::atomic<bool> concurrent_shutdown_complete{false};
     std::thread shutdown_thread([&] {
         second_state->shutdown();
         shutdown_complete.store(true, std::memory_order_release);
@@ -51,8 +53,50 @@ int main() {
     assert(second_state->is_shutdown());
     assert(!second_state->try_acquire_operation());
     assert(!shutdown_complete.load(std::memory_order_acquire));
+    std::thread concurrent_shutdown_thread([&] {
+        second_state->shutdown();
+        concurrent_shutdown_complete.store(true, std::memory_order_release);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    assert(!concurrent_shutdown_complete.load(std::memory_order_acquire));
     operation = {};
     shutdown_thread.join();
+    concurrent_shutdown_thread.join();
     assert(shutdown_complete.load(std::memory_order_acquire));
+    assert(concurrent_shutdown_complete.load(std::memory_order_acquire));
+
+    eprosima::fastrtps::rtps::GuidPrefix_t prefix;
+    prefix.value[0] = 42;
+    const auto observations = second_state->participant_observations();
+    const auto active = observations->observe(prefix, false);
+    assert(active);
+    assert(active->lifecycle.load() == dmw::impl::ParticipantLifecycle::Active);
+    const auto tombstone = observations->observe(prefix, true);
+    assert(tombstone == active);
+    assert(tombstone->lifecycle.load() == dmw::impl::ParticipantLifecycle::Removed);
+    // Tombstones are terminal under the frozen GuidPrefix deployment constraint.
+    assert(observations->observe(prefix, false) == tombstone);
+    assert(tombstone->lifecycle.load() == dmw::impl::ParticipantLifecycle::Removed);
+    assert(observations->capability() == dmw::impl::DiscoveryCapability::Degraded);
+
+    auto reader_wait_state = std::make_shared<dmw::impl::ReaderWaitState>(second_state, nullptr);
+    {
+        std::lock_guard lock(reader_wait_state->callback_mutex);
+        reader_wait_state->claim_in_progress = true;
+    }
+    std::atomic<bool> reader_closed{false};
+    std::thread reader_close_thread([&] {
+        assert(reader_wait_state->close());
+        reader_closed.store(true, std::memory_order_release);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    assert(!reader_closed.load(std::memory_order_acquire));
+    {
+        std::lock_guard lock(reader_wait_state->callback_mutex);
+        reader_wait_state->claim_in_progress = false;
+        reader_wait_state->callback_cv.notify_all();
+    }
+    reader_close_thread.join();
+    assert(reader_closed.load(std::memory_order_acquire));
     return 0;
 }

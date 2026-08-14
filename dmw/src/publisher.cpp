@@ -5,18 +5,27 @@
 #include "dmw/error.hpp"
 #include "impl/event_impl.hpp"
 #include "impl/endpoint_impl.hpp"
+#include "impl/fastdds/process_runtime.hpp"
+#include "impl/fastdds/return_code.hpp"
 
 namespace dmw {
 
 Publisher::Impl::~Impl() noexcept {
     event_parent_->close();
     if (writer_ != nullptr) {
+        bool listener_detached = false;
         try {
-            writer_->set_listener(nullptr);
-            state_->publisher()->delete_datawriter(writer_);
+            listener_detached = writer_->set_listener(nullptr) ==
+                                eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
+            if (listener_detached) {
+                event_parent_->drain_listeners();
+                state_->publisher()->delete_datawriter(writer_);
+            }
         } catch (...) {
-            // Destruction is best effort.  Context-owned DDS containers retain
-            // anything Fast DDS does not confirm as deleted.
+            listener_detached = false;
+        }
+        if (!listener_detached) {
+            event_parent_->quarantine_listeners();
         }
         writer_ = nullptr;
     }
@@ -50,7 +59,7 @@ Result<std::size_t> Publisher::matched_subscriber_count() const {
     const auto result = impl_->writer_->get_publication_matched_status(status);
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<std::size_t>::failure(
-            Error(ErrorCode::DdsError, "Fast DDS matched subscription query failed"));
+            impl::fastdds::return_code_error(result, "Fast DDS matched subscription query failed"));
     }
     return Result<std::size_t>::success(static_cast<std::size_t>(status.current_count));
 }
