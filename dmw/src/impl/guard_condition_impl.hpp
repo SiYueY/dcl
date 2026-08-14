@@ -70,6 +70,8 @@ public:
         state_->notify_wait_set();
     }
 
+    Result<void> trigger();
+
     std::shared_ptr<GuardConditionState> state_;
 };
 

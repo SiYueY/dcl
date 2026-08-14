@@ -67,10 +67,9 @@ inline std::optional<RequestId> request_id_from_identity(
     return request_id;
 }
 
-inline std::optional<std::uint64_t> publication_sequence_number(
-    const SequenceNumber& sequence) noexcept {
+inline std::uint64_t writer_sequence(const SequenceNumber& sequence) noexcept {
     if (sequence == eprosima::fastrtps::rtps::c_SequenceNumber_Unknown) {
-        return std::nullopt;
+        return 0;
     }
     return static_cast<std::uint64_t>(from_fastdds_sequence(sequence));
 }

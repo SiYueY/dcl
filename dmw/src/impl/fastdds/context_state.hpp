@@ -18,7 +18,7 @@
 #include <fastdds/dds/publisher/Publisher.hpp>
 #include <fastdds/dds/subscriber/Subscriber.hpp>
 
-#include "dmw/compatibility.hpp"
+#include "dmw/runtime_mode.hpp"
 #include "dmw/message_type.hpp"
 #include "dmw/qos.hpp"
 #include "dmw/result.hpp"
@@ -122,7 +122,7 @@ public:
         eprosima::fastdds::dds::DomainParticipant* participant,
         eprosima::fastdds::dds::Publisher* publisher,
         eprosima::fastdds::dds::Subscriber* subscriber, std::uint32_t domain_id,
-        CompatibilityProfile compatibility_profile) noexcept;
+        RuntimeMode runtime_mode) noexcept;
     ~ContextState() noexcept;
 
     ContextState(const ContextState&) = delete;
@@ -132,7 +132,7 @@ public:
     eprosima::fastdds::dds::Publisher* publisher() const noexcept;
     eprosima::fastdds::dds::Subscriber* subscriber() const noexcept;
     std::uint32_t domain_id() const noexcept;
-    CompatibilityProfile compatibility_profile() const noexcept;
+    RuntimeMode runtime_mode() const noexcept;
     bool is_shutdown() const noexcept;
     OperationGuard try_acquire_operation() noexcept;
     void shutdown() noexcept;
@@ -193,7 +193,7 @@ private:
     eprosima::fastdds::dds::Publisher* publisher_;
     eprosima::fastdds::dds::Subscriber* subscriber_;
     const std::uint32_t domain_id_;
-    const CompatibilityProfile compatibility_profile_;
+    const RuntimeMode runtime_mode_;
     std::atomic<bool> shutdown_{false};
     bool shutdown_complete_{false};
     RankedMutex<LockRank::ContextRuntime> operation_mutex_;

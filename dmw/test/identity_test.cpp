@@ -20,12 +20,12 @@ int main() {
         assert(gid.data[index] == index);
     }
 
-    assert(!dmw::impl::fastdds::publication_sequence_number(
-        eprosima::fastrtps::rtps::c_SequenceNumber_Unknown));
+    assert(
+        dmw::impl::fastdds::writer_sequence(eprosima::fastrtps::rtps::c_SequenceNumber_Unknown) ==
+        0U);
     const eprosima::fastrtps::rtps::SequenceNumber_t sequence(2, 17);
-    const auto converted = dmw::impl::fastdds::publication_sequence_number(sequence);
-    assert(converted);
-    assert(*converted == static_cast<std::uint64_t>(sequence.to64long()));
+    const auto converted = dmw::impl::fastdds::writer_sequence(sequence);
+    assert(converted == static_cast<std::uint64_t>(sequence.to64long()));
 
     const eprosima::fastrtps::rtps::SequenceNumber_t negative_sequence(-2, 23);
     const auto value = dmw::impl::fastdds::from_fastdds_sequence(negative_sequence);

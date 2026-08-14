@@ -193,7 +193,7 @@ V1 支持：
 
 ### 2.7 ROS 2 Compatibility
 
-V1 的 ROS compatibility profile 精确限定为：
+V1 的 ROS2 RuntimeMode 精确限定为：
 
 ```text
 ROS 2 Humble
@@ -1246,14 +1246,14 @@ struct ContextOptions
 {
     std::uint32_t domain_id{0};
     std::string participant_name;
-    CompatibilityProfile compatibility_profile{
-        CompatibilityProfile::NativeDds};
+    RuntimeMode runtime_mode{
+        RuntimeMode::DDS};
 };
 ```
 
-`CompatibilityProfile` 是 Context-scoped immutable property。它影响 Participant/Fast DDS
+`RuntimeMode` 是 Context-scoped immutable property。它影响 Participant/Fast DDS
 container QoS、`SystemDefault` 解析、DDS naming 与 interoperability scope；同一 Context
-内的 endpoint 不得分别覆盖 profile。
+内的 endpoint 不得分别覆盖 RuntimeMode。
 
 C++17 示例：
 
@@ -1564,7 +1564,7 @@ DomainParticipant destroyed
 struct NodeOptions
 {
     std::string name;
-    std::string ns{"/"};
+    std::string node_namespace{"/"};
 };
 ```
 
@@ -1585,7 +1585,7 @@ public:
     Node& operator=(Node&&) = delete;
 
     std::string_view name() const noexcept;
-    std::string_view namespace_() const noexcept;
+    std::string_view node_namespace() const noexcept;
 
     Result<std::unique_ptr<Publisher>>
     create_publisher(
@@ -1734,9 +1734,9 @@ Fast DDS GUID 不进入普通 public API。
 ```cpp
 struct Gid
 {
-    static constexpr std::size_t kSize = 16;
+    static constexpr std::size_t Size = 16;
 
-    std::array<std::uint8_t, kSize> data{};
+    std::array<std::uint8_t, Size> data{};
 };
 
 bool operator==(
@@ -1995,12 +1995,12 @@ ServiceType：
 
 <a id="dmw-profile-qos"></a>
 
-## 7. CompatibilityProfile、Naming 与 QoS
+## 7. RuntimeMode、Naming 与 QoS
 
-本章的概念顺序为：Context 选择 immutable `CompatibilityProfile`，profile 决定 logical name 到 Fast DDS name 的解析规则，并与 entity kind 共同解析 `SystemDefault` QoS。`Qos` value 本身不捕获 Context 或 profile。
+本章的概念顺序为：Context 选择 immutable `RuntimeMode`，RuntimeMode 决定 logical name 到 Fast DDS name 的解析规则，并与 entity kind 共同解析 `SystemDefault` QoS。`Qos` value 本身不捕获 Context 或 RuntimeMode。
 
 ```text
-ContextOptions.compatibility_profile
+ContextOptions.runtime_mode
         -> resolved DDS naming
         -> SystemDefault resolution
         -> explicit DDS entity QoS
@@ -2173,8 +2173,8 @@ public:
 ```
 
 `Qos()` 与 `Qos::system_default()` 完全等价，所有 policy 初始值均编码为
-`SystemDefault`；Qos value 本身不捕获 Context 或 profile。该 value 在 entity Factory 中
-按 parent Context 的 immutable `CompatibilityProfile` 与 entity kind 解析。
+`SystemDefault`；Qos value 本身不捕获 Context 或 RuntimeMode。该 value 在 entity Factory 中
+按 parent Context 的 immutable `RuntimeMode` 与 entity kind 解析。
 
 所有可能失败的 Qos setter 都提供 strong guarantee：返回 Error 时，整个 Qos
 保持调用前状态。无失败返回值的 setter 必须以一次原子状态提交或等价方式避免
@@ -2226,31 +2226,31 @@ keep_last(valid_depth);
 `SystemDefault` 的最终解释由：
 
 ```text
-CompatibilityProfile
+RuntimeMode
 +
 EntityKind
 ```
 
 共同决定，而不是 Qos 自身决定。
 
-### 7.9 NativeDds SystemDefault
+### 7.9 DDS SystemDefault
 
 在：
 
-`CompatibilityProfile::NativeDds`
+`RuntimeMode::DDS`
 
 下：
 
 `SystemDefault`
 
-映射到 DMW 为当前 CompatibilityProfile、entity kind 和 Fast DDS version 冻结的 baseline。不得读取进程 XML default、
+映射到 DMW 为当前 RuntimeMode、entity kind 和 Fast DDS version 冻结的 baseline。不得读取进程 XML default、
 环境变量、factory/participant mutable default profile 或其它 middleware runtime default。
 
-### 7.10 Ros2FastDdsHumble SystemDefault
+### 7.10 ROS2 SystemDefault
 
 在：
 
-`Ros2FastDdsHumble`
+`ROS2`
 
 下：
 
@@ -2328,31 +2328,31 @@ endpoint 正常创建，但：
 
 。
 
-### 7.14 CompatibilityProfile
+### 7.14 RuntimeMode
 
 ```cpp
-enum class CompatibilityProfile
+enum class RuntimeMode
 {
-    NativeDds,
+    DDS,
 
-    Ros2FastDdsHumble
+    ROS2
 };
 ```
 
-profile 的 public ownership 固定在 `ContextOptions::compatibility_profile`，Context 创建
+`RuntimeMode` 的 public ownership 固定在 `ContextOptions::runtime_mode`，Context 创建
 成功后不可修改。所有 public `topic_name()`、service name 或等价 observer 始终返回
-normalized logical DMW name，不返回 profile-specific resolved DDS name。
+normalized logical DMW name，不返回 runtime-mode-specific resolved DDS name。
 
 设 logical FQN `/a/b` 对应 `path=a/b`，V1 resolved DDS naming 为：
 
-| Profile | Topic | Service request | Service response |
+| RuntimeMode | Topic | Service request | Service response |
 | --- | --- | --- | --- |
-| `NativeDds` | `dmw/t/<path>` | `dmw/rq/<path>` | `dmw/rr/<path>` |
-| `Ros2FastDdsHumble` | `rt/<path>` | `rq/<path>Request` | `rr/<path>Reply` |
+| `DDS` | `<path>` | `<path>_Request` | `<path>_Reply` |
+| `ROS2` | `rt/<path>` | `rq/<path>Request` | `rr/<path>Reply` |
 
-profile 还决定可观察的 endpoint Fast DDS QoS behavior、service identity、matching/discovery
+`RuntimeMode` 还决定可观察的 endpoint Fast DDS QoS behavior、service identity、matching/discovery
 behavior 与 wire-interoperability scope。完整 wire interoperability 要求 `MessageType` /
-`ServiceType` 同时提供兼容的 wire type name 与 CDR serializer；选择 profile 不表示 runtime
+`ServiceType` 同时提供兼容的 wire type name 与 CDR serializer；选择 RuntimeMode 不表示 runtime
 能够自动认证任意 custom `TopicDataType`。
 
 <a id="dmw-topic"></a>
@@ -2371,8 +2371,8 @@ struct SubscriberOptions
 };
 ```
 
-两者继承 parent Context 的 immutable `CompatibilityProfile`，V1 不提供 endpoint-scoped
-profile override。
+两者继承 parent Context 的 immutable `RuntimeMode`，V1 不提供 endpoint-scoped
+RuntimeMode override。
 
 ### 8.2 Publisher API
 
@@ -2489,27 +2489,22 @@ NoData 不是 Error。
 ```cpp
 struct MessageInfo
 {
-    std::int64_t source_timestamp_ns{0};
+    Gid writer_gid{};
 
-    std::int64_t received_timestamp_ns{0};
+    std::int64_t writer_timestamp{0};
 
-    Gid publisher_gid{};
+    std::uint64_t writer_sequence{0}; // 0 = unknown/unavailable
 
-    std::optional<std::uint64_t>
-        publication_sequence_number;
-
-    std::optional<std::uint64_t>
-        reception_sequence_number;
+    std::int64_t reader_timestamp{0};
 };
 ```
 
 字段语义固定为：
 
-- `source_timestamp_ns`：middleware-provided source timestamp；不可获得或不可安全表示时为 `0`；
-- `received_timestamp_ns`：middleware-provided receive/reception timestamp；不可获得或不可安全表示时为 `0`，不得用本地 `steady_clock` 伪造；
-- `publisher_gid`：middleware publication identity；不可可靠获得时为 `Gid{}`；
-- `publication_sequence_number`：middleware publication/sample sequence；unknown/unavailable/不可安全表示时为 `std::nullopt`；
-- `reception_sequence_number`：独立 middleware reception sequence；middleware 不提供该独立概念时为 `std::nullopt`，不得以 publication sequence 冒充。
+- `writer_timestamp`：middleware-provided source timestamp；不可获得或不可安全表示时为 `0`；
+- `reader_timestamp`：middleware-provided receive/reception timestamp；不可获得或不可安全表示时为 `0`，不得用本地 `steady_clock` 伪造；
+- `writer_gid`：middleware publication identity；不可可靠获得时为 `Gid{}`；
+- `writer_sequence`：middleware publication/sample sequence；unknown/unavailable/不可安全表示时为 `0`。
 
 具体 Fast DDS 字段来源与转换只属于 Fast DDS 实现规格。
 
@@ -2623,15 +2618,15 @@ struct ServerOptions
 };
 ```
 
-Client/Server 继承 parent Context 的 immutable `CompatibilityProfile`，V1 不提供
-service-endpoint-scoped profile override。
+Client/Server 继承 parent Context 的 immutable `RuntimeMode`，V1 不提供
+service-endpoint-scoped RuntimeMode override。
 
 `max_pending_requests` 必须大于 0，否则 `create_server()` 返回
 `InvalidArgument`。
 
 ### 9.3 RequestId
 
-V1 改为 profile-neutral：
+V1 改为 runtime-mode-neutral：
 
 ```cpp
 struct RequestId
@@ -2660,7 +2655,7 @@ struct RequestIdHash
 
 `writer_gid`
 
-因为 `Ros2FastDdsHumble` 的 service workaround 中相关 GID 可能表示 Client response reader，而非 request writer。
+因为 `ROS2` 的 service workaround 中相关 GID 可能表示 Client response reader，而非 request writer。
 
 ### 9.4 Client API
 
@@ -3893,7 +3888,7 @@ private noexcept idempotent Event::Impl::destroy()
 | Subscriber | `MessageLost` |
 
 EventType 本身受支持但与 parent kind 不匹配时，`create_event()` 返回
-`InvalidArgument`。`Unsupported` 只用于当前 Fast DDS version/profile 根本不支持该能力的
+`InvalidArgument`。`Unsupported` 只用于当前 Fast DDS version/RuntimeMode 根本不支持该能力的
 情况。Factory 失败时不创建半有效 Event。
 
 #### 10.29.5 Event Parent
@@ -4090,7 +4085,7 @@ request DDS topic
 response DDS topic
 request wire type
 response wire type
-CompatibilityProfile
+RuntimeMode
 ```
 
 。
@@ -4271,7 +4266,7 @@ Registry 必须同步。
 
 ### 13.1 Compatibility Baseline
 
-`Ros2FastDdsHumble` 不是模糊的“兼容 Humble”。
+`ROS2` 不是模糊的“兼容 Humble”。
 
 V1 compatibility test baseline 固定为：
 
@@ -4309,11 +4304,11 @@ compiler version
 
 > 必须重新运行[测试与验收](#dmw-verification)中的全部 ROS interoperability tests。
 
-未经重新验证，不自动扩展 `Ros2FastDdsHumble` compatibility guarantee。
+未经重新验证，不自动扩展 `ROS2` compatibility guarantee。
 
 ### 13.2 Source of Truth
 
-CompatibilityProfile 是以下三部分共同定义的可验证契约：
+RuntimeMode 是以下三部分共同定义的可验证契约：
 
 1. 本文档明确冻结的规范；
 2. baseline manifest 固定的 reference implementation，包括
@@ -4322,16 +4317,16 @@ CompatibilityProfile 是以下三部分共同定义的可验证契约：
 
 三者不存在“文档无条件覆盖实现或测试”的简单优先级。任意两者冲突都属于：
 
-`CompatibilityProfileDefect`
+`RuntimeModeDefect`
 
-必须先修复规范、profile implementation 或 test，使三者重新一致；冲突状态下
+必须先修复规范、RuntimeMode implementation 或 test，使三者重新一致；冲突状态下
 不得把新的 baseline 标记为 Frozen，也不得声称已验证 wire compatibility。
 
 ROS 2 官方命名规范定义了 `rt`、`rq`、`rr` 等 DDS namespace prefix；`rmw_fastrtps` 官方文档也展示了诸如 `rq/add_two_intsRequest` 和 `rr/add_two_intsReply` 的实际 service endpoint 名称。
 
 ### 13.3 ROS Name Validation
 
-`Ros2FastDdsHumble` 模式下 DMW V1 接受：
+`ROS2` 模式下 DMW V1 接受：
 
 - absolute name；
 - relative name。
@@ -4350,7 +4345,7 @@ substitution
 
 ### 13.4 Node Namespace Normalization
 
-`NodeOptions::ns`：
+`NodeOptions::node_namespace`：
 
 ```text
 empty
@@ -4496,7 +4491,7 @@ response MessageType 应对应：
 
 ### 13.11 CDR Representation
 
-Ros2FastDdsHumble Service payload：
+ROS2 Service payload：
 
 > request / response message 本身直接按照相应 ROS Fast DDS message type CDR 序列化。
 
@@ -4523,7 +4518,7 @@ Humble `rmw_fastrtps` request/response 路径本身使用 Fast CDR `DDS_CDR` rep
 
 ### 13.12 Client Request Identity
 
-在 `Ros2FastDdsHumble` 模式：
+在 `ROS2` 模式：
 
 Client 拥有：
 
@@ -4647,7 +4642,7 @@ Humble `rmw_fastrtps` 的 `rmw_send_response` 也是把 request header GUID 和 
 
 表示 response DataReader GUID，则 Server response DataWriter 在写 response 前必须确保该 reader 已匹配。
 
-`Ros2FastDdsHumble` V1 固定：
+`ROS2` V1 固定：
 
 `service response discovery timeout = 100 ms`
 
@@ -4742,7 +4737,7 @@ Qos::ros2_services_default();
 
 ### 13.19 Fast DDS Implementation Defaults
 
-为了与固定 `rmw_fastrtps_cpp` baseline 行为尽量一致，Ros2FastDdsHumble integration 实现应以固定版本的 rmw_fastrtps 行为为参考，包括：
+为了与固定 `rmw_fastrtps_cpp` baseline 行为尽量一致，ROS2 integration 实现应以固定版本的 rmw_fastrtps 行为为参考，包括：
 
 - Fast DDS entity QoS mapping；
 - publication behavior；
@@ -4805,7 +4800,7 @@ dmw/
 │       ├── server.hpp
 │       │
 │       ├── qos.hpp
-│       ├── compatibility.hpp
+│       ├── runtime_mode.hpp
 │       │
 │       ├── gid.hpp
 │       ├── message_info.hpp
@@ -4831,67 +4826,55 @@ dmw/
 └── src/
     ├── context.cpp
     ├── node.cpp
-    │
-    ├── message_type.cpp
-    ├── service_type.cpp
-    │
     ├── publisher.cpp
     ├── subscriber.cpp
     ├── client.cpp
     ├── server.cpp
-    │
-    ├── qos.cpp
-    │
-    ├── wait_set.cpp
-    ├── guard_condition.cpp
     ├── event.cpp
-    │
-    ├── registry/
-    │   ├── type_registry.cpp
-    │   └── topic_registry.cpp
-    │
-    ├── discovery/
-    │   ├── matched_endpoints.cpp
-    │   └── service_discovery.cpp
-    │
-    ├── ros2/
-    │   ├── naming.cpp
-    │   ├── qos.cpp
-    │   ├── topic.cpp
-    │   └── service.cpp
-    │
+    ├── guard_condition.cpp
+    ├── wait_set.cpp
+    ├── fastdds/
+    │   └── message_type.cpp
     └── impl/
-        ├── context.hpp
-        ├── node.hpp
-        │
-        ├── message_type.hpp
-        │
-        ├── publisher.hpp
-        ├── subscriber.hpp
-        ├── client.hpp
-        ├── server.hpp
-        │
-        ├── wait_set.hpp
-        ├── guard_condition.hpp
-        ├── event.hpp
-        │
-        ├── context_state.hpp
-        ├── node_state.hpp
-        ├── waitable_state.hpp
-        ├── registration_state.hpp
-        ├── service_discovery_state.hpp
-        │
+        ├── context_impl.hpp
+        ├── context_impl.cpp
+        ├── node_impl.hpp
+        ├── node_impl.cpp
+        ├── publisher_impl.hpp
+        ├── publisher_impl.cpp
+        ├── subscriber_impl.hpp
+        ├── subscriber_impl.cpp
+        ├── client_impl.hpp
+        ├── client_impl.cpp
+        ├── server_impl.hpp
+        ├── server_impl.cpp
+        ├── event_impl.hpp
+        ├── event_impl.cpp
+        ├── guard_condition_impl.hpp
+        ├── guard_condition_impl.cpp
+        ├── wait_set_impl.hpp
+        ├── wait_set_impl.cpp
+        ├── message_type_impl.hpp
+        ├── event_parent_state.hpp
+        ├── event_parent_state.cpp
+        ├── endpoint_state.hpp
+        ├── service_state.hpp
+        ├── reader_wait_state.hpp
+        ├── service_match_state.hpp
+        ├── participant_observation.hpp
+        ├── temporary_sample.hpp
+        ├── lock_rank.hpp
+        ├── name.hpp
         └── fastdds/
-            ├── participant_info.hpp
-            ├── data_reader_info.hpp
-            ├── data_writer_info.hpp
-            ├── guard_condition_info.hpp
-            ├── condition_info.hpp
-            ├── control_guard_info.hpp
-            └── wait_set_info.hpp
+            ├── context_state.hpp
+            ├── identity.hpp
+            ├── message_type.cpp
+            ├── process_runtime.hpp
+            ├── qos.hpp
+            └── return_code.hpp
 ```
 
-`src/impl/fastdds/` 中的类型位于 `dmw::impl::fastdds`，用于持有 Fast DDS entity 及其生命周期信息。`ContextState`、`NodeState`、`WaitableState` 和 `RegistrationState` 等 runtime/concurrency authority 仍位于 `dmw::impl`。该目录和命名空间只是编译期依赖边界，不引入多 DDS 实现或 runtime dispatch。
+根 `src/*.cpp` 与公开头文件一一对应，只保留 public-object 生命周期包装、只读 getter 和向对应 `Impl` 的转发；它们不得直接包含 Fast DDS 或 `impl/fastdds/*` 头。`src/impl/*.cpp` 承担对象业务逻辑，`src/impl/fastdds/` 承担 Fast DDS runtime/helper 逻辑。`src/impl/fastdds/` 中的类型位于 `dmw::impl::fastdds`，用于持有 Fast DDS entity 及其生命周期信息。`WaitSetState`、`ReaderWaitState`、`EventParentState` 与 service matching state 等 runtime/concurrency authority 位于 `dmw::impl`。该目录和命名空间只是编译期依赖边界，不引入多 DDS 实现或 runtime dispatch。
 
 ### 14.2 Fast DDS Boundary
 
@@ -5048,9 +5031,9 @@ children operations -> ContextShutdown
 
 children destruction safe
 
-ContextOptions profile is immutable after create
+ContextOptions RuntimeMode is immutable after create
 
-all child endpoint options inherit Context profile
+all child endpoint options inherit Context RuntimeMode
 ```
 
 。
@@ -5111,9 +5094,9 @@ keep_all -> depth canonical 0
 
 duration overflow
 
-NativeDds SystemDefault
+DDS SystemDefault
 
-Ros2FastDdsHumble SystemDefault
+ROS2 SystemDefault
 
 ros2_default
 
@@ -5572,7 +5555,7 @@ Fast CDR
 
 未完成 interoperability regression，不得修改：
 
-`Ros2FastDdsHumble validated baseline`
+`ROS2 validated baseline`
 
 。
 
@@ -5681,8 +5664,8 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 70. duration conversion 必须 checked；`Qos()` 等价于 `system_default()`，失败 setter 保持整个 Qos 不变，并提供全部基础 policy getter。
 71. keep_last depth 必须 > 0。
 72. KeepAll canonical depth 为 0。
-73. SystemDefault 由 Context 的 immutable CompatibilityProfile + entity kind + frozen Fast DDS baseline 解析，不读取 runtime/XML mutable default。
-74. Ros2FastDdsHumble 不读取 ROS XML overrides。
+73. SystemDefault 由 Context 的 immutable RuntimeMode + entity kind + frozen Fast DDS baseline 解析，不读取 runtime/XML mutable default。
+74. ROS2 不读取 ROS XML overrides。
 75. 提供 `ros2_default()`。
 76. 提供 `ros2_services_default()`。
 77. incompatible remote QoS 不导致本地 create failure。
@@ -5747,7 +5730,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 
 ### 15.13 ROS 2 Compatibility
 
-124. Compatibility profile 名称为 `Ros2FastDdsHumble`；profile 由 ContextOptions 唯一持有且创建后 immutable，endpoint options 不提供 override。
+124. RuntimeMode 名称为 `ROS2`；RuntimeMode 由 ContextOptions 唯一持有且创建后 immutable，endpoint options 不提供 override。
 125. compatibility 由规范、manifest 固定的 reference implementation 和 interoperability tests 共同定义。
 126. ROS relative name 先解析成 FQN。
 127. Topic DDS name 使用 `rt`。
@@ -5873,4 +5856,4 @@ WaitSet contract 保证：
 
 ROS compatibility contract 保证：
 
-> `Ros2FastDdsHumble` 不再只是“兼容目标”，而是具有固定版本、确定 naming、type、QoS 和 request/reply identity mapping 的可测试 wire contract。
+> `ROS2` 不再只是“兼容目标”，而是具有固定版本、确定 naming、type、QoS 和 request/reply identity mapping 的可测试 wire contract。

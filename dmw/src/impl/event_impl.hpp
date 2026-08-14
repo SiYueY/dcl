@@ -28,6 +28,9 @@ public:
         wait_state_->notify_wait_set();
     }
 
+    EventType type() const noexcept { return type_; }
+    Result<TakeStatus> take(EventInfo& info);
+
     std::shared_ptr<impl::EventParentState> parent_;
     EventType type_;
     std::shared_ptr<GuardConditionState> wait_state_;

@@ -10,7 +10,7 @@
 #include <fastdds/rtps/common/Time_t.h>
 
 #include "dmw/qos.hpp"
-#include "dmw/compatibility.hpp"
+#include "dmw/runtime_mode.hpp"
 
 namespace dmw {
 namespace impl {
@@ -41,10 +41,10 @@ inline Result<eprosima::fastrtps::Duration_t> to_duration(QosDuration duration) 
 }
 
 template <class QosT>
-Result<void> apply_common_qos(const Qos& source, CompatibilityProfile profile, QosT& target) {
+Result<void> apply_common_qos(const Qos& source, RuntimeMode runtime_mode, QosT& target) {
     using namespace eprosima::fastdds::dds;
 
-    if (profile == CompatibilityProfile::Ros2FastDdsHumble) {
+    if (runtime_mode == RuntimeMode::ROS2) {
         target.history().kind = KEEP_LAST_HISTORY_QOS;
         target.history().depth = 10;
         target.reliability().kind = RELIABLE_RELIABILITY_QOS;
@@ -98,12 +98,12 @@ Result<void> apply_common_qos(const Qos& source, CompatibilityProfile profile, Q
 }
 
 inline Result<eprosima::fastdds::dds::DataWriterQos> make_writer_qos(
-    const Qos& source, CompatibilityProfile profile) {
+    const Qos& source, RuntimeMode runtime_mode) {
     auto target = eprosima::fastdds::dds::DATAWRITER_QOS_DEFAULT;
-    auto result = apply_common_qos(source, profile, target);
+    auto result = apply_common_qos(source, runtime_mode, target);
     if (!result)
         return Result<eprosima::fastdds::dds::DataWriterQos>::failure(std::move(result.error()));
-    if (profile == CompatibilityProfile::Ros2FastDdsHumble) {
+    if (runtime_mode == RuntimeMode::ROS2) {
         target.endpoint().history_memory_policy =
             eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
         target.publish_mode().kind = eprosima::fastrtps::SYNCHRONOUS_PUBLISH_MODE;
@@ -115,12 +115,12 @@ inline Result<eprosima::fastdds::dds::DataWriterQos> make_writer_qos(
 }
 
 inline Result<eprosima::fastdds::dds::DataReaderQos> make_reader_qos(
-    const Qos& source, CompatibilityProfile profile) {
+    const Qos& source, RuntimeMode runtime_mode) {
     auto target = eprosima::fastdds::dds::DATAREADER_QOS_DEFAULT;
-    auto result = apply_common_qos(source, profile, target);
+    auto result = apply_common_qos(source, runtime_mode, target);
     if (!result)
         return Result<eprosima::fastdds::dds::DataReaderQos>::failure(std::move(result.error()));
-    if (profile == CompatibilityProfile::Ros2FastDdsHumble) {
+    if (runtime_mode == RuntimeMode::ROS2) {
         target.endpoint().history_memory_policy =
             eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
         target.data_sharing().off();

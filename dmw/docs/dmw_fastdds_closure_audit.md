@@ -43,26 +43,26 @@
 | §2.18–2.24 ChildRegistry、ack-all、executor failure | 部分实现 | `shutdown_children_`, `ShutdownExecutionState` | 并发 shutdown 测试；不是预分配 intrusive ChildRegistry/ack-all 协议 |
 | §2.25 facade destruction | 保守等价 | `ContextState::shutdown`, shared state retention | 隐式 shutdown 有覆盖；无 executor-loss/exception injection |
 | §3 DDS ownership/operation status | 部分实现 | endpoint impl、context teardown | 无完整 entity status 分离及 contained graph 证据 |
-| §4.1–4.12 binding、TemporarySample、Type/Topic registry | 部分实现 | `message_type.cpp`, `context.cpp`, `node.cpp` | 现有 type/message tests；registry creating/retiring/orphan FSM 不完整 |
-| §4.13–4.18 QoS authority/canonical fingerprint | 部分实现 | `fastdds/qos.hpp`, `context.cpp` | `qos_test` 覆盖 profile overrides；无 13-policy canonical `TopicQosFingerprint` |
+| §4.1–4.12 binding、TemporarySample、Type/Topic registry | 部分实现 | `fastdds/message_type.cpp`, `context.cpp`, `node.cpp` | 现有 type/message tests；registry creating/retiring/orphan FSM 不完整 |
+| §4.13–4.18 QoS authority/canonical fingerprint | 部分实现 | `fastdds/qos.hpp`, `context.cpp` | `qos_test` 覆盖 RuntimeMode overrides；无 13-policy canonical `TopicQosFingerprint` |
 | §4.19–4.26 QoS policy mapping/golden tests | 部分实现 | `fastdds/qos.hpp` | KeepLast/Reliability等映射已测；完整 golden/XML isolation 缺失 |
-| §5.1–5.7 listener state、drain、degraded teardown | 部分实现 | `event_parent_state.cpp`, `service_match_state.hpp` | callback gate/retention 已有；完整 listener install/uninstall second-drain protocol 缺失 |
+| §5.1–5.7 listener state、drain、degraded teardown | 部分实现 | `impl/event_parent_state.cpp`, `service_match_state.hpp` | callback gate/retention 已有；完整 listener install/uninstall second-drain protocol 缺失 |
 | §5.8–5.13 discovery listener/status masks | 部分实现 | `participant_observation.hpp`, endpoint listeners | 单进程状态测试；discovery final teardown/status mask matrix 缺失 |
 | §5.14–5.20 participant/remote/service/target registries | 部分实现 | `participant_observation.hpp`, `service_match_state.hpp` | tombstone/exact removed/reuse 测试；精确图 rebuild、乱序 callback 与生命周期证据不完整 |
-| §5.21–5.22 Event source/fan-out | 部分实现 | `event_parent_state.cpp` | `event_parent_state_test`；degraded callback fan-out failure injection 缺失 |
+| §5.21–5.22 Event source/fan-out | 部分实现 | `impl/event_parent_state.cpp` | `event_parent_state_test`；degraded callback fan-out failure injection 缺失 |
 | §6.1–6.7 wait holds、reader/writer/guard info | 部分实现 | `reader_wait_state.hpp`, `wait_set.cpp` | WaitSet 基础测试；historical hold ownership 未完整实现 |
 | §6.8–6.9 reader destruction/deferred retry | 部分实现 | `reader_wait_state.hpp` quarantine retention | close/claim 覆盖；无 `DeleteDeferredByWaitSet` registry/retry FSM |
 | §6.10 endpoint creation transaction | 部分实现 | `node.cpp`, endpoint sources | rollback 顺序已改善；partial DDS creation evidence/hidden entity rules 缺失 |
-| §6.11–6.13 publish/take/MessageInfo | 已实现（测试缺口） | `publisher.cpp`, `subscriber.cpp`, `message_type.cpp` | 数据路径和互操作已有；bounded filter/message-info failure matrix 不全 |
-| §7.1–7.11 service composition/correlation/target mode | 部分实现 | `client.cpp`, `server.cpp`, `service_impl.hpp` | service unit/integration 覆盖基本匹配；fallback/history 精确语义未全证 |
+| §6.11–6.13 publish/take/MessageInfo | 已实现（测试缺口） | `publisher.cpp`, `subscriber.cpp`, `fastdds/message_type.cpp` | 数据路径和互操作已有；bounded filter/message-info failure matrix 不全 |
+| §7.1–7.11 service composition/correlation/target mode | 部分实现 | `client.cpp`, `server.cpp`, `client_impl.hpp`, `server_impl.hpp` | service unit/integration 覆盖基本匹配；fallback/history 精确语义未全证 |
 | §7.12 target wait | 已实现 | `service_match_state.hpp`, `server.cpp` | exact reader/participant Removed -> no-write 与 100ms deadline 测试 |
-| §7.13–7.18 pending/capacity/take | 已实现（测试缺口） | `service_impl.hpp`, `server.cpp` | capacity-before-take 已实现；ABA、allocation 与 bounded scan 故障注入缺失 |
+| §7.13–7.18 pending/capacity/take | 已实现（测试缺口） | `server_impl.hpp`, `server.cpp` | capacity-before-take 已实现；ABA、allocation 与 bounded scan 故障注入缺失 |
 | §7.19–7.20 send response transaction/pending shutdown | 部分实现 | `server.cpp`, response match state | NotFound/Busy/removed 支持；ephemeral child registration、完整 rollback/shutdown race 未实现 |
 | §8.1–8.18 waitable/registration/topology | 部分实现 | `wait_set.cpp`, reader/guard states | bad_alloc rollback/topology generation 已有；预分配 WaitSetInfo、active-wait drain FSM 缺失 |
 | §8.19–8.26 poisoned/retired/control guard | 部分实现 | `wait_set.cpp` repair/poison path | 基本 poisoned/repair；RetiredWaitSetRegistry、全部 attach/detach indeterminate matrix 缺失 |
 | §8.27–8.31 wait loop/capacity topology | 已实现 | `wait_set.cpp`, `server.cpp`, `reader_wait_state.hpp` | 100ms slice、full remove/available reattach；idle scale performance test 缺失 |
 | §8.32–8.36 Guard generations/exhaustion | 部分实现 | `guard_condition_impl.hpp`, `guard_condition.cpp` | generation merge 已实现；logical-only degradation/ID and generation exhaustion 未完整证明 |
-| §8.37–8.44 Event cursor/exhaustion/destruction | 部分实现 | `event_parent_state.cpp`, `event.cpp` | independent cursors/registration overflow；generation exhaustion/degraded lifecycle 与 destruction matrix 不全 |
+| §8.37–8.44 Event cursor/exhaustion/destruction | 部分实现 | `impl/event_parent_state.cpp`, `event.cpp` | independent cursors/registration overflow；generation exhaustion/degraded lifecycle 与 destruction matrix 不全 |
 | §9.1–9.16 retirement/final teardown | 部分实现 | endpoint destructors, `context.cpp`, `process_runtime.hpp` | 安全 retention 倾向存在；retirement registry、container evidence barriers、exact teardown order 缺失 |
 | §9.17 process terminal quarantine | 部分实现 | `process_runtime.hpp` | participant/listener retention；无 intrusive no-allocation adoption、ProcessBindingQuarantine、full entity graph ownership |
 | §10.1–10.4 lock ranks/API call rules | 部分实现 | `lock_rank.hpp`, ranked mutex usages | 部分运行时断言；17 级在所有路径的应用、same-rank/API instrumentation 缺失 |
@@ -72,8 +72,8 @@
 
 ## 3. 已可证明的闭合子集
 
-- Humble compatibility profile 的 endpoint QoS 冻结：history reallocation、同步发布、关闭
-  data sharing 以及 Reliable writer 100 ms blocking timeout；`NativeDds` 不施加这些覆盖。
+- Humble runtime mode 的 endpoint QoS 冻结：history reallocation、同步发布、关闭
+  data sharing 以及 Reliable writer 100 ms blocking timeout；`DDS` 不施加这些覆盖。
 - Server capacity 满时 request reader 从 blocking WaitSet topology 移除，释放 slot 后重新加入，
   消除了 unread request + full capacity 的 readiness 自旋。
 - response 目标的 exact reader 或其 participant 被确认 Removed 时，`send_response()` 返回

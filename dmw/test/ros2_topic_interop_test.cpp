@@ -114,7 +114,7 @@ int main() {
 
         dmw::ContextOptions context_options;
         context_options.participant_name = "dmw-ros2-topic-peer";
-        context_options.compatibility_profile = dmw::CompatibilityProfile::Ros2FastDdsHumble;
+        context_options.runtime_mode = dmw::RuntimeMode::ROS2;
         auto context = dmw::Context::create(context_options);
         assert(context);
 

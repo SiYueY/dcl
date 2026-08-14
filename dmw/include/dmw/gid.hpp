@@ -9,9 +9,9 @@ namespace dmw {
 
 /// Middleware-neutral endpoint identifier.
 struct Gid {
-    static constexpr std::size_t kSize = 16;
+    static constexpr std::size_t Size = 16;
 
-    std::array<std::uint8_t, kSize> data{};
+    std::array<std::uint8_t, Size> data{};
 };
 
 inline bool operator==(const Gid& lhs, const Gid& rhs) noexcept { return lhs.data == rhs.data; }

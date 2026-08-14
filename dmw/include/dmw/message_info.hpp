@@ -2,19 +2,16 @@
 #define DMW_MESSAGE_INFO_HPP_
 
 #include <cstdint>
-#include <optional>
-
 #include "dmw/gid.hpp"
 
 namespace dmw {
 
 /// Metadata associated with a taken topic sample.
 struct MessageInfo {
-    std::int64_t source_timestamp_ns{0};
-    std::int64_t received_timestamp_ns{0};
-    Gid publisher_gid{};
-    std::optional<std::uint64_t> publication_sequence_number;
-    std::optional<std::uint64_t> reception_sequence_number;
+    Gid writer_gid{};
+    std::int64_t writer_timestamp{0};
+    std::uint64_t writer_sequence{0};  // 0 = unknown/unavailable
+    std::int64_t reader_timestamp{0};
 };
 
 }  // namespace dmw

@@ -22,7 +22,7 @@ class Context;
 
 struct NodeOptions {
     std::string name;
-    std::string ns{"/"};
+    std::string node_namespace{"/"};
 };
 
 /// Logical communication identity owned by one Context.
@@ -36,7 +36,7 @@ public:
     Node& operator=(Node&&) = delete;
 
     std::string_view name() const noexcept;
-    std::string_view namespace_() const noexcept;
+    std::string_view node_namespace() const noexcept;
 
     /// Transactionally create a complete Publisher or return an Error.
     Result<std::unique_ptr<Publisher>> create_publisher(

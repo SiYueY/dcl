@@ -6,7 +6,7 @@
 
 int main() {
     auto context = std::make_shared<dmw::impl::fastdds::ContextState>(
-        nullptr, nullptr, nullptr, nullptr, 0U, dmw::CompatibilityProfile::NativeDds);
+        nullptr, nullptr, nullptr, nullptr, 0U, dmw::RuntimeMode::DDS);
     auto source = std::make_shared<dmw::impl::EventParentState>(context);
 
     const auto initial = source->snapshot(dmw::EventType::RequestedDeadlineMissed);

@@ -90,7 +90,7 @@ MessageTypeAccess::create(
     std::type_index);
 ```
 
-`CompatibilityProfile::Ros2FastDdsHumble` 只冻结 Fast DDS API 可控制的 DDS naming、QoS、service identity、`SampleIdentity`、`related_sample_identity` 和 discovery/matching behavior。完整 ROS 2 wire compatibility 仍要求调用者提供正确的 DDS wire type name，以及与 frozen ROS 2 Humble `rosidl_typesupport_fastrtps_cpp` 一致的 CDR serializer。V1 不尝试在运行时证明任意自定义 `PubSubTypeT` 的 ROS compatibility。
+`RuntimeMode::ROS2` 只冻结 Fast DDS API 可控制的 DDS naming、QoS、service identity、`SampleIdentity`、`related_sample_identity` 和 discovery/matching behavior。完整 ROS 2 wire compatibility 仍要求调用者提供正确的 DDS wire type name，以及与 frozen ROS 2 Humble `rosidl_typesupport_fastrtps_cpp` 一致的 CDR serializer。V1 不尝试在运行时证明任意自定义 `PubSubTypeT` 的 ROS compatibility。
 
 ### 1.4 Fast DDS 实现总体原则
 
@@ -103,7 +103,7 @@ Fast DDS 实现遵循以下原则：
 
 #### 1.4.1 内部命名空间与 `Info` 约定
 
-Fast DDS 专用实现类型必须位于 `dmw::impl::fastdds`；`dmw::impl` 只保留 `ContextState`、`NodeState`、`WaitableState`、`RegistrationState` 等 runtime/concurrency authority。公开 binding API 与 `MessageTypeAccess` 均位于 `dmw::fastdds`。
+Fast DDS 专用实现类型必须位于 `dmw::impl::fastdds`；`dmw::impl` 只保留 `ContextState`、`NodeState`、`WaitableState`、`RegistrationState` 等 runtime/concurrency authority。根 `src/*.cpp` 不直接调用或包含 Fast DDS runtime；公开 binding API 与 `MessageTypeAccess` 均位于 `dmw::fastdds`，其实现通过私有 Impl bridge 转发。
 
 ```cpp
 namespace dmw::impl::fastdds
@@ -358,8 +358,8 @@ struct ContextState
 
     std::uint32_t domain_id{0};
     std::string participant_name;
-    CompatibilityProfile compatibility_profile{
-        CompatibilityProfile::NativeDds};
+    RuntimeMode runtime_mode{
+        RuntimeMode::DDS};
 
     std::atomic<FinalTeardownState> final_teardown_state{
         FinalTeardownState::NotStarted};
@@ -537,7 +537,7 @@ Destroyed 不是 public/runtime enum。
 
 ### 2.7 ContextOptions Mapping 与 Public API Closure
 
-V1 正式选择 **Context-scoped `CompatibilityProfile`**。原因是一个 `Context` 只创建一个 `DomainParticipant`、一个 DDS `Publisher` 和一个 DDS `Subscriber`，而 profile 同时影响 Participant/DDS container QoS、Topic/Service naming、SystemDefault 与 interoperability scope；因此 endpoint-scoped mixed profile 会破坏一个 Context 对一个 DDS entity graph 的确定性。
+V1 正式选择 **Context-scoped `RuntimeMode`**。原因是一个 `Context` 只创建一个 `DomainParticipant`、一个 DDS `Publisher` 和一个 DDS `Subscriber`，而 RuntimeMode 同时影响 Participant/DDS container QoS、Topic/Service naming、SystemDefault 与 interoperability scope；因此 endpoint-scoped mixed RuntimeMode 会破坏一个 Context 对一个 DDS entity graph 的确定性。
 
 冻结后的 public `ContextOptions` 语义必须等价于：
 
@@ -546,12 +546,12 @@ struct ContextOptions
 {
     std::uint32_t domain_id{0};
     std::string participant_name;
-    CompatibilityProfile compatibility_profile{
-        CompatibilityProfile::NativeDds};
+    RuntimeMode runtime_mode{
+        RuntimeMode::DDS};
 };
 ```
 
-同时必须从以下 public options 中删除 `CompatibilityProfile`：
+同时必须从以下 public options 中删除 `RuntimeMode`：
 
 ```text
 PublisherOptions
@@ -560,9 +560,9 @@ ClientOptions
 ServerOptions
 ```
 
-这些 endpoint/service options 只描述 endpoint-local policy；profile 一律继承 parent `Context`。
+这些 endpoint/service options 只描述 endpoint-local policy；RuntimeMode 一律继承 parent `Context`。
 
-这是 **public API / `dmw.md` / public header 的同步要求**，不是 Fast DDS 实现可以私下兼容的 implementation detail。旧 endpoint-scoped profile API 与本文不兼容；在 public headers 与 `dmw.md` 完成同步前，本文保持 `V1 Implementation Frozen Candidate`。
+这是 **public API / `dmw.md` / public header 的同步要求**，不是 Fast DDS 实现可以私下兼容的 implementation detail。旧 endpoint-scoped RuntimeMode API 与本文不兼容；在 public headers 与 `dmw.md` 完成同步前，本文保持 `V1 Implementation Frozen Candidate`。
 
 `ContextOptions::domain_id`：
 
@@ -580,9 +580,9 @@ ContextState.participant_name
     -> explicit DomainParticipantQos.name
 ```
 
-`ContextOptions::compatibility_profile`：
+`ContextOptions::runtime_mode`：
 
-`ContextState.compatibility_profile`
+`ContextState.runtime_mode`
 
 Context construction commit 后 immutable。
 
@@ -591,22 +591,22 @@ Fast DDS 实现不自行扩大 `dmw.md` 对这些 public fields 的合法性检�
 <a id="fastdds-native-naming"></a>
 <a id="fastdds-dds-naming"></a>
 
-#### 2.7.1 CompatibilityProfile、Resolved DDS Naming 与 Error Priority
+#### 2.7.1 RuntimeMode、Resolved DDS Naming 与 Error Priority
 
-`CompatibilityProfile` 在 Context 创建时解析一次并保存到
-`ContextState.compatibility_profile`。同一个 Context 内不存在 endpoint 自行覆盖 profile，也不存在“同 Context、同 logical name、不同 profile 共存”。
+`RuntimeMode` 在 Context 创建时解析一次并保存到
+`ContextState.runtime_mode`。同一个 Context 内不存在 endpoint 自行覆盖 RuntimeMode，也不存在“同 Context、同 logical name、不同 RuntimeMode 共存”。
 
-所有 public endpoint/service 对外保存并返回 **logical DMW name**；resolved DDS name 只属于 implementation-internal metadata、TopicRegistry、discovery 和 interoperability diagnostic。禁止 public `name()`/等价接口泄露 profile-specific DDS prefix。
+所有 public endpoint/service 对外保存并返回 **logical DMW name**；resolved DDS name 只属于 implementation-internal metadata、TopicRegistry、discovery 和 interoperability diagnostic。禁止 public `name()`/等价接口泄露 runtime-mode-specific DDS prefix。
 
 名称处理必须拆为两个阶段，以保持[全局错误优先级](#fastdds-error-priority)。
 
-**Phase 0 — allocation-free immutable profile snapshot**
+**Phase 0 — allocation-free immutable RuntimeMode snapshot**
 
 在任何可能返回 public argument error 或取得 `OperationGuard` 之前，可以：
 
 ```cpp
-const CompatibilityProfile profile_snapshot =
-    context_state->compatibility_profile;
+const RuntimeMode runtime_mode_snapshot =
+    context_state->runtime_mode;
 ```
 
 这是对 Context commit 后 immutable enum 的无分配、无失败读取：
@@ -615,7 +615,7 @@ const CompatibilityProfile profile_snapshot =
 - 不产生 user-visible Error；
 - 不改变任何 runtime state。
 
-该 snapshot 是当前 Factory 整个 name-validation/materialization transaction 唯一使用的 profile value；后续不重新选择 profile。
+该 snapshot 是当前 Factory 整个 name-validation/materialization transaction 唯一使用的 RuntimeMode value；后续不重新选择 RuntimeMode。
 
 **Phase A — allocation-free public argument validation**
 
@@ -623,7 +623,7 @@ const CompatibilityProfile profile_snapshot =
 - 字符与分隔符合法性；
 - absolute/relative/name namespace 组合规则的合法性；
 - checked 计算 normalized logical FQN 长度；
-- 使用 `profile_snapshot` checked 计算最终 DDS Topic/Service name 长度；
+- 使用 `runtime_mode_snapshot` checked 计算最终 DDS Topic/Service name 长度；
 - 所有能导致 `InvalidArgument` 的名称语义判定。
 
 `NameValidationPlan`：
@@ -631,14 +631,14 @@ const CompatibilityProfile profile_snapshot =
 - 不分配内存；
 - 不构造 `std::string`；
 - 不调用 Fast DDS；
-- 保存 `profile_snapshot` 或由其推导的 fixed-size resolution kind，确保 Phase B 不重新读取/解释 profile。
+- 保存 `runtime_mode_snapshot` 或由其推导的 fixed-size resolution kind，确保 Phase B 不重新读取/解释 RuntimeMode。
 
 **Phase B — allocating materialization**
 
 只有在：
 
 ```text
-Phase 0 immutable profile snapshot
+Phase 0 immutable RuntimeMode snapshot
     -> allocation-free argument validation succeeded
     -> OperationGuard acquired
     -> parent state valid
@@ -674,15 +674,15 @@ struct ResolvedServiceName
 
 设 normalized logical FQN 为 `/a/b`，`path = a/b`（只移除规范化 FQN 的一个 leading `/`，不再次做名称清洗）。
 
-`CompatibilityProfile::NativeDds`：
+`RuntimeMode::DDS`：
 
 ```text
-Topic:            dmw/t/<path>
-Service request:  dmw/rq/<path>
-Service response: dmw/rr/<path>
+Topic:            <path>
+Service request:  <path>_Request
+Service response: <path>_Reply
 ```
 
-`CompatibilityProfile::Ros2FastDdsHumble`：
+`RuntimeMode::ROS2`：
 
 ```text
 Topic:            rt/<path>
@@ -707,7 +707,7 @@ struct ServiceKey
 
     // Diagnostic/invariant fields; not equality/hash authority.
     std::string logical_service_name;
-    CompatibilityProfile compatibility_profile;
+    RuntimeMode runtime_mode;
 };
 ```
 
@@ -720,9 +720,9 @@ request_wire_type_name
 response_wire_type_name
 ```
 
-`logical_service_name` 与 `compatibility_profile` 不参与 equality/hash；原因是 Registry 是 Context-scoped，resolved DDS names 已经编码 profile-specific naming。它们只用于 diagnostic 与 invariant validation。
+`logical_service_name` 与 `runtime_mode` 不参与 equality/hash；原因是 Registry 是 Context-scoped，resolved DDS names 已经编码 runtime-mode-specific naming。它们只用于 diagnostic 与 invariant validation。
 
-若两个 equality-authority fields 完全相同的 key 却具有不同 `logical_service_name` 或不同 `compatibility_profile`，表示 resolver/implementation invariant corruption：相关 registry capability -> `Degraded`，operation -> `DdsError`；不能把它们静默视为两个 service identity。
+若两个 equality-authority fields 完全相同的 key 却具有不同 `logical_service_name` 或不同 `runtime_mode`，表示 resolver/implementation invariant corruption：相关 registry capability -> `Degraded`，operation -> `DdsError`；不能把它们静默视为两个 service identity。
 
 `ServiceKeyHash` 必须：
 - 只 hash 与 equality 相同的四个 authority fields；
@@ -734,18 +734,18 @@ response_wire_type_name
 Factory 固定顺序：
 
 ```text
-allocation-free snapshot immutable Context profile
+allocation-free snapshot immutable Context RuntimeMode
     -> allocation-free validate / build NameValidationPlan
     -> OperationGuard
     -> parent state check
     -> object-local state check
-    -> materialize normalized logical name using the same profile snapshot
+    -> materialize normalized logical name using the same RuntimeMode snapshot
     -> resolve DDS name(s)
     -> construct ServiceKey / Topic lookup identity
     -> registry transaction / Fast DDS entity creation
 ```
 
-name resolver 不得读取 Fast DDS XML、环境变量或 endpoint-local hidden profile。
+name resolver 不得读取 Fast DDS XML、环境变量或 endpoint-local hidden RuntimeMode。
 
 ### 2.8 ParticipantInfo
 
@@ -893,7 +893,7 @@ struct NodeState
         NodePhase::Alive};
 
     std::string name;
-    std::string ns;
+    std::string node_namespace;
 };
 ```
 
@@ -1883,10 +1883,10 @@ DMW 不在所有 TopicDataType hook 外增加全局 serialization mutex，
 不满足该线程安全要求属于 binding contract violation。
 
 ROS compatibility：
-Ros2FastDdsHumble profile 下用于 interoperability test 的 binding
+ROS2 mode 下用于 interoperability test 的 binding
 必须来自 frozen ROS 2 Humble rosidl_typesupport_fastrtps_cpp，
 或提供逐字节等价的 wire type name 与 CDR behavior。
-任意 custom binding 不因选择 Ros2FastDdsHumble profile 而自动获得认证。
+任意 custom binding 不因选择 ROS2 mode 而自动获得认证。
 
 ##### 4.2.1.1 MessageTypeAccess::create() Bridge Contract
 
@@ -2022,14 +2022,13 @@ related sequence unknown
     -> continue scanning
 不能返回伪造 RequestId。
 
-MessageInfo publication sequence 使用独立 helper：
-std::optional<std::uint64_t>
-publication_sequence_from_fastdds(
+MessageInfo writer sequence 使用独立 helper：
+std::uint64_t writer_sequence(
     const SequenceNumber_t& sequence) noexcept;
 
 唯一算法：
 if sequence == frozen Fast DDS c_SequenceNumber_Unknown:
-    return std::nullopt
+    return 0
 
 uint32_t high_bits;
 memcpy(&high_bits, &sequence.high, sizeof(high_bits));
@@ -2041,8 +2040,8 @@ uint64_t bits =
 return bits;
 
 因此：
-unknown sentinel -> nullopt
-zero 若不是 frozen unknown sentinel -> uint64_t{0}
+unknown sentinel -> 0
+zero 若不是 frozen unknown sentinel -> uint64_t{0}；该值与 unknown sentinel 不区分
 high < 0 的非 unknown bit pattern -> 仍按 bit-preserving uint64_t 返回
 所有非 unknown high/low pattern 都可由 uint64_t 完整表示
 不执行 signed numeric interpretation
@@ -2050,7 +2049,7 @@ high < 0 的非 unknown bit pattern -> 仍按 bit-preserving uint64_t 返回
 
 该 helper 的目的不是判断 RTPS sequence 是否“业务上合理”，
 而是把 middleware 已提供且非 unknown 的 64-bit publication identity
-确定性地暴露为 MessageInfo::publication_sequence_number。
+确定性地暴露为 MessageInfo::writer_sequence。
 
 GUID：
 Gid 与 Fast DDS GUID 的转换必须为固定 16-byte bit-preserving copy，
@@ -2067,7 +2066,7 @@ seconds * 1'000'000'000 + nanosec
 若 unavailable / invalid / overflow：
 public timestamp = 0
 不能 wrap。
-reception_sequence_number 不使用 publication sequence 伪造。
+Fast DDS V1 不向 `MessageInfo` 暴露独立 reader sequence。
 
 ### 4.3 TemporarySample
 
@@ -2796,7 +2795,7 @@ V1 的唯一构造算法是：
 这是一条 executable normative definition，
 不是“运行时读取 middleware default”。
 由于 baseline 严格冻结为 Fast DDS 2.6.12，
-两套 conforming implementation 不允许选择不同 XML/profile/factory default。
+两套 conforming implementation 不允许选择不同 XML/RuntimeMode/factory default。
 
 代码必须集中在：
 fastdds_qos_baseline.hpp
@@ -2848,13 +2847,13 @@ TopicQos 是与 endpoint 无关的 canonical baseline，
 
 DataWriterQos：
 base = DataWriterQos{}
-然后应用 CompatibilityProfile override
+然后应用 RuntimeMode override
 +
 resolved DMW endpoint Qos。
 
 DataReaderQos：
 base = DataReaderQos{}
-然后应用 CompatibilityProfile override
+然后应用 RuntimeMode override
 +
 resolved DMW endpoint Qos。
 
@@ -2866,9 +2865,9 @@ golden snapshot
 本文版本升级，
 不能悄悄继承新的 library default。
 
-### 4.16 Ros2FastDdsHumble Mandatory Overrides
+### 4.16 ROS2 Mandatory Overrides
 
-Ros2FastDdsHumble 下必须设置：
+ROS2 下必须设置：
 
 DomainParticipantQos：
 wire_protocol.builtin.readerHistoryMemoryPolicy
@@ -2902,13 +2901,13 @@ Reliable writer：
 reliability.max_blocking_time
     = 100 ms
 除非 public DMW Qos 将来显式增加该 policy；
-V1 public Qos 不暴露该字段，所以该值属于 frozen Fast DDS profile。
+V1 public Qos 不暴露该字段，所以该值属于 frozen Fast DDS mode。
 
 这些 override 不读取：
 RMW_FASTRTPS_USE_QOS_FROM_XML
 RMW_FASTRTPS_PUBLICATION_MODE。
 
-NativeDds profile：
+DDS mode：
 不应用上述 ROS-specific override，
 只使用 4.14/4.15 canonical constructor baseline
 +
@@ -2922,13 +2921,13 @@ Public Qos policy == SystemDefault 时：
 不查询 participant/factory default。
 
 最终值由：
-CompatibilityProfile
+RuntimeMode
 +
 EntityKind
 +
 Fast DDS 2.6.12 canonical constructor baseline
 +
-mandatory profile override
+mandatory RuntimeMode override
 确定。
 
 普通 ROS Topic endpoint default：
@@ -3045,7 +3044,7 @@ V1 不因 KeepLast depth 人为缩小或扩大 instance 数。
     -> InvalidArgument
 
 DMW public QoS 合法，
-但 Fast DDS 2.6.12 / frozen profile 根本无法表示该 policy
+但 Fast DDS 2.6.12 / frozen RuntimeMode 根本无法表示该 policy
 （包括合法 public depth 无法转换为 Fast DDS int32_t）：
     -> Unsupported
 
@@ -3058,7 +3057,7 @@ resolver 已生成本文认为合法的 Fast DDS QoS，
 但最终 Fast DDS entity creation/set_qos 返回 INCONSISTENT_POLICY：
     -> IncompatibleQos
 
-因此 IncompatibleQos 不得用于表示“当前 Fast DDS version/profile 根本不能表达合法 public policy”。
+因此 IncompatibleQos 不得用于表示“当前 Fast DDS version/RuntimeMode 根本不能表达合法 public policy”。
 
 所有 integer 运算 checked；
 禁止 unsigned/signed wrap。
@@ -3092,9 +3091,9 @@ BestEffort：
 reliability.kind = BEST_EFFORT_RELIABILITY_QOS
 
 SystemDefault：
-保持 profile-resolved canonical baseline。
+保持 runtime-mode-resolved canonical baseline。
 
-Ros2FastDdsHumble Reliable writer：
+ROS2 Reliable writer：
 max_blocking_time = 100 ms。
 
 ### 4.22 Durability
@@ -3106,7 +3105,7 @@ TransientLocal：
 durability.kind = TRANSIENT_LOCAL_DURABILITY_QOS
 
 SystemDefault：
-保持 profile-resolved canonical baseline。
+保持 runtime-mode-resolved canonical baseline。
 
 ### 4.23 Deadline / Lifespan
 
@@ -3122,12 +3121,12 @@ Infinite：
 使用 frozen Fast DDS infinite duration constant。
 
 Lifespan：
-NativeDds profile：
+DDS mode：
 DataWriter
 DataReader
 都映射 public lifespan。
 
-Ros2FastDdsHumble profile：
+ROS2 mode：
 DataWriter
 DataReader
 都映射 public lifespan，
@@ -3138,14 +3137,14 @@ TopicQos：
 不得从某个 endpoint 的 lifespan/deadline 动态派生。
 
 这意味着 V1 有意不复制 Humble reference implementation
-在 Topic 创建阶段使用 endpoint/profile-derived TopicQos 的 first-creator-wins 细节；
+在 Topic 创建阶段使用 endpoint/runtime-mode-derived TopicQos 的 first-creator-wins 细节；
 lifespan/deadline 是其中需要特别冻结的两个 policy。
 原因是同一 Context 内 TopicRegistry 必须提供：
 deterministic canonical TopicQos
 与 endpoint creation order 无关
 同名同类型 Topic 不因第一个 endpoint 的 lifespan 而改变 DDS Topic identity。
 
-因此 Ros2FastDdsHumble compatibility scope 在这里冻结为：
+因此 ROS2 compatibility scope 在这里冻结为：
 Reader/Writer endpoint QoS 与 Humble baseline 对齐；
 Topic object 使用 DMW canonical TopicQos，可能与 Humble helper 为首个 endpoint 构造的 TopicQos 不同；
 这是明确记录的 implementation-internal divergence，而不是遗漏。
@@ -3176,7 +3175,7 @@ announcement_period
 Infinite：
 lease_duration = Fast DDS infinite
 announcement_period =
-    canonical profile infinite value
+    canonical RuntimeMode infinite value
 
 Automatic + Finite(L > 0)：
 先 checked 转换 L 为 uint64 integer nanoseconds。
@@ -3205,7 +3204,7 @@ lease_duration =
     resolved public value
 
 announcement_period =
-    canonical profile value
+    canonical RuntimeMode value
 
 禁止对 ManualByTopic 自动套用 2/3 announcement 算法；
 该 period 不作为 DMW 的 manual assertion cadence。
@@ -3213,21 +3212,21 @@ announcement_period =
 ### 4.25 Data Sharing / History Memory / Publication Mode
 
 这些不是 DMW public Qos policy，
-V1 由 CompatibilityProfile 决定。
+V1 由 RuntimeMode 决定。
 
-Ros2FastDdsHumble：
+ROS2：
 writer history memory = PREALLOCATED_WITH_REALLOC_MEMORY_MODE
 reader history memory = PREALLOCATED_WITH_REALLOC_MEMORY_MODE
 writer publication mode = SYNCHRONOUS_PUBLISH_MODE
 writer data sharing = OFF
 reader data sharing = OFF
 
-NativeDds：
+DDS：
 保持 Fast DDS 2.6.12 canonical constructor baseline。
 
 ### 4.26 QoS Golden Tests
 
-每个 profile/entity kind 的 golden test 必须在 Fast DDS entity creation 前比较 resolved object。
+每个 RuntimeMode/entity kind 的 golden test 必须在 Fast DDS entity creation 前比较 resolved object。
 
 至少覆盖：
 Participant built-in discovery reader/writer history memory policy
@@ -4749,13 +4748,13 @@ return NoData。
 
 ### 6.13 MessageInfo Mapping
 
-source_timestamp_ns
+writer_timestamp
 SampleInfo.source_timestamp
     ->
 checked nanoseconds
 不可用：
 0
-received_timestamp_ns
+reader_timestamp
 SampleInfo.reception_timestamp
     ->
 checked nanoseconds
@@ -4764,7 +4763,7 @@ checked nanoseconds
 不得使用：
 steady_clock
 填 public timestamp。
-publisher_gid
+writer_gid
 优先：
 sample_identity.writer_guid
 若 unknown：
@@ -4773,20 +4772,13 @@ sample_identity.writer_guid
 恢复 GUID
 无法可靠转换：
 Gid{}
-publication_sequence_number
-publication_sequence_from_fastdds(
+writer_sequence
+writer_sequence(
     sample_identity.sequence_number)
-    -> optional<uint64_t>
 unknown sentinel：
-nullopt
+0
 其它 high/low bit pattern：
 按 [identity conversion helpers](#fastdds-identity-conversion) 的 bit-preserving `uint64_t` helper 返回
-reception_sequence_number
-Fast DDS V1 没有 DMW 所需独立 reception sequence：
-nullopt
-禁止：
-publication sequence
-冒充 reception sequence。
 
 <a id="fastdds-service-runtime"></a>
 
@@ -4794,22 +4786,22 @@ publication sequence
 
 本章按照 endpoint composition、request/reply identity、Pending capacity、target discovery 和 `send_response()` transaction 的顺序定义 Service runtime。Client 和 Server 的两个 DDS endpoint 始终作为一个 aggregate resource 创建、回滚和销毁。
 
-### 7.1 CompatibilityProfile 与 Service Wire Contract
+### 7.1 RuntimeMode 与 Service Wire Contract
 
-两种 Fast DDS profile 都使用 DMW V1 的 `SampleIdentity` / `related_sample_identity` correlation model；区别主要在 resolved DDS naming/QoS/interoperability target。
+两种 `RuntimeMode` 都使用 DMW V1 的 `SampleIdentity` / `related_sample_identity` correlation model；区别主要在 resolved DDS naming/QoS/interoperability target。
 
-`NativeDds`：
-- request/response topic name 使用 [resolved DDS naming contract](#fastdds-dds-naming) 的 `dmw/rq/...` / `dmw/rr/...`；
+`DDS`：
+- request/response topic name 使用 [resolved DDS naming contract](#fastdds-dds-naming) 的 `<path>_Request` / `<path>_Reply`；
 - 仍使用 response Reader GUID + request sequence 形成 DMW `RequestId` 和 related identity；
 - exact target/fallback、PendingRequestRegistry、response filtering 语义与本章一致；
 - 100 ms response discovery wait 仍作为 Fast DDS correctness workaround 使用，不声称是 ROS compatibility requirement。
 
-`Ros2FastDdsHumble`：
+`ROS2`：
 - 使用 `rq/<path>Request` / `rr/<path>Reply`；
 - 同样使用本章 SampleIdentity correlation；
 - 100 ms response discovery behavior 同时属于 frozen Humble interoperability behavior。
 
-因此除“resolved name/QoS/golden interoperability expectations”外，本章 correlation state machine 默认适用于 **两个** CompatibilityProfile；任何只适用于 Humble 的差异必须在具体小节显式标注。
+因此除“resolved name/QoS/golden interoperability expectations”外，本章 correlation state machine 默认适用于 **两个** RuntimeMode；任何只适用于 Humble 的差异必须在具体小节显式标注。
 
 ### 7.2 Client Composition
 
@@ -8248,8 +8240,8 @@ ROS 2 Service interop
 
 | ID | `dmw.md` / public header requirement |
 |---|---|
-| PUB-001 | `CompatibilityProfile` public ownership = Context-scoped immutable；`ContextOptions` 含 profile；Publisher/Subscriber/Client/Server options 无 profile override |
-| PUB-002 | NativeDds / Ros2FastDdsHumble logical-to-DDS Topic/Service naming observable contract；public `name()` 保持 logical name |
+| PUB-001 | `RuntimeMode` public ownership = Context-scoped immutable；`ContextOptions` 含 profile；Publisher/Subscriber/Client/Server options 无 RuntimeMode override |
+| PUB-002 | DDS / ROS2 logical-to-DDS Topic/Service naming observable contract；public `name()` 保持 logical name |
 | PUB-003 | Cross-context WaitSet add -> `InvalidArgument`，且 public argument priority 高于 Context state |
 | PUB-004 | Event creation history / no pre-creation replay |
 | PUB-005 | Event readiness level-triggered；WaitSet 不消费 Event cursor；successful Event::take 才消费 |
@@ -8259,7 +8251,7 @@ ROS 2 Service interop
 | PUB-009 | MessageInfo middleware-neutral semantics |
 | PUB-010 | Result / `std::bad_alloc` / other C++ exception boundary |
 | PUB-011 | `SystemDefault` semantics |
-| PUB-012 | `Ros2FastDdsHumble` compatibility scope / custom binding limitation |
+| PUB-012 | `ROS2` compatibility scope / custom binding limitation |
 | PUB-013 | WaitResult stale/snapshot token semantics |
 | PUB-014 | Generic shutdown contract允许 Fast DDS V1 shutdown-success subset；final Fast DDS cleanup failure不 retroactively 改变 runtime shutdown result |
 | PUB-015 | `~Context()` best-effort implicit shutdown；Context facade destruction提交 shutdown，即使 children 仍保活 implementation state |
@@ -8382,14 +8374,14 @@ Internal state-machine concurrency tests：
 
 #### 11.2.2 Name Resolution Error-priority Tests
 
-- immutable profile snapshot before Phase A performs no allocation/no lock/no failure；
-- Phase A uses that exact snapshot for profile-specific DDS length checks；
+- immutable RuntimeMode snapshot before Phase A performs no allocation/no lock/no failure；
+- Phase A uses that exact snapshot for runtime-mode-specific DDS length checks；
 - invalid logical name detectable by allocation-free validation + Context Shutdown -> `InvalidArgument` wins；
 - valid logical name + Context Shutdown + injected resolver allocation OOM -> `ContextShutdown`, resolver allocation is never reached；
 - valid name + Active Context + parent destroyed -> parent error before allocating resolved names；
 - only after Context/parent/object-local checks pass may normalized/resolved `std::string` construction throw `std::bad_alloc`；
 - `NameValidationPlan` itself performs no heap allocation under allocation instrumentation；
-- no later Phase B re-read may select a different profile.
+- no later Phase B re-read may select a different RuntimeMode.
 
 ### 11.3 Child Shutdown Tests
 
@@ -9047,22 +9039,22 @@ remove() while Fast DDS Condition interpretation still needs RegistrationState
     -> waits until active_wait_count == 0
     -> lifetime-safe completion
 
-#### 11.18.3 Resolved DDS Naming / Profile API Tests
+#### 11.18.3 Resolved DDS Naming / RuntimeMode API Tests
 
-NativeDds logical `/a/b` -> `dmw/t/a/b`
-NativeDds service `/srv` -> `dmw/rq/srv` + `dmw/rr/srv`
-Ros2FastDdsHumble logical `/a/b` -> `rt/a/b`
-Ros2FastDdsHumble service `/srv` -> `rq/srvRequest` + `rr/srvReply`
+DDS logical `/a/b` -> `a/b`
+DDS service `/srv` -> `srv_Request` + `srv_Reply`
+ROS2 logical `/a/b` -> `rt/a/b`
+ROS2 service `/srv` -> `rq/srvRequest` + `rr/srvReply`
 public endpoint/service name remains logical FQN
-ContextOptions owns CompatibilityProfile; endpoint/service options contain no profile override
-same Context cannot mix CompatibilityProfile
+ContextOptions owns RuntimeMode; endpoint/service options contain no RuntimeMode override
+same Context cannot mix RuntimeMode
 TopicRegistry primary key uses resolved DDS name only
 same resolved name + different wire type -> TypeMismatch
 same name/type + fingerprint mismatch -> registry Degraded + DdsError
 
 ### 11.19 QoS Tests
 
-每个 profile golden snapshot：
+每个 RuntimeMode golden snapshot：
 ParticipantQos
 PublisherQos
 SubscriberQos
@@ -9096,10 +9088,10 @@ resolver internal contradiction -> DdsError + invariant diagnostic
 Fast DDS entity creation INCONSISTENT_POLICY -> IncompatibleQos
 
 特别验证 Lifespan：
-NativeDds DataWriter lifespan mapped
-NativeDds DataReader lifespan mapped
-Ros2FastDdsHumble DataWriter lifespan mapped
-Ros2FastDdsHumble DataReader lifespan mapped
+DDS DataWriter lifespan mapped
+DDS DataReader lifespan mapped
+ROS2 DataWriter lifespan mapped
+ROS2 DataReader lifespan mapped
 canonical TopicQos 不随 endpoint lifespan/deadline 或 creation order 改变
 两个同名同类型 endpoint 使用不同 lifespan 时 Topic fingerprint 不 first-creator-wins
 ROS 2 Humble 双向 interoperability / sample expiry observable behavior 仍通过
@@ -9108,7 +9100,7 @@ ROS 2 Humble 双向 interoperability / sample expiry observable behavior 仍通�
 
 ServiceKey：
 - equality/hash authority exactly four fields: request/response DDS name + request/response wire type；
-- logical name/profile differences with same authority identity -> invariant violation, not distinct registry key；
+- logical name/RuntimeMode differences with same authority identity -> invariant violation, not distinct registry key；
 - equal keys always same hash；
 - raw-byte/padding/address hashing prohibited。
 
@@ -9369,8 +9361,8 @@ Context
 一个 Context 一个 DDS Subscriber。
 Node 不对应 DDS entity。
 Context 保存 domain ID。
-ContextOptions 是 CompatibilityProfile 唯一 public owner；Context 保存 immutable profile；Publisher/Subscriber/Client/Server options 不含 profile override。
-logical name 与 resolved DDS name 分离；Phase 0可无分配读取immutable profile，Phase A allocation-free validation使用该snapshot，Phase B在Context/parent/local检查后materialize resolved DDS name。
+ContextOptions 是 RuntimeMode 唯一 public owner；Context 保存 immutable RuntimeMode；Publisher/Subscriber/Client/Server options 不含 RuntimeMode override。
+logical name 与 resolved DDS name 分离；Phase 0可无分配读取immutable RuntimeMode，Phase A allocation-free validation使用该snapshot，Phase B在Context/parent/local检查后materialize resolved DDS name。
 participant name 显式映射 Fast DDS QoS。
 Factory
 Factory 全事务化。
@@ -9516,7 +9508,7 @@ Exhausted cursor不推进。
 Degraded Event take返回 DdsError。
 ContextShutdown优先于 ParentDestroyed。
 Service
-NativeDds 与 Ros2FastDdsHumble 均使用本章 SampleIdentity correlation；profile-specific difference 必须显式列出。
+DDS 与 ROS2 均使用本章 SampleIdentity correlation；runtime-mode-specific difference 必须显式列出。
 Client response Reader先于 request Writer。
 Service endpoint具有 matched listener。
 PendingEntry保存 internal correlation kind + immutable shared TargetReaderKey；不保存 live observation snapshot。
@@ -9538,16 +9530,16 @@ QoS
 所有 DDS entities使用 explicit QoS。
 canonical baseline = Fast DDS 2.6.12 QoS value/default constructor +本文 mandatory override；
 禁止读取 factory/participant/XML default。
-Participant built-in discovery reader/writer history memory 在 Ros2FastDdsHumble 下为 PREALLOCATED_WITH_REALLOC。
+Participant built-in discovery reader/writer history memory 在 ROS2 下为 PREALLOCATED_WITH_REALLOC。
 TopicQos 与 endpoint Qos 解耦并使用 canonical TopicQos，禁止 first-creator-wins。
-SystemDefault由 profile + entity kind + frozen baseline决定。
+SystemDefault由 RuntimeMode + entity kind + frozen baseline决定。
 ROS Topic default必须显式 ros2_default()。
 Service default必须显式 ros2_services_default()。
-Ros2FastDdsHumble publication synchronous。
-Ros2FastDdsHumble history realloc。
-Ros2FastDdsHumble Data Sharing OFF。
+ROS2 publication synchronous。
+ROS2 history realloc。
+ROS2 Data Sharing OFF。
 KeepLast resource limit deterministic，且 InvalidArgument/Unsupported/DdsError/IncompatibleQos 分类固定。
-Reader/Writer lifespan 均映射；Ros2FastDdsHumble endpoint lifespan 跟 Humble baseline。
+Reader/Writer lifespan 均映射；ROS2 endpoint lifespan 跟 Humble baseline。
 TopicQos lifespan/deadline 保持 canonical、endpoint-independent，不复制 reference first-creator-wins。
 Liveliness duration conversion checked。
 announcement period计算不发生乘法 overflow。
@@ -9598,8 +9590,8 @@ cleanup diagnostic不能改变 primary public result。
 | CTX-003 | Child acknowledgement normal publication与waiter共享InternalChildState mutex；Phase-D bounded slice避免noexcept ack failure造成永久lost wake |
 | CTX-004 | Context facade/Impl destructor执行implicit shutdown；Completed才允许normal final teardown；Failed走terminal retention |
 | CTX-005 | Shutdown request-all分B1 logical publish与B2 unlocked signal；任何 private/Fast DDS control wake时不持ChildRegistry/runtime/其它DMW mutex |
-| NAME-001 | immutable CompatibilityProfile可在Phase 0无分配snapshot；Phase A allocation-free legality validation先于OperationGuard；Phase B allocation在Context/parent/local检查后 |
-| NAME-002 | ServiceKey equality/hash authority字段精确冻结；diagnostic logical/profile字段不参与identity |
+| NAME-001 | immutable RuntimeMode可在Phase 0无分配snapshot；Phase A allocation-free legality validation先于OperationGuard；Phase B allocation在Context/parent/local检查后 |
+| NAME-002 | ServiceKey equality/hash authority字段精确冻结；diagnostic logical/RuntimeMode字段不参与identity |
 | TYPE-001 | 同 Context 同 wire name + BindingIdentity 只有一个 canonical binding |
 | TYPE-002 | entered Fast DDS API call exception 先提交 lifecycle status/ownership 再传播 |
 | TYPE-003 | endpoint TypeLease 只由 DataReaderInfo/DataWriterInfo 持有；TopicEntry 另持 independent lease |
@@ -9652,7 +9644,7 @@ Public contract closure 的 **唯一条目集合** 是 [Public Contract Closure 
 
 Frozen Candidate -> Frozen 的 public closure 条件：
 - 同 revision `dmw.md` 已逐项满足 `PUB-001...PUB-015`；
-- public headers 与 `dmw.md` 完全一致，特别是 Context-scoped `CompatibilityProfile` API；
+- public headers 与 `dmw.md` 完全一致，特别是 Context-scoped `RuntimeMode` API；
 - `~Context()` implicit shutdown contract 与 2.25 Fast DDS mapping 一致；
 - `dmw_public_contract_sync.md` 不存在 active/staged normative copy；
 - `dmw_public_contract_merge_patch.md` 已合入并删除，或只位于明确 historical/non-normative archive；
@@ -9830,7 +9822,7 @@ ProcessTerminalQuarantine
 - 无 DDS entity pointer 的 hidden contained entity 由哪个 parent container deletion barrier 最终释放；
 - root `create_participant` exception/no-handle 后 partial Context 进入 ProcessTerminalQuarantine 的条件；
 - `delete_contained_entities` partial failure 后 raw pointer 的可用性；
-- CompatibilityProfile 唯一解析 Fast DDS topic/service name，且 allocating resolver 不得抢占 `ContextShutdown`；
+- RuntimeMode 唯一解析 Fast DDS topic/service name，且 allocating resolver 不得抢占 `ContextShutdown`；
 - Context facade 析构先提交 implicit shutdown，surviving child 不得继续观察 Active；
 - service-specific target entry 不存在时，Participant remove 通过 canonical ParticipantObservationRegistry 保留 terminal state；
 - `send_response` 的 Pending -> Responding / child registration / target wait / write / rollback 完整 transaction；
@@ -9847,7 +9839,7 @@ ProcessTerminalQuarantine
 
 当前工作树已闭合一组重点可观察行为：
 
-- `Ros2FastDdsHumble` profile 对 reader/writer history reallocation、同步 publication、
+- `ROS2` RuntimeMode 对 reader/writer history reallocation、同步 publication、
   data sharing off 和 Reliable writer 100 ms blocking timeout 的私有冻结；
 - server pending capacity 的 `available -> full -> available` WaitSet topology mutation，
   从而避免 unread request 在满容量时持续唤醒 WaitSet；

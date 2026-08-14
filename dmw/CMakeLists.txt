@@ -37,16 +37,26 @@ find_package(fastrtps 2.6.10 CONFIG REQUIRED)
 
 add_library(dmw
     src/context.cpp
+    src/impl/context_impl.cpp
     src/client.cpp
+    src/impl/client_impl.cpp
     src/event.cpp
-    src/event_parent_state.cpp
+    src/impl/event_impl.cpp
+    src/impl/event_parent_state.cpp
     src/guard_condition.cpp
-    src/message_type.cpp
+    src/impl/guard_condition_impl.cpp
+    src/fastdds/message_type.cpp
+    src/impl/fastdds/message_type.cpp
     src/node.cpp
+    src/impl/node_impl.cpp
     src/publisher.cpp
+    src/impl/publisher_impl.cpp
     src/server.cpp
+    src/impl/server_impl.cpp
     src/subscriber.cpp
+    src/impl/subscriber_impl.cpp
     src/wait_set.cpp
+    src/impl/wait_set_impl.cpp
 )
 add_library(dmw::dmw ALIAS dmw)
 

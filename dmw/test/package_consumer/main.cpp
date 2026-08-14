@@ -2,6 +2,6 @@
 
 int main() {
     dmw::ContextOptions options;
-    options.compatibility_profile = dmw::CompatibilityProfile::NativeDds;
+    options.runtime_mode = dmw::RuntimeMode::DDS;
     return options.domain_id == 0 ? 0 : 1;
 }

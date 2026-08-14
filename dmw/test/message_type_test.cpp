@@ -67,9 +67,8 @@ public:
 };
 
 static_assert(
-    std::is_same<
-        decltype(dmw::ContextOptions::compatibility_profile), dmw::CompatibilityProfile>::value,
-    "ContextOptions must own CompatibilityProfile");
+    std::is_same<decltype(dmw::ContextOptions::runtime_mode), dmw::RuntimeMode>::value,
+    "ContextOptions must own RuntimeMode");
 static_assert(
     std::is_empty<dmw::PublisherOptions>::value, "PublisherOptions must not override profile");
 static_assert(
@@ -79,6 +78,9 @@ static_assert(std::is_empty<dmw::ClientOptions>::value, "ClientOptions must not 
 }  // namespace
 
 int main() {
+    dmw::ContextOptions default_context_options;
+    assert(default_context_options.runtime_mode == dmw::RuntimeMode::DDS);
+
     auto binding_smoke = dmw::fastdds::make_message_type<NamedTopicDataType>();
     assert(binding_smoke);
     assert(binding_smoke.value().type_name() == "dmw.test.NamedTopicDataType");
@@ -94,11 +96,11 @@ int main() {
 
     dmw::NodeOptions node_options;
     node_options.name = "message_type_test";
-    node_options.ns = "/dmw";
+    node_options.node_namespace = "/dmw";
     auto node = context.value()->create_node(node_options);
     assert(node);
     assert(node.value()->name() == "message_type_test");
-    assert(node.value()->namespace_() == "/dmw");
+    assert(node.value()->node_namespace() == "/dmw");
 
     auto wait_set = context.value()->create_wait_set();
     auto guard = context.value()->create_guard_condition();
@@ -297,12 +299,12 @@ int main() {
     {
         dmw::ContextOptions ros_writer_options;
         ros_writer_options.participant_name = "dmw-ros-profile-writer";
-        ros_writer_options.compatibility_profile = dmw::CompatibilityProfile::Ros2FastDdsHumble;
+        ros_writer_options.runtime_mode = dmw::RuntimeMode::ROS2;
         auto ros_writer_context = dmw::Context::create(ros_writer_options);
         assert(ros_writer_context);
         dmw::ContextOptions ros_reader_options;
         ros_reader_options.participant_name = "dmw-ros-profile-reader";
-        ros_reader_options.compatibility_profile = dmw::CompatibilityProfile::Ros2FastDdsHumble;
+        ros_reader_options.runtime_mode = dmw::RuntimeMode::ROS2;
         auto ros_reader_context = dmw::Context::create(ros_reader_options);
         assert(ros_reader_context);
         auto ros_writer_node = ros_writer_context.value()->create_node(node_options);
@@ -436,7 +438,7 @@ int main() {
 
     dmw::NodeOptions transient_node_options;
     transient_node_options.name = "transient_node";
-    transient_node_options.ns = "/dmw";
+    transient_node_options.node_namespace = "/dmw";
     auto transient_node = context.value()->create_node(transient_node_options);
     assert(transient_node);
     auto node_surviving_publisher =

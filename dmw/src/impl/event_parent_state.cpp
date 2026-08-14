@@ -99,6 +99,7 @@ public:
             if (gate_->in_flight_ == 0) gate_->cv_.notify_all();
         }
         explicit operator bool() const noexcept { return gate_ != nullptr; }
+
     private:
         CallbackInFlightGate* gate_{nullptr};
     };
@@ -114,6 +115,7 @@ public:
         accepting_ = false;
         cv_.wait(lock, [this] { return in_flight_ == 0; });
     }
+
 private:
     RankedMutex<LockRank::ListenerState> mutex_;
     std::condition_variable_any cv_;
@@ -441,7 +443,8 @@ void EventParentState::update(EventType type, EventInfo info) noexcept {
             std::lock_guard lock(mutex);
             const auto next = std::find_if(
                 events.begin(), events.end(),
-                [type, notify_all, notification_limit, previous_registration_id](const EventRecord& record) {
+                [type, notify_all, notification_limit,
+                 previous_registration_id](const EventRecord& record) {
                     return (notify_all || record.type == type) &&
                            record.registration_id > previous_registration_id &&
                            record.registration_id <= notification_limit;
