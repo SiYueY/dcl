@@ -29,6 +29,7 @@ public:
     Result<std::unique_ptr<Server>> create_server(
         const ServiceType&, std::string_view, const Qos&, const ServerOptions&);
 
+private:
     std::shared_ptr<impl::fastdds::ContextState> context_state_;
     std::string name_;
     std::string node_namespace_;

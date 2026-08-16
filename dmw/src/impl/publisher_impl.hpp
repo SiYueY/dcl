@@ -31,6 +31,7 @@ public:
     Result<std::size_t> matched_subscriber_count() const;
     Result<std::unique_ptr<Event>> create_event(EventType type);
 
+private:
     std::shared_ptr<impl::fastdds::ContextState> state_;
     eprosima::fastdds::dds::DataWriter* writer_;
     std::string topic_name_;

@@ -237,7 +237,7 @@ public:
             try {
                 const auto result = native_wait_set_.attach_condition(*wake_->control_condition);
                 if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
-                    return Result<void>::failure(Error(impl::fastdds::return_code_error(
+                    return Result<void>::failure(Error(impl::fastdds::to_error(
                         result, "Fast DDS failed to attach the control condition")));
                 }
                 control_condition_attached_ = true;
@@ -505,7 +505,7 @@ public:
             return Result<void>::success();
         }
         return Result<void>::failure(
-            impl::fastdds::return_code_error(result, "Fast DDS WaitSet wait failed"));
+            impl::fastdds::to_error(result, "Fast DDS WaitSet wait failed"));
     }
 
     Result<void> repair_control_guard_if_needed() noexcept {
@@ -625,7 +625,7 @@ private:
 inline Result<std::uint64_t> add_guard(
     const std::shared_ptr<WaitSetState>& state, const std::shared_ptr<GuardConditionState>& guard,
     WaitableKind kind) {
-    if (guard->context_state != state->context_state_) {
+    if (guard->context() != state->context_state_) {
         return Result<std::uint64_t>::failure(
             Error(ErrorCode::InvalidArgument, "Waitable belongs to another Context"));
     }
@@ -642,7 +642,7 @@ inline Result<std::uint64_t> add_guard(
 inline Result<std::uint64_t> add_reader(
     const std::shared_ptr<WaitSetState>& state,
     const std::shared_ptr<impl::ReaderWaitState>& reader, WaitableKind kind) {
-    if (reader->context_state != state->context_state_) {
+    if (reader->context() != state->context_state_) {
         return Result<std::uint64_t>::failure(
             Error(ErrorCode::InvalidArgument, "Waitable belongs to another Context"));
     }
@@ -668,6 +668,7 @@ public:
     Result<void> remove(WaitToken);
     Result<WaitResult> wait(WaitTimeout);
 
+private:
     std::shared_ptr<impl::WaitSetState> state_;
 };
 

@@ -53,7 +53,7 @@ Result<std::size_t> Publisher::Impl::matched_subscriber_count() const {
     const auto result = writer_->get_publication_matched_status(status);
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<std::size_t>::failure(
-            impl::fastdds::return_code_error(result, "Fast DDS matched subscription query failed"));
+            impl::fastdds::to_error(result, "Fast DDS matched subscription query failed"));
     }
     return Result<std::size_t>::success(static_cast<std::size_t>(status.current_count));
 }

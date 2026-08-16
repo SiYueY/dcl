@@ -110,7 +110,7 @@ Result<std::unique_ptr<Publisher>> Node::Impl::create_publisher(
     if (!logical_name) {
         return Result<std::unique_ptr<Publisher>>::failure(std::move(logical_name.error()));
     }
-    auto writer_qos = impl::fastdds::make_writer_qos(qos, impl_->context_state_->runtime_mode());
+    auto writer_qos = impl::fastdds::to_writer_qos(qos, impl_->context_state_->runtime_mode());
     if (!writer_qos)
         return Result<std::unique_ptr<Publisher>>::failure(std::move(writer_qos.error()));
     const auto operation = impl_->context_state_->try_acquire_operation();
@@ -149,7 +149,7 @@ Result<std::unique_ptr<Subscriber>> Node::Impl::create_subscriber(
     if (!logical_name) {
         return Result<std::unique_ptr<Subscriber>>::failure(std::move(logical_name.error()));
     }
-    auto reader_qos = impl::fastdds::make_reader_qos(qos, impl_->context_state_->runtime_mode());
+    auto reader_qos = impl::fastdds::to_reader_qos(qos, impl_->context_state_->runtime_mode());
     if (!reader_qos)
         return Result<std::unique_ptr<Subscriber>>::failure(std::move(reader_qos.error()));
     const auto operation = impl_->context_state_->try_acquire_operation();
@@ -186,9 +186,9 @@ Result<std::unique_ptr<Client>> Node::Impl::create_client(
     auto logical_name = impl::resolve_name(impl_->node_namespace_, service_name);
     if (!logical_name)
         return Result<std::unique_ptr<Client>>::failure(std::move(logical_name.error()));
-    auto writer_qos = impl::fastdds::make_writer_qos(qos, impl_->context_state_->runtime_mode());
+    auto writer_qos = impl::fastdds::to_writer_qos(qos, impl_->context_state_->runtime_mode());
     if (!writer_qos) return Result<std::unique_ptr<Client>>::failure(std::move(writer_qos.error()));
-    auto reader_qos = impl::fastdds::make_reader_qos(qos, impl_->context_state_->runtime_mode());
+    auto reader_qos = impl::fastdds::to_reader_qos(qos, impl_->context_state_->runtime_mode());
     if (!reader_qos) return Result<std::unique_ptr<Client>>::failure(std::move(reader_qos.error()));
     const auto operation = impl_->context_state_->try_acquire_operation();
     if (!operation)
@@ -252,9 +252,9 @@ Result<std::unique_ptr<Server>> Node::Impl::create_server(
     auto logical_name = impl::resolve_name(impl_->node_namespace_, service_name);
     if (!logical_name)
         return Result<std::unique_ptr<Server>>::failure(std::move(logical_name.error()));
-    auto reader_qos = impl::fastdds::make_reader_qos(qos, impl_->context_state_->runtime_mode());
+    auto reader_qos = impl::fastdds::to_reader_qos(qos, impl_->context_state_->runtime_mode());
     if (!reader_qos) return Result<std::unique_ptr<Server>>::failure(std::move(reader_qos.error()));
-    auto writer_qos = impl::fastdds::make_writer_qos(qos, impl_->context_state_->runtime_mode());
+    auto writer_qos = impl::fastdds::to_writer_qos(qos, impl_->context_state_->runtime_mode());
     if (!writer_qos) return Result<std::unique_ptr<Server>>::failure(std::move(writer_qos.error()));
     const auto operation = impl_->context_state_->try_acquire_operation();
     if (!operation)

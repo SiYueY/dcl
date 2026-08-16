@@ -108,7 +108,7 @@ int main() {
 
         eprosima::fastdds::dds::TypeSupport type_support(new RosStringTypeSupport());
         auto message_type =
-            dmw::fastdds::MessageTypeAccess::create(type_support, typeid(std_msgs::msg::String));
+            dmw::fastdds::MessageTypeAdapter::create(type_support, typeid(std_msgs::msg::String));
         assert(message_type);
         assert(message_type.value().type_name() == kWireTypeName);
 

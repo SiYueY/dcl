@@ -62,7 +62,7 @@ Result<TakeStatus> Event::Impl::take(EventInfo& info) {
     }
     info = difference(current.info, cursor_.info);
     cursor_ = current;
-    wait_state_->pending.store(false, std::memory_order_release);
+    wait_state_->clear_pending();
     return Result<TakeStatus>::success(TakeStatus::Taken);
 }
 

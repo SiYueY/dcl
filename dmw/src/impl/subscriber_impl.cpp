@@ -74,7 +74,7 @@ Result<TakeStatus> Subscriber::Impl::take(void* message, MessageInfo& info) {
             return Result<TakeStatus>::success(TakeStatus::NoData);
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
             return Result<TakeStatus>::failure(
-                impl::fastdds::return_code_error(result, "Fast DDS take failed"));
+                impl::fastdds::to_error(result, "Fast DDS take failed"));
         if (!sample_info.valid_data) continue;
 
         auto committed = sample.value().commit_to(message);
@@ -107,7 +107,7 @@ Result<std::size_t> Subscriber::Impl::matched_publisher_count() const {
     const auto result = reader_->get_subscription_matched_status(status);
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<std::size_t>::failure(
-            impl::fastdds::return_code_error(result, "Fast DDS matched publication query failed"));
+            impl::fastdds::to_error(result, "Fast DDS matched publication query failed"));
     }
     return Result<std::size_t>::success(static_cast<std::size_t>(status.current_count));
 }

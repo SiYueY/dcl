@@ -26,6 +26,6 @@ public:
 }  // namespace
 
 int main() {
-    const auto result = dmw::fastdds::make_message_type<ConsumerTopicDataType>();
+    const auto result = dmw::fastdds::create_message_type<ConsumerTopicDataType>();
     return result ? 0 : 1;
 }

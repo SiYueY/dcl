@@ -22,6 +22,7 @@ public:
         const GuardConditionOptions& options);
     Result<std::unique_ptr<WaitSet>> create_wait_set(const WaitSetOptions& options);
 
+private:
     std::shared_ptr<impl::fastdds::ContextState> state_;
 };
 

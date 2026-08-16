@@ -311,7 +311,7 @@ Result<void> EventParentState::attach(eprosima::fastdds::dds::DataWriter& writer
     listener_cv_.notify_all();
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<void>::failure(
-            fastdds::return_code_error(result, "Fast DDS failed to set a writer listener"));
+            fastdds::to_error(result, "Fast DDS failed to set a writer listener"));
     }
     return Result<void>::success();
 }
@@ -359,7 +359,7 @@ Result<void> EventParentState::attach(eprosima::fastdds::dds::DataReader& reader
     listener_cv_.notify_all();
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<void>::failure(
-            fastdds::return_code_error(result, "Fast DDS failed to set a reader listener"));
+            fastdds::to_error(result, "Fast DDS failed to set a reader listener"));
     }
     return Result<void>::success();
 }
@@ -415,7 +415,7 @@ void EventParentState::update(EventType type, EventInfo info) noexcept {
             notification_limit = next_event_registration_id_ - 1;
             for (const auto& record : events) {
                 if (const auto event = record.event.lock()) {
-                    event->pending.store(true, std::memory_order_release);
+                    event->set_pending();
                 }
             }
         } else {
@@ -429,7 +429,7 @@ void EventParentState::update(EventType type, EventInfo info) noexcept {
             for (const auto& record : events) {
                 if (record.type == type) {
                     if (const auto event = record.event.lock()) {
-                        event->pending.store(true, std::memory_order_release);
+                        event->set_pending();
                     }
                 }
             }

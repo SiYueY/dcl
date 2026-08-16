@@ -83,9 +83,9 @@ make_ros2_message_type<T>();
 ```cpp
 template<class PubSubTypeT>
 Result<MessageType>
-make_message_type();
+create_message_type();
 
-MessageTypeAccess::create(
+MessageTypeAdapter::create(
     type_support,
     std::type_index);
 ```
@@ -103,7 +103,7 @@ Fast DDS 实现遵循以下原则：
 
 #### 1.4.1 内部命名空间与 `Info` 约定
 
-Fast DDS 专用实现类型必须位于 `dmw::impl::fastdds`；`dmw::impl` 只保留 `ContextState`、`NodeState`、`WaitableState`、`RegistrationState` 等 runtime/concurrency authority。根 `src/*.cpp` 不直接调用或包含 Fast DDS runtime；公开 binding API 与 `MessageTypeAccess` 均位于 `dmw::fastdds`，其实现通过私有 Impl bridge 转发。
+Fast DDS 专用实现类型必须位于 `dmw::impl::fastdds`；`dmw::impl` 只保留 `ContextState`、`NodeState`、`WaitableState`、`RegistrationState` 等 runtime/concurrency authority。根 `src/*.cpp` 不直接调用或包含 Fast DDS runtime；公开 binding API 与 `MessageTypeAdapter` 均位于 `dmw::fastdds`，其实现通过私有 Impl bridge 转发。
 
 ```cpp
 namespace dmw::impl::fastdds
@@ -1656,7 +1656,7 @@ TypeMismatch
 
 #### 4.2.1 Message Binding Integration Contract
 
-make_message_type<PubSubTypeT>() 接受的是 trusted integration binding，
+create_message_type<PubSubTypeT>() 接受的是 trusted integration binding，
 而不是 DMW 可以完全运行时验证的任意 C++ 类型。
 
 V1 对 PubSubTypeT / TopicDataType binding 冻结以下要求。
@@ -1698,7 +1698,7 @@ same BindingIdentity
 
 第一次成功创建该 TypeEntry 的 descriptor 成为：
 canonical descriptor。
-后续独立 `make_message_type<PubSubTypeT>()` 即使拥有不同 `MessageType::Impl`，
+后续独立 `create_message_type<PubSubTypeT>()` 即使拥有不同 `MessageType::Impl`，
 只要 BindingIdentity 相同，也只是等价 candidate；
 `TypeRegistry::acquire()` 成功后不得继续使用 caller candidate 执行 TypeSupport serialization hook，
 必须使用 `TypeLease::canonical_binding()`。
@@ -1888,16 +1888,16 @@ ROS2 mode 下用于 interoperability test 的 binding
 或提供逐字节等价的 wire type name 与 CDR behavior。
 任意 custom binding 不因选择 ROS2 mode 而自动获得认证。
 
-##### 4.2.1.1 MessageTypeAccess::create() Bridge Contract
+##### 4.2.1.1 MessageTypeAdapter::create() Bridge Contract
 
-`MessageTypeAccess::create()` 是 public template binding 与 implementation-private `MessageType::Impl` 之间唯一 construction bridge。
+`MessageTypeAdapter::create()` 是 public template binding 与 implementation-private `MessageType::Impl` 之间唯一 construction bridge。
 
 固定输入/输出协议：
 
 ```cpp
 static Result<MessageType> create(
     TypeSupportHandle type_support,
-    std::type_index binding_type);
+    std::type_index pubsub_type);
 ```
 
 实现顺序：
@@ -1906,7 +1906,7 @@ static Result<MessageType> create(
 3. 调用 frozen Fast DDS binding 的 `getName()`/等价 API 取得 exact wire type name；
 4. wire type name 为空 -> `InvalidArgument`；
 5. checked copy immutable wire type name；
-6. 构造 `BindingIdentity{binding_implementation_id, binding_type}`；
+6. 构造 `BindingIdentity{binding_implementation_id, pubsub_type}`；
 7. allocate immutable `MessageType::Impl`；
 8. Impl strong-own TypeSupport integration object；
 9. commit `MessageType` facade。
@@ -2399,7 +2399,7 @@ TemporarySample
 service serialization path
 全部观察同一 Degraded state。
 
-独立 `make_message_type()` descriptor 不能通过重新 acquire 同 key 绕过 degradation；
+独立 `create_message_type()` descriptor 不能通过重新 acquire 同 key 绕过 degradation；
 它只得到同一个 canonical TypeLease。
 
 #### 4.8.2 Type Release
@@ -8875,7 +8875,7 @@ reception sequence == nullopt
 
 #### 11.18.1 Binding / Identity Tests
 
-MessageTypeAccess::create：
+MessageTypeAdapter::create：
 empty wire name -> InvalidArgument
 getName non-bad_alloc exception -> propagates unchanged
 allocation bad_alloc -> propagates
@@ -8891,7 +8891,7 @@ move assignment safely releases/quarantines old backing before ownership transfe
 Canonical binding capability：
 first descriptor for absent TypeEntry becomes canonical
 same MessageType cheap-copies in one Context acquire same CanonicalTypeBinding
-independent make_message_type() descriptors with same wire name + BindingIdentity in same Context
+independent create_message_type() descriptors with same wire name + BindingIdentity in same Context
     -> acquire same TypeEntry
     -> receive same canonical binding
     -> caller candidate is not used for endpoint serialization after acquire

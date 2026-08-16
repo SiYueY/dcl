@@ -37,7 +37,7 @@ public:
 }  // namespace
 
 int main() {
-    auto type = dmw::fastdds::make_message_type<IntTopicDataType>();
+    auto type = dmw::fastdds::create_message_type<IntTopicDataType>();
     assert(type);
     auto sample = dmw::impl::TemporarySample::create(type.value());
     assert(sample);

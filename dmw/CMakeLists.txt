@@ -45,7 +45,7 @@ add_library(dmw
     src/impl/event_parent_state.cpp
     src/guard_condition.cpp
     src/impl/guard_condition_impl.cpp
-    src/fastdds/message_type.cpp
+    src/message_type.cpp
     src/impl/fastdds/message_type.cpp
     src/node.cpp
     src/impl/node_impl.cpp

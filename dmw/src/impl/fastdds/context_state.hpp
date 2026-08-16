@@ -165,10 +165,10 @@ private:
 
     struct RegisteredType {
         RegisteredType(MessageType descriptor, std::type_index identity) noexcept
-        : type(std::move(descriptor)), binding_type(identity) {}
+        : type(std::move(descriptor)), pubsub_type(identity) {}
 
         MessageType type;
-        std::type_index binding_type;
+        std::type_index pubsub_type;
         RegistryEntryPhase phase{RegistryEntryPhase::Creating};
         std::size_t endpoint_reference_count{0};
     };

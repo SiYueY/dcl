@@ -146,7 +146,7 @@ Result<void> ContextState::install_discovery_listener() noexcept {
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
             DmwProcessRuntime::instance().retain_participant_listener(std::move(listener));
             return Result<void>::failure(
-                return_code_error(result, "Fast DDS failed to install discovery listener"));
+                to_error(result, "Fast DDS failed to install discovery listener"));
         }
         participant_listener_ = std::move(listener);
         return Result<void>::success();
@@ -341,16 +341,16 @@ void ContextState::unregister_shutdown_callback(std::uint64_t id) noexcept {
 
 Result<ContextState::TypeLease> ContextState::acquire_type(const MessageType& type) {
     const std::string type_name(type.type_name());
-    const auto binding_type = dmw::fastdds::MessageTypeAccess::binding_type(type);
+    const auto pubsub_type = dmw::fastdds::MessageTypeAdapter::pubsub_type(type);
     {
         std::unique_lock lock(type_registry_mutex_);
         while (true) {
             const auto type_it = registered_types_.find(type_name);
             if (type_it == registered_types_.end()) {
-                registered_types_.emplace(type_name, RegisteredType(type, binding_type));
+                registered_types_.emplace(type_name, RegisteredType(type, pubsub_type));
                 break;
             }
-            if (type_it->second.binding_type != binding_type) {
+            if (type_it->second.pubsub_type != pubsub_type) {
                 return Result<TypeLease>::failure(
                     Error(ErrorCode::TypeMismatch, "DDS wire type name has a different binding"));
             }
@@ -368,7 +368,7 @@ Result<ContextState::TypeLease> ContextState::acquire_type(const MessageType& ty
 
     eprosima::fastrtps::types::ReturnCode_t result;
     try {
-        result = participant_->register_type(dmw::fastdds::MessageTypeAccess::type_support(type));
+        result = participant_->register_type(dmw::fastdds::MessageTypeAdapter::type_support(type));
     } catch (...) {
         {
             std::lock_guard lock(type_registry_mutex_);
@@ -394,7 +394,7 @@ Result<ContextState::TypeLease> ContextState::acquire_type(const MessageType& ty
     type_registry_cv_.notify_all();
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<TypeLease>::failure(
-            return_code_error(result, "Fast DDS failed to register the message type"));
+            to_error(result, "Fast DDS failed to register the message type"));
     }
     return Result<TypeLease>::success(TypeLease(this, type_name));
 }

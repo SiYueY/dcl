@@ -10,7 +10,7 @@
 namespace dmw {
 
 namespace fastdds {
-class MessageTypeAccess;
+class MessageTypeAdapter;
 }  // namespace fastdds
 
 /// Cheap-copy handle to an immutable middleware type binding descriptor.
@@ -25,7 +25,7 @@ public:
     std::string_view type_name() const noexcept;
 
 private:
-    friend class fastdds::MessageTypeAccess;
+    friend class fastdds::MessageTypeAdapter;
 
     class Impl;
 

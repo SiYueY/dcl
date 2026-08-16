@@ -17,13 +17,6 @@ namespace dmw {
 
 class Server::Impl {
 public:
-    enum class PendingPhase { Pending, Responding };
-
-    struct PendingRequest {
-        eprosima::fastrtps::rtps::SampleIdentity sample_identity;
-        PendingPhase phase{PendingPhase::Pending};
-    };
-
     Impl(
         std::shared_ptr<impl::fastdds::ContextState> state,
         eprosima::fastdds::dds::DataReader* request_reader,
@@ -50,6 +43,17 @@ public:
     std::string_view service_name() const noexcept { return service_name_; }
     Result<TakeStatus> take_request(void* request, RequestId& request_id);
     Result<void> send_response(const RequestId& request_id, const void* response);
+    const std::shared_ptr<impl::ReaderWaitState>& wait_state() const noexcept {
+        return request_wait_state_;
+    }
+
+private:
+    enum class PendingPhase { Pending, Responding };
+
+    struct PendingRequest {
+        eprosima::fastrtps::rtps::SampleIdentity sample_identity;
+        PendingPhase phase{PendingPhase::Pending};
+    };
 
     bool reserve_request_slot(bool& became_full) noexcept {
         std::lock_guard lock(pending_mutex_);

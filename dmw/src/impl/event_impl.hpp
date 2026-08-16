@@ -23,14 +23,14 @@ public:
 
     ~Impl() noexcept {
         parent_->unregister_event(registration_id_);
-        wait_state_->closing.store(true, std::memory_order_release);
-        wait_state_->detach_wait_set();
-        wait_state_->notify_wait_set();
+        wait_state_->close();
     }
 
     EventType type() const noexcept { return type_; }
     Result<TakeStatus> take(EventInfo& info);
+    const std::shared_ptr<GuardConditionState>& wait_state() const noexcept { return wait_state_; }
 
+private:
     std::shared_ptr<impl::EventParentState> parent_;
     EventType type_;
     std::shared_ptr<GuardConditionState> wait_state_;

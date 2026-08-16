@@ -106,7 +106,7 @@ Result<TakeStatus> Client::Impl::take_response(void* response, RequestId& reques
             return Result<TakeStatus>::success(TakeStatus::NoData);
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
             return Result<TakeStatus>::failure(
-                impl::fastdds::return_code_error(result, "Fast DDS response take failed"));
+                impl::fastdds::to_error(result, "Fast DDS response take failed"));
         if (!info.valid_data) continue;
         const auto& related_guid = info.related_sample_identity.writer_guid();
         if (related_guid != request_writer_->guid() && related_guid != response_reader_->guid()) {

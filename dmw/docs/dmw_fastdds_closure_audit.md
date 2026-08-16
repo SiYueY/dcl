@@ -7,8 +7,8 @@
 | 属性 | 值 |
 | --- | --- |
 | 审计基线 Git revision | `fc3492fe301d90fa971df916d2743245349f0350`（含未提交工作树） |
-| `dmw.md` SHA-256 | `517424dc5e2bd298f643097727ae0dceceeefce31ff546aa236fc965b4961a4c` |
-| `dmw_fastdds.md` SHA-256 | `557852698b5d7fd13fa5e7d5bcc9f9ff460f2552ddef1faeac6457f6f6cfad06` |
+| `dmw.md` SHA-256 | `b9a453416ad0a97c3dc084dbb5e221f98ec8bef5d2edc9dc7201f2656c0ddb9a` |
+| `dmw_fastdds.md` SHA-256 | `401e3ac19583155307df5ac58cad5116f959ceaf0897e3cf80c63c4c7eeb82aa` |
 | 审计标准 | 实现优先：实现存在才可闭合；测试缺口单列，不将测试成功外推为规格等价 |
 | 总结 | **未闭合。** 公共契约及一组关键数据路径已实现；完整内部状态机、失败证据和验证矩阵尚未完成。 |
 

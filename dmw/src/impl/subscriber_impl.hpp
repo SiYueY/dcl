@@ -31,7 +31,11 @@ public:
     const MessageType& message_type() const noexcept { return type_; }
     Result<std::size_t> matched_publisher_count() const;
     Result<std::unique_ptr<Event>> create_event(EventType type);
+    const std::shared_ptr<impl::ReaderWaitState>& wait_state() const noexcept {
+        return wait_state_;
+    }
 
+private:
     std::shared_ptr<impl::fastdds::ContextState> state_;
     eprosima::fastdds::dds::DataReader* reader_;
     std::string topic_name_;

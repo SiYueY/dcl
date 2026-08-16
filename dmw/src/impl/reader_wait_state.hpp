@@ -17,11 +17,18 @@ namespace dmw {
 namespace impl {
 
 /// Keeps a DataReader usable while a non-owning WaitSet registration exists.
-struct ReaderWaitState {
+struct Registration;
+class WaitSetState;
+class ReaderWaitStateTestAccess;
+
+class ReaderWaitState {
+public:
     enum class Lifecycle { Open, DeleteDeferredByWaitSet, Closed };
     ReaderWaitState(
         std::shared_ptr<fastdds::ContextState> context, eprosima::fastdds::dds::DataReader* value)
     : context_state(std::move(context)), reader(value) {}
+
+    const std::shared_ptr<fastdds::ContextState>& context() const noexcept { return context_state; }
 
     bool is_ready() noexcept {
         std::lock_guard<std::mutex> lock(reader_mutex);
@@ -118,6 +125,11 @@ struct ReaderWaitState {
         if (callback) callback(enabled);
         notify_wait_set();
     }
+
+private:
+    friend struct Registration;
+    friend class WaitSetState;
+    friend class ReaderWaitStateTestAccess;
 
     std::shared_ptr<fastdds::ContextState> context_state;
     std::atomic<bool> closing{false};

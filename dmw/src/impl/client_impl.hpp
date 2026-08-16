@@ -41,7 +41,11 @@ public:
     Result<RequestId> send_request(const void* request);
     Result<TakeStatus> take_response(void* response, RequestId& request_id);
     Result<bool> service_is_available() const;
+    const std::shared_ptr<impl::ReaderWaitState>& wait_state() const noexcept {
+        return response_wait_state_;
+    }
 
+private:
     std::shared_ptr<impl::fastdds::ContextState> state_;
     eprosima::fastdds::dds::DataWriter* request_writer_;
     eprosima::fastdds::dds::DataReader* response_reader_;

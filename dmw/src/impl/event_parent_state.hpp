@@ -72,9 +72,7 @@ public:
         }
         for (const auto& record : records) {
             if (const auto event = record.event.lock()) {
-                event->closing.store(true, std::memory_order_release);
-                event->detach_wait_set();
-                event->notify_wait_set();
+                event->close();
             }
         }
     }

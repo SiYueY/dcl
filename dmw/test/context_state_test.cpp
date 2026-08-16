@@ -7,6 +7,21 @@
 #include "impl/fastdds/context_state.hpp"
 #include "impl/reader_wait_state.hpp"
 
+namespace dmw {
+namespace impl {
+
+class ReaderWaitStateTestAccess {
+public:
+    static void set_claim_in_progress(const std::shared_ptr<ReaderWaitState>& state, bool value) {
+        std::lock_guard lock(state->callback_mutex);
+        state->claim_in_progress = value;
+        if (!value) state->callback_cv.notify_all();
+    }
+};
+
+}  // namespace impl
+}  // namespace dmw
+
 int main() {
     auto state = std::make_shared<dmw::impl::fastdds::ContextState>(
         nullptr, nullptr, nullptr, nullptr, 17U, dmw::RuntimeMode::DDS);
@@ -78,10 +93,7 @@ int main() {
     assert(observations->capability() == dmw::impl::DiscoveryCapability::Degraded);
 
     auto reader_wait_state = std::make_shared<dmw::impl::ReaderWaitState>(second_state, nullptr);
-    {
-        std::lock_guard lock(reader_wait_state->callback_mutex);
-        reader_wait_state->claim_in_progress = true;
-    }
+    dmw::impl::ReaderWaitStateTestAccess::set_claim_in_progress(reader_wait_state, true);
     std::atomic<bool> reader_closed{false};
     std::thread reader_close_thread([&] {
         assert(reader_wait_state->close());
@@ -89,11 +101,7 @@ int main() {
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     assert(!reader_closed.load(std::memory_order_acquire));
-    {
-        std::lock_guard lock(reader_wait_state->callback_mutex);
-        reader_wait_state->claim_in_progress = false;
-        reader_wait_state->callback_cv.notify_all();
-    }
+    dmw::impl::ReaderWaitStateTestAccess::set_claim_in_progress(reader_wait_state, false);
     reader_close_thread.join();
     assert(reader_closed.load(std::memory_order_acquire));
     return 0;

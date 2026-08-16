@@ -18,8 +18,6 @@
 
 namespace dmw {
 
-#define impl_ this
-
 namespace {
 
 bool is_reader_guid(const eprosima::fastrtps::rtps::GUID_t& guid) noexcept {
@@ -94,7 +92,7 @@ Result<TakeStatus> Server::Impl::take_request(void* request, RequestId& request_
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
             if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
             return Result<TakeStatus>::failure(
-                impl::fastdds::return_code_error(result, "Fast DDS request take failed"));
+                impl::fastdds::to_error(result, "Fast DDS request take failed"));
         }
         if (!info.valid_data) {
             if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
@@ -172,25 +170,23 @@ Result<void> Server::Impl::send_response(const RequestId& request_id, const void
     if (has_target_reader) {
         impl::ResponseWriterMatchState::WaitStatus target;
         try {
-            target = impl_->response_match_state_->wait_for_match(
+            target = response_match_state_->wait_for_match(
                 sample_identity.writer_guid(), response_deadline);
         } catch (...) {
-            std::lock_guard lock(impl_->pending_mutex_);
-            const auto pending = impl_->pending_.find(request_id);
-            if (pending != impl_->pending_.end())
-                pending->second.phase = Impl::PendingPhase::Pending;
+            std::lock_guard lock(pending_mutex_);
+            const auto pending = pending_.find(request_id);
+            if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
             throw;
         }
         if (target != impl::ResponseWriterMatchState::WaitStatus::Matched) {
             if (target == impl::ResponseWriterMatchState::WaitStatus::Removed) {
-                if (impl_->release_pending_request(request_id))
-                    impl_->request_wait_state_->set_blocking_enabled(true);
+                if (release_pending_request(request_id))
+                    request_wait_state_->set_blocking_enabled(true);
                 return Result<void>::success();
             }
-            std::lock_guard lock(impl_->pending_mutex_);
-            const auto pending = impl_->pending_.find(request_id);
-            if (pending != impl_->pending_.end())
-                pending->second.phase = Impl::PendingPhase::Pending;
+            std::lock_guard lock(pending_mutex_);
+            const auto pending = pending_.find(request_id);
+            if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
             if (target == impl::ResponseWriterMatchState::WaitStatus::Degraded) {
                 return Result<void>::failure(
                     Error(ErrorCode::DdsError, "Response reader discovery state is unavailable"));
@@ -203,40 +199,37 @@ Result<void> Server::Impl::send_response(const RequestId& request_id, const void
     // Commit-point recheck: an operation guard only prevents destruction, not
     // transition to Context shutdown or a terminal discovery update while the
     // response target wait was in progress.
-    if (impl_->state_->is_shutdown()) {
-        std::lock_guard lock(impl_->pending_mutex_);
-        const auto pending = impl_->pending_.find(request_id);
-        if (pending != impl_->pending_.end()) pending->second.phase = Impl::PendingPhase::Pending;
+    if (state_->is_shutdown()) {
+        std::lock_guard lock(pending_mutex_);
+        const auto pending = pending_.find(request_id);
+        if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
         return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
     if (has_target_reader) {
-        auto final_target =
-            impl_->response_match_state_->check_target(sample_identity.writer_guid());
+        auto final_target = response_match_state_->check_target(sample_identity.writer_guid());
         if (final_target == impl::ResponseWriterMatchState::WaitStatus::Timeout) {
             try {
                 // A match may disappear transiently between the first wait
                 // and the write commit.  Continue only until the original
                 // absolute deadline; never start a second 100 ms interval.
-                final_target = impl_->response_match_state_->wait_for_match(
+                final_target = response_match_state_->wait_for_match(
                     sample_identity.writer_guid(), response_deadline);
             } catch (...) {
-                std::lock_guard lock(impl_->pending_mutex_);
-                const auto pending = impl_->pending_.find(request_id);
-                if (pending != impl_->pending_.end())
-                    pending->second.phase = Impl::PendingPhase::Pending;
+                std::lock_guard lock(pending_mutex_);
+                const auto pending = pending_.find(request_id);
+                if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
                 throw;
             }
         }
         if (final_target == impl::ResponseWriterMatchState::WaitStatus::Removed) {
-            if (impl_->release_pending_request(request_id))
-                impl_->request_wait_state_->set_blocking_enabled(true);
+            if (release_pending_request(request_id))
+                request_wait_state_->set_blocking_enabled(true);
             return Result<void>::success();
         }
         if (final_target != impl::ResponseWriterMatchState::WaitStatus::Matched) {
-            std::lock_guard lock(impl_->pending_mutex_);
-            const auto pending = impl_->pending_.find(request_id);
-            if (pending != impl_->pending_.end())
-                pending->second.phase = Impl::PendingPhase::Pending;
+            std::lock_guard lock(pending_mutex_);
+            const auto pending = pending_.find(request_id);
+            if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
             if (final_target == impl::ResponseWriterMatchState::WaitStatus::Degraded) {
                 return Result<void>::failure(
                     Error(ErrorCode::DdsError, "Response reader discovery state is unavailable"));
@@ -249,22 +242,21 @@ Result<void> Server::Impl::send_response(const RequestId& request_id, const void
     eprosima::fastrtps::rtps::WriteParams params;
     params.related_sample_identity(sample_identity);
     try {
-        if (impl_->response_writer_->write(const_cast<void*>(response), params)) {
-            if (impl_->release_pending_request(request_id))
-                impl_->request_wait_state_->set_blocking_enabled(true);
+        if (response_writer_->write(const_cast<void*>(response), params)) {
+            if (release_pending_request(request_id))
+                request_wait_state_->set_blocking_enabled(true);
             return Result<void>::success();
         }
-        std::lock_guard lock(impl_->pending_mutex_);
-        const auto pending = impl_->pending_.find(request_id);
-        if (pending != impl_->pending_.end()) pending->second.phase = Impl::PendingPhase::Pending;
+        std::lock_guard lock(pending_mutex_);
+        const auto pending = pending_.find(request_id);
+        if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
         return Result<void>::failure(Error(ErrorCode::DdsError, "Fast DDS response write failed"));
     } catch (...) {
-        std::lock_guard lock(impl_->pending_mutex_);
-        const auto pending = impl_->pending_.find(request_id);
-        if (pending != impl_->pending_.end()) pending->second.phase = Impl::PendingPhase::Pending;
+        std::lock_guard lock(pending_mutex_);
+        const auto pending = pending_.find(request_id);
+        if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
         throw;
     }
 }
 
-#undef impl_
 }  // namespace dmw

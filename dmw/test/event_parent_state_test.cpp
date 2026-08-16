@@ -15,7 +15,7 @@ int main() {
 
     auto event = std::make_shared<dmw::GuardConditionState>(context);
     std::atomic<std::size_t> wake_count{0};
-    event->wake_callback = [&wake_count] { ++wake_count; };
+    event->set_wake_callback([&wake_count] { ++wake_count; });
     const auto registration =
         source->register_event(dmw::EventType::RequestedIncompatibleQos, event);
     assert(registration != 0);
@@ -24,9 +24,9 @@ int main() {
     source->update(
         dmw::EventType::RequestedIncompatibleQos,
         dmw::IncompatibleQosInfo{1, 1, dmw::QosPolicyKind::Reliability});
-    assert(event->pending.load());
+    assert(event->is_pending());
     assert(wake_count.load() == 1);
-    event->pending.store(false);
+    event->clear_pending();
     source->unregister_event(registration);
     assert(source->event_registration_count() == 0);
 

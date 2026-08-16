@@ -15,7 +15,7 @@ namespace impl {
 class TemporarySample {
 public:
     static Result<TemporarySample> create(const MessageType& type) {
-        const auto support = dmw::fastdds::MessageTypeAccess::type_support(type);
+        const auto support = dmw::fastdds::MessageTypeAdapter::type_support(type);
         void* data = support->createData();
         if (data == nullptr) {
             return Result<TemporarySample>::failure(

@@ -1776,7 +1776,7 @@ handle 改为引用另一个不可变 descriptor，并不修改已有 descriptor
 ```cpp
 namespace fastdds
 {
-class MessageTypeAccess;
+class MessageTypeAdapter;
 }
 
 class MessageType
@@ -1794,7 +1794,7 @@ public:
     type_name() const noexcept;
 
 private:
-    friend class fastdds::MessageTypeAccess;
+    friend class fastdds::MessageTypeAdapter;
 
     class Impl;
 
@@ -1838,23 +1838,23 @@ bool valid();
 namespace dmw::fastdds
 {
 
-class MessageTypeAccess
+class MessageTypeAdapter
 {
 public:
     static Result<MessageType> create(
         eprosima::fastdds::dds::TypeSupport
             type_support,
-        std::type_index binding_type);
+        std::type_index pubsub_type);
 
     static const eprosima::fastdds::dds::TypeSupport& type_support(
         const MessageType& message_type) noexcept;
 
-    static std::type_index binding_type(const MessageType& message_type) noexcept;
+    static std::type_index pubsub_type(const MessageType& message_type) noexcept;
 };
 
 template<class PubSubTypeT>
 Result<MessageType>
-make_message_type();
+create_message_type();
 
 }
 ```
@@ -1862,11 +1862,11 @@ make_message_type();
 构造路径固定为：
 
 ```text
-make_message_type<PubSubTypeT>()
+create_message_type<PubSubTypeT>()
         ↓
 construct PubSubTypeT
         ↓
-fastdds::MessageTypeAccess::create(
+fastdds::MessageTypeAdapter::create(
     type_support,
     typeid(PubSubTypeT))
         ↓
@@ -1875,12 +1875,12 @@ MessageType::Impl::create(...)
 完整有效的 MessageType handle
 ```
 
-`fastdds::MessageTypeAccess` 只服务于 binding integration，不属于普通 runtime
+`fastdds::MessageTypeAdapter` 只服务于 binding integration，不属于普通 runtime
 consumer API。它是唯一可以构造 `MessageType::Impl` 并调用 private
-`MessageType` 构造函数的 integration access point；`make_message_type()` 不绕过
+`MessageType` 构造函数的 integration access point；`create_message_type()` 不绕过
 `Impl::create()` 的验证和错误返回。
 
-`MessageTypeAccess` 的完整声明只出现在 Fast DDS binding header；普通
+`MessageTypeAdapter` 的完整声明只出现在 Fast DDS binding header；普通
 `dmw/message_type.hpp` 仅 forward declare 它，因此核心 public header 不出现任何
 Fast DDS/Fast CDR 类型。
 
@@ -1928,8 +1928,8 @@ V1 `dmw::fastdds_binding` 可以通过：
 两个独立构造的 MessageType：
 
 ```cpp
-auto a = make_message_type<FooPubSubType>();
-auto b = make_message_type<FooPubSubType>();
+auto a = create_message_type<FooPubSubType>();
+auto b = create_message_type<FooPubSubType>();
 ```
 
 如果：
