@@ -14,11 +14,15 @@ Result<std::unique_ptr<Context>> Context::create(const ContextOptions& options) 
 }
 
 Context::Context(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+
 Context::~Context() noexcept {
     if (impl_) (void)impl_->shutdown();
 }
+
 std::uint32_t Context::domain_id() const noexcept { return impl_->domain_id(); }
+
 bool Context::is_shutdown() const noexcept { return impl_->is_shutdown(); }
+
 Result<void> Context::shutdown() { return impl_->shutdown(); }
 
 Result<std::unique_ptr<Node>> Context::create_node(const NodeOptions& options) {

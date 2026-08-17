@@ -56,27 +56,34 @@ public:
         if (capability_.load(std::memory_order_acquire) != DiscoveryCapability::Healthy) return;
         for (auto& entry : entries_) {
             if (entry.guid != guid) continue;
-            if (removed) entry.lifecycle = RemoteEndpointLifecycle::Removed;
+            if (removed)
+                entry.lifecycle = RemoteEndpointLifecycle::Removed;
             else if (entry.lifecycle == RemoteEndpointLifecycle::Removed) {
                 capability_.store(DiscoveryCapability::Degraded, std::memory_order_release);
             }
             return;
         }
         entries_.push_back(RemoteEndpointObservation{
-            guid, RemoteEndpointKind::Reader, {}, {}, std::move(participant),
+            guid,
+            RemoteEndpointKind::Reader,
+            {},
+            {},
+            std::move(participant),
             removed ? RemoteEndpointLifecycle::Removed : RemoteEndpointLifecycle::Active});
     }
 
     void observe_noexcept(
         const eprosima::fastrtps::rtps::GUID_t& guid,
         std::shared_ptr<ParticipantObservationEntry> participant, bool removed) noexcept {
-        try { observe(guid, std::move(participant), removed); }
-        catch (...) { capability_.store(DiscoveryCapability::Degraded, std::memory_order_release); }
+        try {
+            observe(guid, std::move(participant), removed);
+        } catch (...) {
+            capability_.store(DiscoveryCapability::Degraded, std::memory_order_release);
+        }
         notify_dependents();
     }
 
-    Snapshot snapshot(
-        const eprosima::fastrtps::rtps::GUID_t& guid) const noexcept {
+    Snapshot snapshot(const eprosima::fastrtps::rtps::GUID_t& guid) const noexcept {
         if (capability_.load(std::memory_order_acquire) != DiscoveryCapability::Healthy) {
             return Snapshot{RemoteEndpointObservationState::Degraded, {}};
         }
@@ -118,8 +125,11 @@ private:
             return;
         }
         for (const auto& wake : wakes) {
-            try { wake(); }
-            catch (...) { capability_.store(DiscoveryCapability::Degraded, std::memory_order_release); }
+            try {
+                wake();
+            } catch (...) {
+                capability_.store(DiscoveryCapability::Degraded, std::memory_order_release);
+            }
         }
     }
 
@@ -132,14 +142,14 @@ private:
 class RemoteEndpointRegistry {
 public:
     void observe(
-        const eprosima::fastrtps::rtps::GUID_t& guid, RemoteEndpointKind kind,
-        std::string topic, std::string type, std::shared_ptr<ParticipantObservationEntry> participant,
-        bool removed) {
+        const eprosima::fastrtps::rtps::GUID_t& guid, RemoteEndpointKind kind, std::string topic,
+        std::string type, std::shared_ptr<ParticipantObservationEntry> participant, bool removed) {
         std::lock_guard lock(mutex_);
         if (capability_.load(std::memory_order_acquire) != DiscoveryCapability::Healthy) return;
         for (auto& entry : entries_) {
             if (entry.guid == guid) {
-                if (removed) entry.lifecycle = RemoteEndpointLifecycle::Removed;
+                if (removed)
+                    entry.lifecycle = RemoteEndpointLifecycle::Removed;
                 else if (entry.lifecycle == RemoteEndpointLifecycle::Removed) {
                     capability_.store(DiscoveryCapability::Degraded, std::memory_order_release);
                 }
@@ -154,11 +164,18 @@ public:
         const eprosima::fastrtps::rtps::GUID_t& guid, RemoteEndpointKind kind,
         const std::string& topic, const std::string& type,
         std::shared_ptr<ParticipantObservationEntry> participant, bool removed) noexcept {
-        try { observe(guid, kind, topic, type, std::move(participant), removed); }
-        catch (...) { capability_.store(DiscoveryCapability::Degraded, std::memory_order_release); }
+        try {
+            observe(guid, kind, topic, type, std::move(participant), removed);
+        } catch (...) {
+            capability_.store(DiscoveryCapability::Degraded, std::memory_order_release);
+        }
     }
-    DiscoveryCapability capability() const noexcept { return capability_.load(std::memory_order_acquire); }
-    void degrade() noexcept { capability_.store(DiscoveryCapability::Degraded, std::memory_order_release); }
+    DiscoveryCapability capability() const noexcept {
+        return capability_.load(std::memory_order_acquire);
+    }
+    void degrade() noexcept {
+        capability_.store(DiscoveryCapability::Degraded, std::memory_order_release);
+    }
 
     RemoteEndpointObservationState lookup(
         const eprosima::fastrtps::rtps::GUID_t& guid) const noexcept {
@@ -212,6 +229,7 @@ public:
         if (request_reader && response_writer) return ServicePairObservation::Complete;
         return relevant ? ServicePairObservation::Incomplete : ServicePairObservation::Unknown;
     }
+
 public:
     void notify_dependents() noexcept {
         std::vector<std::function<void()>> wakes;
@@ -223,9 +241,14 @@ public:
             return;
         }
         for (const auto& wake : wakes) {
-            try { wake(); } catch (...) { degrade(); }
+            try {
+                wake();
+            } catch (...) {
+                degrade();
+            }
         }
     }
+
 private:
     mutable RankedMutex<LockRank::RemoteEndpoint> mutex_;
     std::atomic<DiscoveryCapability> capability_{DiscoveryCapability::Healthy};
@@ -257,7 +280,8 @@ public:
                         capability_.store(DiscoveryCapability::Degraded, std::memory_order_release);
                         return {};
                     }
-                    entry->lifecycle.store(ParticipantLifecycle::Removed, std::memory_order_release);
+                    entry->lifecycle.store(
+                        ParticipantLifecycle::Removed, std::memory_order_release);
                     entry->generation.store(generation + 1, std::memory_order_release);
                 }
                 return entry;
@@ -282,7 +306,8 @@ public:
         return {};
     }
 
-    void observe_noexcept(const eprosima::fastrtps::rtps::GuidPrefix_t& prefix, bool removed) noexcept {
+    void observe_noexcept(
+        const eprosima::fastrtps::rtps::GuidPrefix_t& prefix, bool removed) noexcept {
         try {
             (void)observe(prefix, removed);
             notify_dependents();
@@ -291,8 +316,12 @@ public:
         }
     }
 
-    DiscoveryCapability capability() const noexcept { return capability_.load(std::memory_order_acquire); }
-    void degrade() noexcept { capability_.store(DiscoveryCapability::Degraded, std::memory_order_release); }
+    DiscoveryCapability capability() const noexcept {
+        return capability_.load(std::memory_order_acquire);
+    }
+    void degrade() noexcept {
+        capability_.store(DiscoveryCapability::Degraded, std::memory_order_release);
+    }
 
     void add_dependency_wake(std::function<void()> wake) {
         std::lock_guard lock(mutex_);
@@ -315,17 +344,24 @@ private:
             return;
         }
         for (const auto& wake : wakes) {
-            try { wake(); } catch (...) { degrade(); }
+            try {
+                wake();
+            } catch (...) {
+                degrade();
+            }
         }
     }
 };
 
-class ParticipantObservationListener final : public eprosima::fastdds::dds::DomainParticipantListener {
+class ParticipantObservationListener final
+: public eprosima::fastdds::dds::DomainParticipantListener {
 public:
-    ParticipantObservationListener(std::weak_ptr<ParticipantObservationRegistry> registry,
+    ParticipantObservationListener(
+        std::weak_ptr<ParticipantObservationRegistry> registry,
         std::weak_ptr<RemoteEndpointRegistry> endpoints,
         std::weak_ptr<TargetReaderObservationRegistry> target_readers) noexcept
-    : registry_(std::move(registry)), endpoints_(std::move(endpoints)),
+    : registry_(std::move(registry)),
+      endpoints_(std::move(endpoints)),
       target_readers_(std::move(target_readers)) {}
 
     void close_and_drain() noexcept {
@@ -342,24 +378,30 @@ public:
         if (const auto registry = registry_.lock()) {
             registry->observe_noexcept(
                 info.info.m_guid.guidPrefix,
-                info.status == eprosima::fastrtps::rtps::ParticipantDiscoveryInfo::REMOVED_PARTICIPANT ||
-                    info.status == eprosima::fastrtps::rtps::ParticipantDiscoveryInfo::DROPPED_PARTICIPANT);
+                info.status ==
+                        eprosima::fastrtps::rtps::ParticipantDiscoveryInfo::REMOVED_PARTICIPANT ||
+                    info.status ==
+                        eprosima::fastrtps::rtps::ParticipantDiscoveryInfo::DROPPED_PARTICIPANT);
         }
     }
 
-    void on_subscriber_discovery(eprosima::fastdds::dds::DomainParticipant*,
+    void on_subscriber_discovery(
+        eprosima::fastdds::dds::DomainParticipant*,
         eprosima::fastrtps::rtps::ReaderDiscoveryInfo&& info) override {
         CallbackGuard guard(*this);
         if (!guard) return;
-        observe_endpoint(info.info.guid(), RemoteEndpointKind::Reader, info.info.topicName().to_string(),
+        observe_endpoint(
+            info.info.guid(), RemoteEndpointKind::Reader, info.info.topicName().to_string(),
             info.info.typeName().to_string(),
             info.status == eprosima::fastrtps::rtps::ReaderDiscoveryInfo::REMOVED_READER);
     }
-    void on_publisher_discovery(eprosima::fastdds::dds::DomainParticipant*,
+    void on_publisher_discovery(
+        eprosima::fastdds::dds::DomainParticipant*,
         eprosima::fastrtps::rtps::WriterDiscoveryInfo&& info) override {
         CallbackGuard guard(*this);
         if (!guard) return;
-        observe_endpoint(info.info.guid(), RemoteEndpointKind::Writer, info.info.topicName().to_string(),
+        observe_endpoint(
+            info.info.guid(), RemoteEndpointKind::Writer, info.info.topicName().to_string(),
             info.info.typeName().to_string(),
             info.status == eprosima::fastrtps::rtps::WriterDiscoveryInfo::REMOVED_WRITER);
     }
@@ -367,10 +409,13 @@ public:
 private:
     class CallbackGuard {
     public:
-        explicit CallbackGuard(ParticipantObservationListener& listener) noexcept : listener_(&listener) {
+        explicit CallbackGuard(ParticipantObservationListener& listener) noexcept
+        : listener_(&listener) {
             std::lock_guard lock(listener.callback_mutex_);
-            if (listener.accepting_callbacks_) ++listener.callbacks_in_flight_;
-            else listener_ = nullptr;
+            if (listener.accepting_callbacks_)
+                ++listener.callbacks_in_flight_;
+            else
+                listener_ = nullptr;
         }
         ~CallbackGuard() noexcept {
             if (!listener_) return;
@@ -378,10 +423,12 @@ private:
             if (--listener_->callbacks_in_flight_ == 0) listener_->callback_cv_.notify_all();
         }
         explicit operator bool() const noexcept { return listener_ != nullptr; }
+
     private:
         ParticipantObservationListener* listener_;
     };
-    void observe_endpoint(const eprosima::fastrtps::rtps::GUID_t& guid, RemoteEndpointKind kind,
+    void observe_endpoint(
+        const eprosima::fastrtps::rtps::GUID_t& guid, RemoteEndpointKind kind,
         const std::string& topic, const std::string& type, bool removed) noexcept {
         const auto registry = registry_.lock();
         const auto endpoints = endpoints_.lock();

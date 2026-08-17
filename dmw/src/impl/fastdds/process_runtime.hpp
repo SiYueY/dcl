@@ -14,7 +14,9 @@
 #include "impl/participant_observation.hpp"
 
 namespace dmw {
+
 namespace impl {
+
 namespace fastdds {
 
 /// Process-lifetime owner for DDS objects whose deletion was not confirmed.
@@ -38,8 +40,8 @@ public:
         if (participant == nullptr) return;
         try {
             std::lock_guard<std::mutex> lock(mutex_);
-            participants_.push_back(QuarantinedParticipant{
-                factory, participant, std::move(listener)});
+            participants_.push_back(
+                QuarantinedParticipant{factory, participant, std::move(listener)});
         } catch (...) {
             // The terminal fallback deliberately leaks all three objects.
             // This preserves callback and DDS binding validity even if the

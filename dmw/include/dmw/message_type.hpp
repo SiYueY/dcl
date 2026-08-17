@@ -10,6 +10,7 @@
 namespace dmw {
 
 namespace fastdds {
+
 class MessageTypeAdapter;
 }  // namespace fastdds
 

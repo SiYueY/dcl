@@ -12,6 +12,7 @@
 #include "impl/fastdds/return_code.hpp"
 
 namespace dmw {
+
 namespace impl {
 
 namespace {

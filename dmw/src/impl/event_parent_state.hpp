@@ -18,6 +18,7 @@
 #include "impl/lock_rank.hpp"
 
 namespace dmw {
+
 namespace impl {
 
 struct EventParentState : std::enable_shared_from_this<EventParentState> {

@@ -70,7 +70,7 @@ private:
 #endif
 };
 
-template<LockRank Rank>
+template <LockRank Rank>
 class RankedMutex {
 public:
     void lock() {

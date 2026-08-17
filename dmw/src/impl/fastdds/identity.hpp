@@ -14,7 +14,9 @@
 #include "dmw/request_id.hpp"
 
 namespace dmw {
+
 namespace impl {
+
 namespace fastdds {
 
 using SequenceNumber = eprosima::fastrtps::rtps::SequenceNumber_t;

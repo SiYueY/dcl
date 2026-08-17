@@ -118,8 +118,9 @@ int main() {
     assert(guard_ready.value().status() == dmw::WaitStatus::Ready);
     assert(guard_ready.value().ready().size() == 1);
     assert(guard_ready.value().ready().front() == guard_token.value());
-    assert(wait_set.value()->wait(dmw::WaitTimeout::poll()).value().status() ==
-           dmw::WaitStatus::Timeout);
+    assert(
+        wait_set.value()->wait(dmw::WaitTimeout::poll()).value().status() ==
+        dmw::WaitStatus::Timeout);
     assert(wait_set.value()->remove(guard_token.value()));
 
     auto auto_detach_guard = context.value()->create_guard_condition();
@@ -787,8 +788,8 @@ int main() {
     assert(conflict_context);
     auto conflict_node = conflict_context.value()->create_node(node_options);
     assert(conflict_node);
-    auto conflict_publisher = conflict_node.value()->create_publisher(
-        generated.value(), "fingerprint", dmw::Qos{});
+    auto conflict_publisher =
+        conflict_node.value()->create_publisher(generated.value(), "fingerprint", dmw::Qos{});
     assert(conflict_publisher);
     dmw::Qos conflicting_topic_qos;
     conflicting_topic_qos.reliable();

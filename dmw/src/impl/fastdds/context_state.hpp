@@ -26,7 +26,9 @@
 #include "impl/participant_observation.hpp"
 
 namespace dmw {
+
 namespace impl {
+
 namespace fastdds {
 
 class ContextState {

@@ -8,6 +8,7 @@
 #include "impl/reader_wait_state.hpp"
 
 namespace dmw {
+
 namespace impl {
 
 class ReaderWaitStateTestAccess {

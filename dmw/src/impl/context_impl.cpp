@@ -79,6 +79,7 @@ private:
 }  // namespace
 
 namespace impl {
+
 namespace fastdds {
 
 ContextState::ContextState(

@@ -14,6 +14,7 @@
 namespace dmw {
 
 namespace impl {
+
 struct Registration;
 }  // namespace impl
 

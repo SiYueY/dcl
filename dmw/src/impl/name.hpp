@@ -8,6 +8,7 @@
 #include "dmw/result.hpp"
 
 namespace dmw {
+
 namespace impl {
 
 inline bool has_invalid_name_syntax(std::string_view value) noexcept {

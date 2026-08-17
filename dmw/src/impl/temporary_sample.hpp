@@ -10,6 +10,7 @@
 #include "dmw/result.hpp"
 
 namespace dmw {
+
 namespace impl {
 
 class TemporarySample {

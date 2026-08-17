@@ -18,6 +18,7 @@
 #include "impl/participant_observation.hpp"
 
 namespace dmw {
+
 namespace impl {
 
 /// Tracks request and response matches by remote participant, not merely by count.
@@ -75,8 +76,7 @@ public:
         }
         for (const auto& request : requests) {
             const auto response = std::find_if(
-                responses.begin(), responses.end(),
-                [&request](const ParticipantCount& candidate) {
+                responses.begin(), responses.end(), [&request](const ParticipantCount& candidate) {
                     return candidate.prefix == request.prefix;
                 });
             if (response == responses.end()) continue;
@@ -368,7 +368,8 @@ private:
     TargetReaderObservationRegistry::Snapshot target_snapshot(
         const eprosima::fastrtps::rtps::GUID_t& reader) const noexcept {
         const auto targets = target_readers_.lock();
-        auto snapshot = targets ? targets->snapshot(reader) : TargetReaderObservationRegistry::Snapshot{};
+        auto snapshot =
+            targets ? targets->snapshot(reader) : TargetReaderObservationRegistry::Snapshot{};
         // This helper is called only before taking (or after releasing) the
         // response-target mutex.  It captures a stable participant handle so
         // the predicate itself needs only an atomic lifecycle read.
@@ -380,7 +381,8 @@ private:
         return snapshot;
     }
 
-    bool participant_degraded(const TargetReaderObservationRegistry::Snapshot& target) const noexcept {
+    bool participant_degraded(
+        const TargetReaderObservationRegistry::Snapshot& target) const noexcept {
         const auto participants = participants_.lock();
         const auto targets = target_readers_.lock();
         return (participants && participants->capability() != DiscoveryCapability::Healthy) ||
@@ -388,11 +390,11 @@ private:
                target.state == RemoteEndpointObservationState::Degraded;
     }
 
-    static bool target_removed(
-        const TargetReaderObservationRegistry::Snapshot& target) noexcept {
+    static bool target_removed(const TargetReaderObservationRegistry::Snapshot& target) noexcept {
         return target.state == RemoteEndpointObservationState::Removed ||
-               (target.participant && target.participant->lifecycle.load(std::memory_order_acquire) ==
-                                          ParticipantLifecycle::Removed);
+               (target.participant &&
+                target.participant->lifecycle.load(std::memory_order_acquire) ==
+                    ParticipantLifecycle::Removed);
     }
 
     struct ReaderCount {

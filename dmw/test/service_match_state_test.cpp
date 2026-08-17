@@ -64,8 +64,9 @@ int main() {
     assert(reuse_entry);
     const auto reused_entry = reuse_observations->observe(prefix, false);
     assert(reused_entry == reuse_entry);
-    assert(reused_entry->lifecycle.load(std::memory_order_acquire) ==
-           dmw::impl::ParticipantLifecycle::Removed);
+    assert(
+        reused_entry->lifecycle.load(std::memory_order_acquire) ==
+        dmw::impl::ParticipantLifecycle::Removed);
     assert(reuse_observations->capability() == dmw::impl::DiscoveryCapability::Degraded);
 
     auto exact_observations = std::make_shared<dmw::impl::ParticipantObservationRegistry>();
@@ -122,9 +123,10 @@ int main() {
     dmw::impl::ResponseWriterMatchState participant_removed_matches(response_observations);
     const auto removed_reader = eprosima::fastrtps::rtps::iHandle2GUID(make_handle(4));
     assert(response_observations->observe(removed_reader.guidPrefix, true));
-    assert(participant_removed_matches.wait_for_match(
-               removed_reader, std::chrono::steady_clock::now()) ==
-           dmw::impl::ResponseWriterMatchState::WaitStatus::Removed);
+    assert(
+        participant_removed_matches.wait_for_match(
+            removed_reader, std::chrono::steady_clock::now()) ==
+        dmw::impl::ResponseWriterMatchState::WaitStatus::Removed);
 
     auto target_observations = std::make_shared<dmw::impl::ParticipantObservationRegistry>();
     auto target_readers = std::make_shared<dmw::impl::TargetReaderObservationRegistry>();
@@ -133,13 +135,13 @@ int main() {
     const auto target_reader = eprosima::fastrtps::rtps::iHandle2GUID(make_handle(6));
     const auto target_participant = target_observations->observe(target_reader.guidPrefix, false);
     target_readers->observe(target_reader, target_participant, false);
-    assert(endpoint_removed_matches.wait_for_match(
-               target_reader, std::chrono::steady_clock::now()) ==
-           dmw::impl::ResponseWriterMatchState::WaitStatus::Timeout);
+    assert(
+        endpoint_removed_matches.wait_for_match(target_reader, std::chrono::steady_clock::now()) ==
+        dmw::impl::ResponseWriterMatchState::WaitStatus::Timeout);
     target_readers->observe(target_reader, target_participant, true);
-    assert(endpoint_removed_matches.wait_for_match(
-               target_reader, std::chrono::steady_clock::now()) ==
-           dmw::impl::ResponseWriterMatchState::WaitStatus::Removed);
+    assert(
+        endpoint_removed_matches.wait_for_match(target_reader, std::chrono::steady_clock::now()) ==
+        dmw::impl::ResponseWriterMatchState::WaitStatus::Removed);
 
     auto target_wake_observations = std::make_shared<dmw::impl::ParticipantObservationRegistry>();
     auto target_wake_readers = std::make_shared<dmw::impl::TargetReaderObservationRegistry>();
@@ -162,12 +164,13 @@ int main() {
     target_waiter.join();
     assert(target_wake_status == dmw::impl::ResponseWriterMatchState::WaitStatus::Removed);
     target_wake_readers->observe(target_wake_reader, target_wake_participant, false);
-    assert(target_wake_matches->wait_for_match(
-               target_wake_reader, std::chrono::steady_clock::now()) ==
-           dmw::impl::ResponseWriterMatchState::WaitStatus::Degraded);
+    assert(
+        target_wake_matches->wait_for_match(target_wake_reader, std::chrono::steady_clock::now()) ==
+        dmw::impl::ResponseWriterMatchState::WaitStatus::Degraded);
 
     auto waking_observations = std::make_shared<dmw::impl::ParticipantObservationRegistry>();
-    auto waking_matches = std::make_shared<dmw::impl::ResponseWriterMatchState>(waking_observations);
+    auto waking_matches =
+        std::make_shared<dmw::impl::ResponseWriterMatchState>(waking_observations);
     waking_observations->add_dependency_wake([weak = std::weak_ptr(waking_matches)] {
         if (const auto state = weak.lock()) state->notify_dependency_change();
     });

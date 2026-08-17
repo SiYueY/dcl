@@ -13,7 +13,9 @@
 #include "dmw/runtime_mode.hpp"
 
 namespace dmw {
+
 namespace impl {
+
 namespace fastdds {
 
 inline Result<eprosima::fastrtps::Duration_t> to_duration(QosDuration duration) {

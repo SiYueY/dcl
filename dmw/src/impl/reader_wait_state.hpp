@@ -14,6 +14,7 @@
 #include "impl/lock_rank.hpp"
 
 namespace dmw {
+
 namespace impl {
 
 /// Keeps a DataReader usable while a non-owning WaitSet registration exists.

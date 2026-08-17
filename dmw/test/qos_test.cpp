@@ -74,18 +74,21 @@ int main() {
     assert(
         ros_writer.value().reliability().kind == eprosima::fastdds::dds::RELIABLE_RELIABILITY_QOS);
     assert(ros_writer.value().durability().kind == eprosima::fastdds::dds::VOLATILE_DURABILITY_QOS);
-    assert(ros_writer.value().endpoint().history_memory_policy ==
-           eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE);
-    assert(ros_writer.value().publish_mode().kind ==
-           eprosima::fastrtps::SYNCHRONOUS_PUBLISH_MODE);
-    assert(ros_writer.value().data_sharing().kind() == eprosima::fastdds::dds::DataSharingKind::OFF);
+    assert(
+        ros_writer.value().endpoint().history_memory_policy ==
+        eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE);
+    assert(ros_writer.value().publish_mode().kind == eprosima::fastrtps::SYNCHRONOUS_PUBLISH_MODE);
+    assert(
+        ros_writer.value().data_sharing().kind() == eprosima::fastdds::dds::DataSharingKind::OFF);
     assert(ros_writer.value().reliability().max_blocking_time.seconds == 0);
     assert(ros_writer.value().reliability().max_blocking_time.nanosec == 100000000U);
     const auto ros_reader = dmw::impl::fastdds::to_reader_qos(dmw::Qos{}, dmw::RuntimeMode::ROS2);
     assert(ros_reader);
-    assert(ros_reader.value().endpoint().history_memory_policy ==
-           eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE);
-    assert(ros_reader.value().data_sharing().kind() == eprosima::fastdds::dds::DataSharingKind::OFF);
+    assert(
+        ros_reader.value().endpoint().history_memory_policy ==
+        eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE);
+    assert(
+        ros_reader.value().data_sharing().kind() == eprosima::fastdds::dds::DataSharingKind::OFF);
 
     return 0;
 }
