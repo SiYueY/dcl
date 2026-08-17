@@ -39,5 +39,4 @@ std::type_index MessageTypeAdapter::pubsub_type(const MessageType& type) noexcep
 }
 
 }  // namespace fastdds
-
 }  // namespace dmw

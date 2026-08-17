@@ -5,14 +5,14 @@
 #include <string>
 
 #include "dmw/node.hpp"
-#include "impl/fastdds/context.hpp"
+#include "impl/context.hpp"
 
 namespace dmw {
 
 class Node::Impl {
 public:
     Impl(
-        std::shared_ptr<impl::fastdds::Context> context, std::string name,
+        std::shared_ptr<impl::Context> context, std::string name,
         std::string node_namespace) noexcept
     : context_(std::move(context)),
       name_(std::move(name)),
@@ -30,7 +30,7 @@ public:
         const ServiceType&, std::string_view, const Qos&, const ServerOptions&);
 
 private:
-    std::shared_ptr<impl::fastdds::Context> context_;
+    std::shared_ptr<impl::Context> context_;
     std::string name_;
     std::string node_namespace_;
 };

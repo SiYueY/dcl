@@ -11,8 +11,8 @@
 #include "dmw/error.hpp"
 #include "impl/publisher_impl.hpp"
 #include "impl/subscriber_impl.hpp"
-#include "impl/fastdds/qos.hpp"
-#include "impl/fastdds/process_runtime.hpp"
+#include "impl/qos.hpp"
+#include "impl/process_lifetime.hpp"
 #include "impl/name.hpp"
 #include "impl/node_impl.hpp"
 #include "impl/client_impl.hpp"
@@ -24,7 +24,7 @@ namespace dmw {
 namespace {
 
 void delete_writer_noexcept(
-    impl::fastdds::Context& context, eprosima::fastdds::dds::DataWriter* writer) noexcept {
+    impl::Context& context, eprosima::fastdds::dds::DataWriter* writer) noexcept {
     if (writer == nullptr) return;
     try {
         context.publisher()->delete_datawriter(writer);
@@ -35,7 +35,7 @@ void delete_writer_noexcept(
 }
 
 void delete_reader_noexcept(
-    impl::fastdds::Context& context, eprosima::fastdds::dds::DataReader* reader) noexcept {
+    impl::Context& context, eprosima::fastdds::dds::DataReader* reader) noexcept {
     if (reader == nullptr) return;
     try {
         context.subscriber()->delete_datareader(reader);
@@ -46,7 +46,7 @@ void delete_reader_noexcept(
 
 template <typename Listener>
 void delete_writer_listener_noexcept(
-    impl::fastdds::Context& context, eprosima::fastdds::dds::DataWriter* writer,
+    impl::Context& context, eprosima::fastdds::dds::DataWriter* writer,
     std::unique_ptr<Listener>& listener) noexcept {
     if (writer == nullptr) return;
     bool detached = false;
@@ -59,13 +59,13 @@ void delete_writer_listener_noexcept(
         detached = false;
     }
     if (!detached) {
-        impl::fastdds::ProcessLifetime::instance().retain_writer_listener(std::move(listener));
+        impl::ProcessLifetime::instance().retain_writer_listener(std::move(listener));
     }
 }
 
 template <typename Listener>
 void delete_reader_listener_noexcept(
-    impl::fastdds::Context& context, eprosima::fastdds::dds::DataReader* reader,
+    impl::Context& context, eprosima::fastdds::dds::DataReader* reader,
     std::unique_ptr<Listener>& listener) noexcept {
     if (reader == nullptr) return;
     bool detached = false;
@@ -78,11 +78,11 @@ void delete_reader_listener_noexcept(
         detached = false;
     }
     if (!detached) {
-        impl::fastdds::ProcessLifetime::instance().retain_reader_listener(std::move(listener));
+        impl::ProcessLifetime::instance().retain_reader_listener(std::move(listener));
     }
 }
 
-std::string dds_topic_name(const impl::fastdds::Context& context, const std::string& logical_name) {
+std::string dds_topic_name(const impl::Context& context, const std::string& logical_name) {
     const std::string path = logical_name.substr(1);
     if (context.runtime_mode() == RuntimeMode::ROS2) {
         return "rt/" + path;
@@ -91,7 +91,7 @@ std::string dds_topic_name(const impl::fastdds::Context& context, const std::str
 }
 
 std::string service_topic_name(
-    const impl::fastdds::Context& context, const std::string& logical_name, bool request) {
+    const impl::Context& context, const std::string& logical_name, bool request) {
     const std::string path = logical_name.substr(1);
     if (context.runtime_mode() == RuntimeMode::ROS2) {
         return (request ? "rq/" : "rr/") + path + (request ? "Request" : "Reply");
@@ -109,7 +109,7 @@ Result<std::unique_ptr<Publisher>> Node::Impl::create_publisher(
     if (!logical_name) {
         return Result<std::unique_ptr<Publisher>>::failure(std::move(logical_name.error()));
     }
-    auto writer_qos = impl::fastdds::to_writer_qos(qos, impl_->context_->runtime_mode());
+    auto writer_qos = impl::to_writer_qos(qos, impl_->context_->runtime_mode());
     if (!writer_qos)
         return Result<std::unique_ptr<Publisher>>::failure(std::move(writer_qos.error()));
     const auto operation = impl_->context_->try_acquire_operation();
@@ -148,7 +148,7 @@ Result<std::unique_ptr<Subscriber>> Node::Impl::create_subscriber(
     if (!logical_name) {
         return Result<std::unique_ptr<Subscriber>>::failure(std::move(logical_name.error()));
     }
-    auto reader_qos = impl::fastdds::to_reader_qos(qos, impl_->context_->runtime_mode());
+    auto reader_qos = impl::to_reader_qos(qos, impl_->context_->runtime_mode());
     if (!reader_qos)
         return Result<std::unique_ptr<Subscriber>>::failure(std::move(reader_qos.error()));
     const auto operation = impl_->context_->try_acquire_operation();
@@ -185,9 +185,9 @@ Result<std::unique_ptr<Client>> Node::Impl::create_client(
     auto logical_name = impl::resolve_name(impl_->node_namespace_, service_name);
     if (!logical_name)
         return Result<std::unique_ptr<Client>>::failure(std::move(logical_name.error()));
-    auto writer_qos = impl::fastdds::to_writer_qos(qos, impl_->context_->runtime_mode());
+    auto writer_qos = impl::to_writer_qos(qos, impl_->context_->runtime_mode());
     if (!writer_qos) return Result<std::unique_ptr<Client>>::failure(std::move(writer_qos.error()));
-    auto reader_qos = impl::fastdds::to_reader_qos(qos, impl_->context_->runtime_mode());
+    auto reader_qos = impl::to_reader_qos(qos, impl_->context_->runtime_mode());
     if (!reader_qos) return Result<std::unique_ptr<Client>>::failure(std::move(reader_qos.error()));
     const auto operation = impl_->context_->try_acquire_operation();
     if (!operation)
@@ -249,9 +249,9 @@ Result<std::unique_ptr<Server>> Node::Impl::create_server(
     auto logical_name = impl::resolve_name(impl_->node_namespace_, service_name);
     if (!logical_name)
         return Result<std::unique_ptr<Server>>::failure(std::move(logical_name.error()));
-    auto reader_qos = impl::fastdds::to_reader_qos(qos, impl_->context_->runtime_mode());
+    auto reader_qos = impl::to_reader_qos(qos, impl_->context_->runtime_mode());
     if (!reader_qos) return Result<std::unique_ptr<Server>>::failure(std::move(reader_qos.error()));
-    auto writer_qos = impl::fastdds::to_writer_qos(qos, impl_->context_->runtime_mode());
+    auto writer_qos = impl::to_writer_qos(qos, impl_->context_->runtime_mode());
     if (!writer_qos) return Result<std::unique_ptr<Server>>::failure(std::move(writer_qos.error()));
     const auto operation = impl_->context_->try_acquire_operation();
     if (!operation)

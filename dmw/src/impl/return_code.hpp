@@ -8,7 +8,8 @@
 
 #include "dmw/error.hpp"
 
-namespace dmw::impl::fastdds {
+namespace dmw {
+namespace impl {
 
 inline ErrorCode to_return_code(eprosima::fastrtps::types::ReturnCode_t code) noexcept {
     using ReturnCode = eprosima::fastrtps::types::ReturnCode_t;
@@ -39,6 +40,7 @@ inline Error to_error(eprosima::fastrtps::types::ReturnCode_t code, std::string 
     return Error(to_return_code(code), std::move(message));
 }
 
-}  // namespace dmw::impl::fastdds
+}  // namespace impl
+}  // namespace dmw
 
 #endif

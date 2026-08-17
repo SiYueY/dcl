@@ -16,8 +16,6 @@ namespace dmw {
 
 namespace impl {
 
-namespace fastdds {
-
 inline Result<eprosima::fastrtps::Duration_t> to_duration(QosDuration duration) {
     using eprosima::fastrtps::Duration_t;
 
@@ -130,7 +128,6 @@ inline Result<eprosima::fastdds::dds::DataReaderQos> to_reader_qos(
     return Result<eprosima::fastdds::dds::DataReaderQos>::success(std::move(qos));
 }
 
-}  // namespace fastdds
 }  // namespace impl
 }  // namespace dmw
 

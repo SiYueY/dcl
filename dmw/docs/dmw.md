@@ -2478,7 +2478,7 @@ struct MessageInfo
 
     std::int64_t writer_timestamp{0};
 
-    std::uint64_t writer_sequence{0}; // 0 = unknown/unavailable
+    std::uint64_t to_writer_sequence{0}; // 0 = unknown/unavailable
 
     std::int64_t reader_timestamp{0};
 };
@@ -2489,7 +2489,7 @@ struct MessageInfo
 - `writer_timestamp`：middleware-provided source timestamp；不可获得或不可安全表示时为 `0`；
 - `reader_timestamp`：middleware-provided receive/reception timestamp；不可获得或不可安全表示时为 `0`，不得用本地 `steady_clock` 伪造；
 - `writer_gid`：middleware publication identity；不可可靠获得时为 `Gid{}`；
-- `writer_sequence`：middleware publication/sample sequence；unknown/unavailable/不可安全表示时为 `0`。
+- `to_writer_sequence`：middleware publication/sample sequence；unknown/unavailable/不可安全表示时为 `0`。
 
 具体 Fast DDS 字段来源与转换只属于 Fast DDS 实现规格。
 
@@ -4856,7 +4856,7 @@ dmw/
             └── return_code.hpp
 ```
 
-根 `src/*.cpp` 与公开头文件一一对应，只保留 public-object 生命周期包装、只读 getter 和向对应 `Impl` 的转发；它们不得直接包含 Fast DDS 或 `impl/fastdds/*` 头。`src/impl/*.cpp` 承担对象业务逻辑，`src/impl/fastdds/` 承担 Fast DDS runtime/helper 逻辑。`src/impl/fastdds/` 中的类型位于 `dmw::impl::fastdds`，用于持有 Fast DDS entity 及其生命周期信息。`WaitSetState`、`ReaderWaitState`、`EventParentState` 与 service matching state 等 runtime/concurrency authority 位于 `dmw::impl`。该目录和命名空间只是编译期依赖边界，不引入多 DDS 实现或 runtime dispatch。
+根 `src/*.cpp` 与公开头文件一一对应，只保留 public-object 生命周期包装、只读 getter 和向对应 `Impl` 的转发；它们不得直接包含 Fast DDS 头。`src/impl/*.cpp` 同时承担对象业务逻辑和 Fast DDS runtime/helper 逻辑。DMW 当前是 Fast DDS 专用实现，不引入多 DDS runtime dispatch。`WaitSetState`、`ReaderWaitState`、`EventParentState` 与 service state 等 runtime/concurrency authority 均位于 `dmw::impl`。
 
 ### 14.2 Fast DDS Boundary
 

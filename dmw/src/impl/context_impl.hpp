@@ -4,14 +4,13 @@
 #include <memory>
 
 #include "dmw/context.hpp"
-#include "impl/fastdds/context.hpp"
+#include "impl/context.hpp"
 
 namespace dmw {
 
 class Context::Impl {
 public:
-    explicit Impl(std::shared_ptr<impl::fastdds::Context> context) noexcept
-    : context_(std::move(context)) {}
+    explicit Impl(std::shared_ptr<impl::Context> context) noexcept : context_(std::move(context)) {}
 
     static Result<std::unique_ptr<Context>> create(const ContextOptions& options);
     std::uint32_t domain_id() const noexcept;
@@ -23,7 +22,7 @@ public:
     Result<std::unique_ptr<WaitSet>> create_wait_set(const WaitSetOptions& options);
 
 private:
-    std::shared_ptr<impl::fastdds::Context> context_;
+    std::shared_ptr<impl::Context> context_;
 };
 
 }  // namespace dmw

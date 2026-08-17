@@ -10,9 +10,9 @@
 #include <fastdds/rtps/common/WriteParams.h>
 
 #include "dmw/error.hpp"
-#include "impl/fastdds/identity.hpp"
-#include "impl/fastdds/process_runtime.hpp"
-#include "impl/fastdds/return_code.hpp"
+#include "impl/identity.hpp"
+#include "impl/process_lifetime.hpp"
+#include "impl/return_code.hpp"
 #include "impl/server_impl.hpp"
 #include "impl/temporary_sample.hpp"
 
@@ -45,8 +45,7 @@ Server::Impl::~Impl() noexcept {
                 // The Context container remains the conservative ownership barrier.
             }
         } else {
-            impl::fastdds::ProcessLifetime::instance().retain_writer_listener(
-                std::move(response_listener_));
+            impl::ProcessLifetime::instance().retain_writer_listener(std::move(response_listener_));
         }
         response_writer_ = nullptr;
     }
@@ -89,15 +88,14 @@ Result<bool> Server::Impl::take_request(void* request, RequestId& request_id) {
         }
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
             if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
-            return Result<bool>::failure(
-                impl::fastdds::to_error(result, "Fast DDS request take failed"));
+            return Result<bool>::failure(impl::to_error(result, "Fast DDS request take failed"));
         }
         if (!info.valid_data) {
             if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
             continue;
         }
 
-        auto id = impl::fastdds::request_id_from_identity(info.sample_identity);
+        auto id = impl::to_request_id(info.sample_identity);
         if (!id) {
             if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
             return Result<bool>::failure(
@@ -106,7 +104,7 @@ Result<bool> Server::Impl::take_request(void* request, RequestId& request_id) {
         auto response_identity = info.sample_identity;
         const auto& response_reader_guid = info.related_sample_identity.writer_guid();
         if (response_reader_guid != eprosima::fastrtps::rtps::GUID_t::unknown()) {
-            id->client_gid = impl::fastdds::to_gid(response_reader_guid);
+            id->client_gid = impl::to_gid(response_reader_guid);
             response_identity.writer_guid() = response_reader_guid;
         }
 

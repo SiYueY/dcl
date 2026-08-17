@@ -10,7 +10,7 @@ namespace dmw {
 struct MessageInfo {
     Gid writer_gid{};
     std::int64_t writer_timestamp{0};
-    std::uint64_t writer_sequence{0};  // 0 = unknown/unavailable
+    std::uint64_t to_writer_sequence{0};  // 0 = unknown/unavailable
     std::int64_t reader_timestamp{0};
 };
 

@@ -8,9 +8,9 @@
 #include <fastdds/rtps/common/WriteParams.h>
 
 #include "dmw/error.hpp"
-#include "impl/fastdds/identity.hpp"
-#include "impl/fastdds/process_runtime.hpp"
-#include "impl/fastdds/return_code.hpp"
+#include "impl/identity.hpp"
+#include "impl/process_lifetime.hpp"
+#include "impl/return_code.hpp"
 #include "impl/client_impl.hpp"
 #include "impl/temporary_sample.hpp"
 
@@ -36,8 +36,7 @@ Client::Impl::~Impl() noexcept {
             }
         }
         if (!listener_detached) {
-            impl::fastdds::ProcessLifetime::instance().retain_reader_listener(
-                std::move(response_listener_));
+            impl::ProcessLifetime::instance().retain_reader_listener(std::move(response_listener_));
         }
         response_reader_ = nullptr;
     }
@@ -54,8 +53,7 @@ Client::Impl::~Impl() noexcept {
             listener_detached = false;
         }
         if (!listener_detached) {
-            impl::fastdds::ProcessLifetime::instance().retain_writer_listener(
-                std::move(request_listener_));
+            impl::ProcessLifetime::instance().retain_writer_listener(std::move(request_listener_));
         }
         request_writer_ = nullptr;
     }
@@ -77,12 +75,12 @@ Result<RequestId> Client::Impl::send_request(const void* request) {
     if (!request_writer_->write(const_cast<void*>(request), params))
         return Result<RequestId>::failure(
             Error(ErrorCode::DDSError, "Fast DDS request write failed"));
-    auto request_id = impl::fastdds::request_id_from_identity(params.sample_identity());
+    auto request_id = impl::to_request_id(params.sample_identity());
     if (!request_id) {
         return Result<RequestId>::failure(
             Error(ErrorCode::DDSError, "Fast DDS request write returned an unknown sequence"));
     }
-    request_id->client_gid = impl::fastdds::to_gid(response_reader_->guid());
+    request_id->client_gid = impl::to_gid(response_reader_->guid());
     return Result<RequestId>::success(*request_id);
 }
 
@@ -104,15 +102,13 @@ Result<bool> Client::Impl::take_response(void* response, RequestId& request_id) 
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_NO_DATA)
             return Result<bool>::success(false);
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
-            return Result<bool>::failure(
-                impl::fastdds::to_error(result, "Fast DDS response take failed"));
+            return Result<bool>::failure(impl::to_error(result, "Fast DDS response take failed"));
         if (!info.valid_data) continue;
         const auto& related_guid = info.related_sample_identity.writer_guid();
         if (related_guid != request_writer_->guid() && related_guid != response_reader_->guid()) {
             continue;
         }
-        const auto response_id =
-            impl::fastdds::request_id_from_identity(info.related_sample_identity);
+        const auto response_id = impl::to_request_id(info.related_sample_identity);
         if (!response_id) continue;
         auto committed = sample.value().commit_to(response);
         if (!committed) {

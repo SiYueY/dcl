@@ -24,80 +24,14 @@
 #include "dmw/result.hpp"
 #include "impl/lock_rank.hpp"
 #include "impl/discovery_graph.hpp"
+#include "impl/topic.hpp"
 
 namespace dmw {
 
 namespace impl {
 
-namespace fastdds {
-
 class Context {
 public:
-    class Topic;
-
-    /// Non-copyable ownership of one endpoint reference to a DDS type registration.
-    class TypeRegistration {
-    public:
-        TypeRegistration() noexcept = default;
-        ~TypeRegistration() noexcept;
-
-        TypeRegistration(const TypeRegistration&) = delete;
-        TypeRegistration& operator=(const TypeRegistration&) = delete;
-
-        TypeRegistration(TypeRegistration&& other) noexcept;
-        TypeRegistration& operator=(TypeRegistration&& other) noexcept;
-
-    private:
-        friend class Context;
-        friend class Topic;
-
-        TypeRegistration(Context* context, std::string type_name) noexcept
-        : context_(context), type_name_(std::move(type_name)) {}
-
-        void reset() noexcept;
-        void disarm() noexcept;
-
-        Context* context_{nullptr};
-        std::string type_name_;
-    };
-
-    /// Non-copyable RAII wrapper for one endpoint reference to a DDS Topic.
-    ///
-    /// Keeps the Topic and its wire-type registration alive until the
-    /// endpoint has deleted its DataReader or DataWriter.  It is intentionally
-    /// an implementation type: public entities retain it through their PImpl.
-    class Topic {
-    public:
-        Topic() noexcept = default;
-        ~Topic() noexcept;
-
-        Topic(const Topic&) = delete;
-        Topic& operator=(const Topic&) = delete;
-
-        Topic(Topic&& other) noexcept;
-        Topic& operator=(Topic&& other) noexcept;
-
-        eprosima::fastdds::dds::Topic* get() const noexcept { return topic_; }
-
-    private:
-        friend class Context;
-
-        Topic(
-            Context* context, eprosima::fastdds::dds::Topic* topic, std::string topic_name,
-            TypeRegistration type_registration) noexcept
-        : context_(context),
-          topic_(topic),
-          topic_name_(std::move(topic_name)),
-          type_registration_(std::move(type_registration)) {}
-
-        void reset() noexcept;
-
-        Context* context_{nullptr};
-        eprosima::fastdds::dds::Topic* topic_{nullptr};
-        std::string topic_name_;
-        TypeRegistration type_registration_;
-    };
-
     class OperationGuard {
     public:
         OperationGuard() noexcept = default;
@@ -147,6 +81,8 @@ public:
         const MessageType& type, const std::string& dds_topic_name, const Qos& qos);
 
 private:
+    friend class Topic;
+    friend class TypeRegistration;
     enum class ShutdownExecutionState { Running, RequestingChildren, Draining, Complete };
     enum class RegistryEntryPhase { Creating, Active, Retiring, Orphaned };
 
@@ -208,7 +144,6 @@ private:
     std::unique_ptr<DiscoveryListener> participant_listener_;
 };
 
-}  // namespace fastdds
 }  // namespace impl
 }  // namespace dmw
 

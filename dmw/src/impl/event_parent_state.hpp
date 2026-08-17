@@ -37,7 +37,7 @@ private:
     class ReaderListener;
 
 public:
-    explicit EventParentState(std::shared_ptr<fastdds::Context> context) noexcept;
+    explicit EventParentState(std::shared_ptr<Context> context) noexcept;
 
     struct Snapshot {
         EventInfo info;
@@ -78,7 +78,7 @@ public:
         }
     }
 
-    std::shared_ptr<fastdds::Context> context;
+    std::shared_ptr<Context> context;
     std::atomic<bool> alive{true};
     mutable RankedMutex<LockRank::EndpointRuntime> mutex;
 

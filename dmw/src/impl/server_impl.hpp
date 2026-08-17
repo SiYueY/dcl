@@ -11,7 +11,7 @@
 #include <fastdds/rtps/common/SampleIdentity.h>
 
 #include "dmw/server.hpp"
-#include "impl/fastdds/context.hpp"
+#include "impl/context.hpp"
 #include "impl/reader_wait_state.hpp"
 #include "impl/response.hpp"
 
@@ -20,14 +20,12 @@ namespace dmw {
 class Server::Impl {
 public:
     Impl(
-        std::shared_ptr<impl::fastdds::Context> context,
-        eprosima::fastdds::dds::DataReader* request_reader,
+        std::shared_ptr<impl::Context> context, eprosima::fastdds::dds::DataReader* request_reader,
         eprosima::fastdds::dds::DataWriter* response_writer, std::string service_name,
         std::size_t max_pending_requests, MessageType request_type,
         std::shared_ptr<impl::ResponseState> response_state,
-        std::unique_ptr<impl::ResponseWriterListener> response_listener,
-        impl::fastdds::Context::Topic request_topic,
-        impl::fastdds::Context::Topic response_topic) noexcept
+        std::unique_ptr<impl::ResponseWriterListener> response_listener, impl::Topic request_topic,
+        impl::Topic response_topic) noexcept
     : context_(context),
       request_reader_(request_reader),
       response_writer_(response_writer),
@@ -78,7 +76,7 @@ private:
         return was_full;
     }
 
-    std::shared_ptr<impl::fastdds::Context> context_;
+    std::shared_ptr<impl::Context> context_;
     eprosima::fastdds::dds::DataReader* request_reader_;
     eprosima::fastdds::dds::DataWriter* response_writer_;
     std::string service_name_;
@@ -87,8 +85,8 @@ private:
     std::shared_ptr<impl::ResponseState> response_state_;
     std::unique_ptr<impl::ResponseWriterListener> response_listener_;
     std::shared_ptr<impl::ReaderWaitState> request_wait_state_;
-    impl::fastdds::Context::Topic request_topic_;
-    impl::fastdds::Context::Topic response_topic_;
+    impl::Topic request_topic_;
+    impl::Topic response_topic_;
     impl::RankedMutex<impl::LockRank::PendingRequest> pending_mutex_;
     std::size_t reservations_{0};
     std::unordered_map<RequestId, PendingRequest, RequestIdHash> pending_;

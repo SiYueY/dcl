@@ -10,7 +10,7 @@
 
 #include <fastdds/dds/subscriber/DataReader.hpp>
 
-#include "impl/fastdds/context.hpp"
+#include "impl/context.hpp"
 #include "impl/lock_rank.hpp"
 
 namespace dmw {
@@ -25,11 +25,10 @@ class ReaderWaitStateTestAccess;
 class ReaderWaitState {
 public:
     enum class Lifecycle { Open, DeleteDeferredByWaitSet, Closed };
-    ReaderWaitState(
-        std::shared_ptr<fastdds::Context> context, eprosima::fastdds::dds::DataReader* value)
+    ReaderWaitState(std::shared_ptr<Context> context, eprosima::fastdds::dds::DataReader* value)
     : context_(std::move(context)), reader(value) {}
 
-    const std::shared_ptr<fastdds::Context>& context() const noexcept { return context_; }
+    const std::shared_ptr<Context>& context() const noexcept { return context_; }
 
     bool is_ready() noexcept {
         std::lock_guard<std::mutex> lock(reader_mutex);
@@ -132,7 +131,7 @@ private:
     friend class WaitSetState;
     friend class ReaderWaitStateTestAccess;
 
-    std::shared_ptr<fastdds::Context> context_;
+    std::shared_ptr<Context> context_;
     std::atomic<bool> closing{false};
     std::atomic<std::uint64_t> wait_set_id{0};
     std::atomic<std::uint64_t> registration_id{0};

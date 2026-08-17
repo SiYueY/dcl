@@ -8,7 +8,7 @@
 
 #include "dmw/subscriber.hpp"
 #include "impl/event_parent_state.hpp"
-#include "impl/fastdds/context.hpp"
+#include "impl/context.hpp"
 #include "impl/reader_wait_state.hpp"
 
 namespace dmw {
@@ -16,8 +16,8 @@ namespace dmw {
 class Subscriber::Impl {
 public:
     Impl(
-        std::shared_ptr<impl::fastdds::Context> context, eprosima::fastdds::dds::DataReader* reader,
-        std::string topic_name, MessageType type, impl::fastdds::Context::Topic topic) noexcept
+        std::shared_ptr<impl::Context> context, eprosima::fastdds::dds::DataReader* reader,
+        std::string topic_name, MessageType type, impl::Topic topic) noexcept
     : context_(context),
       reader_(reader),
       topic_name_(std::move(topic_name)),
@@ -37,13 +37,13 @@ public:
     }
 
 private:
-    std::shared_ptr<impl::fastdds::Context> context_;
+    std::shared_ptr<impl::Context> context_;
     eprosima::fastdds::dds::DataReader* reader_;
     std::string topic_name_;
     MessageType type_;
     std::shared_ptr<impl::ReaderWaitState> wait_state_;
     std::shared_ptr<impl::EventParentState> event_parent_;
-    impl::fastdds::Context::Topic topic_;
+    impl::Topic topic_;
 };
 
 }  // namespace dmw

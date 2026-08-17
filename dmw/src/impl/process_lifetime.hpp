@@ -17,8 +17,6 @@ namespace dmw {
 
 namespace impl {
 
-namespace fastdds {
-
 /// Process-lifetime owner for DDS objects whose deletion was not confirmed.
 ///
 /// Fast DDS can retain callbacks and endpoint bindings after a failed delete.
@@ -107,7 +105,6 @@ private:
         participant_listeners_;
 };
 
-}  // namespace fastdds
 }  // namespace impl
 }  // namespace dmw
 

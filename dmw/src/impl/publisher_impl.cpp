@@ -3,8 +3,8 @@
 #include "dmw/error.hpp"
 #include "impl/event_impl.hpp"
 #include "impl/publisher_impl.hpp"
-#include "impl/fastdds/process_runtime.hpp"
-#include "impl/fastdds/return_code.hpp"
+#include "impl/process_lifetime.hpp"
+#include "impl/return_code.hpp"
 
 namespace dmw {
 
@@ -53,7 +53,7 @@ Result<std::size_t> Publisher::Impl::matched_subscriber_count() const {
     const auto result = writer_->get_publication_matched_status(status);
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<std::size_t>::failure(
-            impl::fastdds::to_error(result, "Fast DDS matched subscription query failed"));
+            impl::to_error(result, "Fast DDS matched subscription query failed"));
     }
     return Result<std::size_t>::success(static_cast<std::size_t>(status.current_count));
 }

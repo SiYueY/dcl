@@ -5,7 +5,7 @@
 #include "impl/event_parent_state.hpp"
 
 int main() {
-    auto context = std::make_shared<dmw::impl::fastdds::Context>(
+    auto context = std::make_shared<dmw::impl::Context>(
         nullptr, nullptr, nullptr, nullptr, 0U, dmw::RuntimeMode::DDS);
     auto source = std::make_shared<dmw::impl::EventParentState>(context);
 

@@ -8,7 +8,7 @@
 #include <fastdds/dds/subscriber/DataReader.hpp>
 
 #include "dmw/client.hpp"
-#include "impl/fastdds/context.hpp"
+#include "impl/context.hpp"
 #include "impl/reader_wait_state.hpp"
 #include "impl/request.hpp"
 #include "impl/response.hpp"
@@ -18,14 +18,12 @@ namespace dmw {
 class Client::Impl {
 public:
     Impl(
-        std::shared_ptr<impl::fastdds::Context> context,
-        eprosima::fastdds::dds::DataWriter* request_writer,
+        std::shared_ptr<impl::Context> context, eprosima::fastdds::dds::DataWriter* request_writer,
         eprosima::fastdds::dds::DataReader* response_reader, std::string service_name,
         MessageType response_type, std::shared_ptr<impl::RequestState> request_state,
         std::unique_ptr<impl::RequestWriterListener> request_listener,
-        std::unique_ptr<impl::ResponseReaderListener> response_listener,
-        impl::fastdds::Context::Topic request_topic,
-        impl::fastdds::Context::Topic response_topic) noexcept
+        std::unique_ptr<impl::ResponseReaderListener> response_listener, impl::Topic request_topic,
+        impl::Topic response_topic) noexcept
     : context_(context),
       request_writer_(request_writer),
       response_reader_(response_reader),
@@ -49,7 +47,7 @@ public:
     }
 
 private:
-    std::shared_ptr<impl::fastdds::Context> context_;
+    std::shared_ptr<impl::Context> context_;
     eprosima::fastdds::dds::DataWriter* request_writer_;
     eprosima::fastdds::dds::DataReader* response_reader_;
     std::string service_name_;
@@ -58,8 +56,8 @@ private:
     std::unique_ptr<impl::RequestWriterListener> request_listener_;
     std::unique_ptr<impl::ResponseReaderListener> response_listener_;
     std::shared_ptr<impl::ReaderWaitState> response_wait_state_;
-    impl::fastdds::Context::Topic request_topic_;
-    impl::fastdds::Context::Topic response_topic_;
+    impl::Topic request_topic_;
+    impl::Topic response_topic_;
 };
 
 }  // namespace dmw

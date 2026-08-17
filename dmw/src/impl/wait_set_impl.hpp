@@ -28,8 +28,8 @@
 #include "impl/publisher_impl.hpp"
 #include "impl/subscriber_impl.hpp"
 #include "impl/event_impl.hpp"
-#include "impl/fastdds/context.hpp"
-#include "impl/fastdds/return_code.hpp"
+#include "impl/context.hpp"
+#include "impl/return_code.hpp"
 #include "impl/guard_condition_impl.hpp"
 #include "impl/lock_rank.hpp"
 #include "impl/reader_wait_state.hpp"
@@ -225,7 +225,7 @@ struct Registration {
 
 class WaitSetState final : public std::enable_shared_from_this<WaitSetState> {
 public:
-    WaitSetState(std::shared_ptr<impl::fastdds::Context> context, std::uint64_t wait_set_id)
+    WaitSetState(std::shared_ptr<impl::Context> context, std::uint64_t wait_set_id)
     : context_(std::move(context)), wait_set_id_(wait_set_id) {}
 
     ~WaitSetState() noexcept { close(); }
@@ -236,8 +236,8 @@ public:
             try {
                 const auto result = native_wait_set_.attach_condition(*wake_->control_condition);
                 if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
-                    return Result<void>::failure(Error(impl::fastdds::to_error(
-                        result, "Fast DDS failed to attach the control condition")));
+                    return Result<void>::failure(Error(
+                        impl::to_error(result, "Fast DDS failed to attach the control condition")));
                 }
                 control_condition_attached_ = true;
             } catch (...) {
@@ -502,8 +502,7 @@ public:
             result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_TIMEOUT) {
             return Result<void>::success();
         }
-        return Result<void>::failure(
-            impl::fastdds::to_error(result, "Fast DDS WaitSet wait failed"));
+        return Result<void>::failure(impl::to_error(result, "Fast DDS WaitSet wait failed"));
     }
 
     Result<void> repair_control_guard_if_needed() noexcept {
@@ -590,7 +589,7 @@ public:
         return closing_;
     }
 
-    std::shared_ptr<impl::fastdds::Context> context_;
+    std::shared_ptr<impl::Context> context_;
     const std::uint64_t wait_set_id_;
     std::shared_ptr<WaitSetWake> wake_{std::make_shared<WaitSetWake>()};
 

@@ -14,9 +14,9 @@
 #include "dmw/error.hpp"
 #include "impl/context_impl.hpp"
 #include "dmw/fastdds/message_type.hpp"
-#include "impl/fastdds/context.hpp"
-#include "impl/fastdds/process_runtime.hpp"
-#include "impl/fastdds/return_code.hpp"
+#include "impl/context.hpp"
+#include "impl/process_lifetime.hpp"
+#include "impl/return_code.hpp"
 #include "impl/guard_condition_impl.hpp"
 #include "impl/name.hpp"
 #include "impl/node_impl.hpp"
@@ -60,8 +60,7 @@ public:
                 deleted = false;
             }
             if (!deleted) {
-                impl::fastdds::ProcessLifetime::instance().retain_participant(
-                    factory_, participant_);
+                impl::ProcessLifetime::instance().retain_participant(factory_, participant_);
             }
         }
     }
@@ -79,8 +78,6 @@ private:
 }  // namespace
 
 namespace impl {
-
-namespace fastdds {
 
 Context::Context(
     eprosima::fastdds::dds::DomainParticipantFactory* factory,
@@ -172,14 +169,14 @@ std::uint32_t Context::domain_id() const noexcept { return domain_id_; }
 
 RuntimeMode Context::runtime_mode() const noexcept { return runtime_mode_; }
 
-Context::Topic::~Topic() noexcept { reset(); }
+Topic::~Topic() noexcept { reset(); }
 
-Context::TypeRegistration::~TypeRegistration() noexcept { reset(); }
+TypeRegistration::~TypeRegistration() noexcept { reset(); }
 
-Context::TypeRegistration::TypeRegistration(TypeRegistration&& other) noexcept
+TypeRegistration::TypeRegistration(TypeRegistration&& other) noexcept
 : context_(std::exchange(other.context_, nullptr)), type_name_(std::move(other.type_name_)) {}
 
-Context::TypeRegistration& Context::TypeRegistration::operator=(TypeRegistration&& other) noexcept {
+TypeRegistration& TypeRegistration::operator=(TypeRegistration&& other) noexcept {
     if (this != &other) {
         reset();
         context_ = std::exchange(other.context_, nullptr);
@@ -188,25 +185,25 @@ Context::TypeRegistration& Context::TypeRegistration::operator=(TypeRegistration
     return *this;
 }
 
-void Context::TypeRegistration::reset() noexcept {
+void TypeRegistration::reset() noexcept {
     if (context_ != nullptr) {
         context_->release_type(std::move(type_name_));
         context_ = nullptr;
     }
 }
 
-void Context::TypeRegistration::disarm() noexcept {
+void TypeRegistration::disarm() noexcept {
     context_ = nullptr;
     type_name_.clear();
 }
 
-Context::Topic::Topic(Topic&& other) noexcept
+Topic::Topic(Topic&& other) noexcept
 : context_(std::exchange(other.context_, nullptr)),
   topic_(std::exchange(other.topic_, nullptr)),
   topic_name_(std::move(other.topic_name_)),
   type_registration_(std::move(other.type_registration_)) {}
 
-Context::Topic& Context::Topic::operator=(Topic&& other) noexcept {
+Topic& Topic::operator=(Topic&& other) noexcept {
     if (this != &other) {
         reset();
         context_ = std::exchange(other.context_, nullptr);
@@ -217,7 +214,7 @@ Context::Topic& Context::Topic::operator=(Topic&& other) noexcept {
     return *this;
 }
 
-void Context::Topic::reset() noexcept {
+void Topic::reset() noexcept {
     if (context_ != nullptr) {
         const bool topic_deleted = context_->release_topic(std::move(topic_name_));
         context_ = nullptr;
@@ -334,7 +331,7 @@ void Context::unregister_shutdown_callback(std::uint64_t id) noexcept {
     shutdown_children_.erase(id);
 }
 
-Result<Context::TypeRegistration> Context::acquire_type(const MessageType& type) {
+Result<TypeRegistration> Context::acquire_type(const MessageType& type) {
     const std::string type_name(type.type_name());
     const auto pubsub_type = dmw::fastdds::MessageTypeAdapter::pubsub_type(type);
     {
@@ -394,7 +391,7 @@ Result<Context::TypeRegistration> Context::acquire_type(const MessageType& type)
     return Result<TypeRegistration>::success(TypeRegistration(this, type_name));
 }
 
-Result<Context::Topic> Context::acquire_topic(
+Result<Topic> Context::acquire_topic(
     const MessageType& type, const std::string& dds_topic_name, const Qos& qos) {
     const std::string type_name(type.type_name());
     auto type_registration = acquire_type(type);
@@ -568,7 +565,6 @@ void Context::release_type(std::string type_name) noexcept {
     type_registry_cv_.notify_all();
 }
 
-}  // namespace fastdds
 }  // namespace impl
 
 Result<std::unique_ptr<Context>> Context::Impl::create(const ContextOptions& options) {
@@ -599,7 +595,7 @@ Result<std::unique_ptr<Context>> Context::Impl::create(const ContextOptions& opt
             Error(ErrorCode::DDSError, "Fast DDS failed to create a Context container"));
     }
 
-    auto context = std::make_shared<impl::fastdds::Context>(
+    auto context = std::make_shared<impl::Context>(
         factory, participant, publisher, subscriber, options.domain_id, options.runtime_mode);
     // From this point Context is the sole owner, including listener
     // installation failure paths.

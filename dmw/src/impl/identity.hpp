@@ -17,8 +17,6 @@ namespace dmw {
 
 namespace impl {
 
-namespace fastdds {
-
 using SequenceNumber = eprosima::fastrtps::rtps::SequenceNumber_t;
 
 static_assert(sizeof(std::int32_t) == 4, "DMW requires 32-bit int32_t");
@@ -32,7 +30,7 @@ static_assert(
     std::is_same<decltype(SequenceNumber{}.low), std::uint32_t>::value,
     "Unexpected Fast DDS sequence low word type");
 
-inline std::int64_t from_fastdds_sequence(const SequenceNumber& sequence) noexcept {
+inline std::int64_t from_sequence(const SequenceNumber& sequence) noexcept {
     std::uint32_t high_bits{};
     std::memcpy(&high_bits, &sequence.high, sizeof(high_bits));
     const auto bits =
@@ -42,7 +40,7 @@ inline std::int64_t from_fastdds_sequence(const SequenceNumber& sequence) noexce
     return value;
 }
 
-inline SequenceNumber to_fastdds_sequence(std::int64_t value) noexcept {
+inline SequenceNumber to_sequence(std::int64_t value) noexcept {
     std::uint64_t bits{};
     std::memcpy(&bits, &value, sizeof(bits));
 
@@ -59,24 +57,23 @@ inline Gid to_gid(const eprosima::fastrtps::rtps::GUID_t& guid) noexcept {
     return gid;
 }
 
-inline std::optional<RequestId> request_id_from_identity(
+inline std::optional<RequestId> to_request_id(
     const eprosima::fastrtps::rtps::SampleIdentity& identity) noexcept {
     if (identity.sequence_number() == eprosima::fastrtps::rtps::c_SequenceNumber_Unknown)
         return std::nullopt;
     RequestId request_id;
     request_id.client_gid = to_gid(identity.writer_guid());
-    request_id.sequence_number = from_fastdds_sequence(identity.sequence_number());
+    request_id.sequence_number = from_sequence(identity.sequence_number());
     return request_id;
 }
 
-inline std::uint64_t writer_sequence(const SequenceNumber& sequence) noexcept {
+inline std::uint64_t to_writer_sequence(const SequenceNumber& sequence) noexcept {
     if (sequence == eprosima::fastrtps::rtps::c_SequenceNumber_Unknown) {
         return 0;
     }
-    return static_cast<std::uint64_t>(from_fastdds_sequence(sequence));
+    return static_cast<std::uint64_t>(from_sequence(sequence));
 }
 
-}  // namespace fastdds
 }  // namespace impl
 }  // namespace dmw
 

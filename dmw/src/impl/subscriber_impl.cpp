@@ -9,9 +9,9 @@
 #include "dmw/error.hpp"
 #include "impl/event_impl.hpp"
 #include "impl/subscriber_impl.hpp"
-#include "impl/fastdds/identity.hpp"
-#include "impl/fastdds/process_runtime.hpp"
-#include "impl/fastdds/return_code.hpp"
+#include "impl/identity.hpp"
+#include "impl/process_lifetime.hpp"
+#include "impl/return_code.hpp"
 #include "impl/temporary_sample.hpp"
 
 namespace dmw {
@@ -71,7 +71,7 @@ Result<bool> Subscriber::Impl::read(void* message, MessageInfo& info) {
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_NO_DATA)
             return Result<bool>::success(false);
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
-            return Result<bool>::failure(impl::fastdds::to_error(result, "Fast DDS take failed"));
+            return Result<bool>::failure(impl::to_error(result, "Fast DDS take failed"));
         if (!sample_info.valid_data) continue;
 
         auto committed = sample.value().commit_to(message);
@@ -81,13 +81,13 @@ Result<bool> Subscriber::Impl::read(void* message, MessageInfo& info) {
         updated.writer_timestamp = to_nanoseconds(sample_info.source_timestamp);
         updated.reader_timestamp = to_nanoseconds(sample_info.reception_timestamp);
         if (sample_info.sample_identity.writer_guid() != eprosima::fastrtps::rtps::c_Guid_Unknown) {
-            updated.writer_gid = impl::fastdds::to_gid(sample_info.sample_identity.writer_guid());
+            updated.writer_gid = impl::to_gid(sample_info.sample_identity.writer_guid());
         } else if (sample_info.publication_handle.isDefined()) {
-            updated.writer_gid = impl::fastdds::to_gid(
+            updated.writer_gid = impl::to_gid(
                 eprosima::fastrtps::rtps::iHandle2GUID(sample_info.publication_handle));
         }
-        updated.writer_sequence =
-            impl::fastdds::writer_sequence(sample_info.sample_identity.sequence_number());
+        updated.to_writer_sequence =
+            impl::to_writer_sequence(sample_info.sample_identity.sequence_number());
         info = updated;
         return Result<bool>::success(true);
     }
@@ -104,7 +104,7 @@ Result<std::size_t> Subscriber::Impl::matched_publisher_count() const {
     const auto result = reader_->get_subscription_matched_status(status);
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
         return Result<std::size_t>::failure(
-            impl::fastdds::to_error(result, "Fast DDS matched publication query failed"));
+            impl::to_error(result, "Fast DDS matched publication query failed"));
     }
     return Result<std::size_t>::success(static_cast<std::size_t>(status.current_count));
 }

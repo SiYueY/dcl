@@ -46,7 +46,7 @@ add_library(dmw
     src/guard_condition.cpp
     src/impl/guard_condition_impl.cpp
     src/message_type.cpp
-    src/impl/fastdds/message_type.cpp
+    src/impl/message_type.cpp
     src/node.cpp
     src/impl/node_impl.cpp
     src/publisher.cpp

@@ -8,8 +8,8 @@
 #include <fastdds/dds/subscriber/DataReaderListener.hpp>
 
 #include "dmw/error.hpp"
-#include "impl/fastdds/process_runtime.hpp"
-#include "impl/fastdds/return_code.hpp"
+#include "impl/process_lifetime.hpp"
+#include "impl/return_code.hpp"
 
 namespace dmw {
 
@@ -252,7 +252,7 @@ private:
 
 EventParentState::~EventParentState() noexcept = default;
 
-EventParentState::EventParentState(std::shared_ptr<fastdds::Context> context) noexcept
+EventParentState::EventParentState(std::shared_ptr<Context> context) noexcept
 : context(std::move(context)) {}
 
 void EventParentState::drain_listeners() noexcept {
@@ -262,10 +262,10 @@ void EventParentState::drain_listeners() noexcept {
 
 void EventParentState::quarantine_listeners() noexcept {
     if (writer_listener_) {
-        fastdds::ProcessLifetime::instance().retain_writer_listener(std::move(writer_listener_));
+        ProcessLifetime::instance().retain_writer_listener(std::move(writer_listener_));
     }
     if (reader_listener_) {
-        fastdds::ProcessLifetime::instance().retain_reader_listener(std::move(reader_listener_));
+        ProcessLifetime::instance().retain_reader_listener(std::move(reader_listener_));
     }
 }
 
@@ -311,8 +311,7 @@ Result<void> EventParentState::attach(eprosima::fastdds::dds::DataWriter& writer
     }
     listener_cv_.notify_all();
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
-        return Result<void>::failure(
-            fastdds::to_error(result, "Fast DDS failed to set a writer listener"));
+        return Result<void>::failure(to_error(result, "Fast DDS failed to set a writer listener"));
     }
     return Result<void>::success();
 }
@@ -359,8 +358,7 @@ Result<void> EventParentState::attach(eprosima::fastdds::dds::DataReader& reader
     }
     listener_cv_.notify_all();
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
-        return Result<void>::failure(
-            fastdds::to_error(result, "Fast DDS failed to set a reader listener"));
+        return Result<void>::failure(to_error(result, "Fast DDS failed to set a reader listener"));
     }
     return Result<void>::success();
 }

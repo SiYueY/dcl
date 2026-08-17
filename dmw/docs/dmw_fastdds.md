@@ -1995,9 +1995,9 @@ result.low =
     static_cast<uint32_t>(bits & UINT32_MAX);
 
 要求：
-to_fastdds_sequence(from_fastdds_sequence(x))
+to_sequence(from_sequence(x))
 保持 x 的 high/low bit pattern；
-from_fastdds_sequence(to_fastdds_sequence(v))
+from_sequence(to_sequence(v))
 保持 v 的 int64_t bit pattern。
 
 RequestId unknown sequence：
@@ -2023,7 +2023,7 @@ related sequence unknown
 不能返回伪造 RequestId。
 
 MessageInfo writer sequence 使用独立 helper：
-std::uint64_t writer_sequence(
+std::uint64_t to_writer_sequence(
     const SequenceNumber_t& sequence) noexcept;
 
 唯一算法：
@@ -2049,7 +2049,7 @@ high < 0 的非 unknown bit pattern -> 仍按 bit-preserving uint64_t 返回
 
 该 helper 的目的不是判断 RTPS sequence 是否“业务上合理”，
 而是把 middleware 已提供且非 unknown 的 64-bit publication identity
-确定性地暴露为 MessageInfo::writer_sequence。
+确定性地暴露为 MessageInfo::to_writer_sequence。
 
 GUID：
 Gid 与 Fast DDS GUID 的转换必须为固定 16-byte bit-preserving copy，
@@ -4772,8 +4772,8 @@ sample_identity.writer_guid
 恢复 GUID
 无法可靠转换：
 Gid{}
-writer_sequence
-writer_sequence(
+to_writer_sequence
+to_writer_sequence(
     sample_identity.sequence_number)
 unknown sentinel：
 0
@@ -4884,7 +4884,7 @@ Fast DDS request sample sequence 必须为 known。
 
 RequestId.sequence_number
     =
-from_fastdds_sequence(request sample sequence)
+from_sequence(request sample sequence)
 
 转换算法唯一采用 4.2.2；
 unknown / conversion invariant failure：
@@ -4981,7 +4981,7 @@ request_id.client_gid
 
 response.related_sample_identity.sequence_number
     =
-to_fastdds_sequence(request_id.sequence_number)
+to_sequence(request_id.sequence_number)
 
 转换算法唯一采用 4.2.2，
 禁止直接依赖 signed shift/high-low cast。
@@ -5313,7 +5313,7 @@ RequestId.client_gid
 response_reader_gid
 Sequence：
 related sequence 必须 known，
-并通过 4.2.2 from_fastdds_sequence() 转为 public int64_t。
+并通过 4.2.2 from_sequence() 转为 public int64_t。
 unknown related sequence：
 consume/filter response
 --remaining
