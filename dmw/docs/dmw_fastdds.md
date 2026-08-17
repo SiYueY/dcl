@@ -103,7 +103,7 @@ Fast DDS 实现遵循以下原则：
 
 #### 1.4.1 内部命名空间与 `Info` 约定
 
-Fast DDS 专用实现类型必须位于 `dmw::impl::fastdds`；`dmw::impl` 只保留 `ContextState`、`NodeState`、`WaitableState`、`RegistrationState` 等 runtime/concurrency authority。根 `src/*.cpp` 不直接调用或包含 Fast DDS runtime；公开 binding API 与 `MessageTypeAdapter` 均位于 `dmw::fastdds`，其实现通过私有 Impl bridge 转发。
+Fast DDS 专用实现类型必须位于 `dmw::impl::fastdds`；`dmw::impl` 只保留 `Context`、`NodeState`、`WaitableState`、`RegistrationState` 等 runtime/concurrency authority。根 `src/*.cpp` 不直接调用或包含 Fast DDS runtime；公开 binding API 与 `MessageTypeAdapter` 均位于 `dmw::fastdds`，其实现通过私有 Impl bridge 转发。
 
 ```cpp
 namespace dmw::impl::fastdds
@@ -124,7 +124,7 @@ enum class AttachmentStatus;
 }  // namespace dmw::impl::fastdds
 ```
 
-内部 `*Info` 是 DDS entity 的生命周期记录，不是 public value type。它可以拥有 DDS entity pointer、listener、`TopicLease`、`TypeLease`、WaitSet attachment 和延迟删除信息。本文代码片段中未限定的 Fast DDS 专用内部名称，均视为位于 `dmw::impl::fastdds`。
+内部 `*Info` 是 DDS entity 的生命周期记录，不是 public value type。它可以拥有 DDS entity pointer、listener、`Topic`、`TypeRegistration`、WaitSet attachment 和延迟删除信息。本文代码片段中未限定的 Fast DDS 专用内部名称，均视为位于 `dmw::impl::fastdds`。
 
 `Context::Impl` 等嵌套 PImpl 仍定义在 `namespace dmw`，可以组合或引用 `dmw::impl::fastdds` 中的类型。该命名空间只表达编译期依赖边界，不引入多 DDS 实现、多态接口或 runtime dispatch。
 
@@ -221,14 +221,14 @@ Event
 
 ### 2.2 Process Runtime
 
-V1 内部使用 process-lifetime `DmwProcessRuntime`，统一持有：
+V1 内部使用 process-lifetime `ProcessLifetime`，统一持有：
 
 - `ProcessTerminalQuarantine`；
 - `ProcessBindingQuarantine`；
 - `WaitSetIdAllocator`；
 - `LocalEndpointIdAllocator`。
 
-`DmwProcessRuntime` 必须使用 non-destructing process-lifetime storage，不得依赖普通 C++ static object destructor 在进程退出时清理 quarantine backing。建议使用 intentionally leaked function-local singleton backing。
+`ProcessLifetime` 必须使用 non-destructing process-lifetime storage，不得依赖普通 C++ static object destructor 在进程退出时清理 quarantine backing。建议使用 intentionally leaked function-local singleton backing。
 
 `ProcessBindingQuarantine` 只用于 trusted `TopicDataType` integration contract 已被违反，且 `deleteData()` 抛异常后无法证明 sample allocation 已释放的极端路径；它不是正常错误恢复机制。
 
@@ -316,7 +316,7 @@ allocate WaitSetId
 
 Atomic allocator 不获取其它 DMW lock，因此不形成 process lock inversion。
 
-### 2.5 ContextState
+### 2.5 Context
 
 ```cpp
 enum class FinalTeardownState
@@ -339,7 +339,7 @@ enum class ShutdownExecutionState
 `RuntimeState` 描述对 public runtime operation 的可用性；`ShutdownExecutionState` 独立描述“谁正在执行一次性 shutdown protocol，以及该 executor 是否已经 terminal”。二者不能互相代替。
 
 ```cpp
-struct ContextState
+struct Context
 {
     std::mutex runtime_mutex;
     std::condition_variable runtime_cv;
@@ -376,15 +376,15 @@ struct ContextState
     ChildRegistry children;
 
     // Discovery callbacks only keep weak_ptr to these states.
-    // ContextState is their primary strong owner during normal runtime.
+    // Context is their primary strong owner during normal runtime.
     std::shared_ptr<ParticipantObservationRegistryState>
         participants;
 
     std::shared_ptr<RemoteEndpointRegistryState>
         remote_endpoints;
 
-    std::shared_ptr<ServiceMatchRegistryState>
-        service_matches;
+    std::shared_ptr<RequestStateRegistryState>
+        request_states;
 
     std::shared_ptr<TargetReaderObservationRegistryState>
         target_readers;
@@ -427,12 +427,12 @@ shutdown_execution == Failed
 V1 registry state ownership 固定如下：
 
 ```text
-ContextState
+Context
     -> unique_ptr<TypeRegistryState>
     -> unique_ptr<TopicRegistryState>
     -> shared_ptr<ParticipantObservationRegistryState>
     -> shared_ptr<RemoteEndpointRegistryState>
-    -> shared_ptr<ServiceMatchRegistryState>
+    -> shared_ptr<RequestStateRegistryState>
     -> shared_ptr<TargetReaderObservationRegistryState>
     -> unique_ptr<OrphanedEndpointRegistryState>
     -> unique_ptr<RetiredWaitSetRegistryState>
@@ -445,7 +445,7 @@ DiscoveryListenerState 只保存：
 ```text
 weak_ptr<ParticipantObservationRegistryState>
 weak_ptr<RemoteEndpointRegistryState>
-weak_ptr<ServiceMatchRegistryState>
+weak_ptr<RequestStateRegistryState>
 weak_ptr<TargetReaderObservationRegistryState>
 ```
 
@@ -462,10 +462,10 @@ listener
 循环。
 
 正常 runtime：
-`ContextState` 是 discovery-related RegistryState 的 primary strong owner。
+`Context` 是 discovery-related RegistryState 的 primary strong owner。
 
 进入 terminal transfer：
-`ContextState` 必须把上述四个 shared_ptr 以 move 方式移入 `QuarantinedParticipantInfo`；
+`Context` 必须把上述四个 shared_ptr 以 move 方式移入 `QuarantinedParticipantInfo`；
 `DiscoveryListenerState` 中已有 weak_ptr 继续指向相同 RegistryState object，
 control block 和 object 地址均保持稳定。
 
@@ -497,14 +497,14 @@ terminal transfer 通过 unique_ptr move 保持 State object 地址不变。
 `OrphanedEndpointRegistryState` 允许保存 non-owning `ParticipantInfo*`；
 该 pointer 只用于当前 Context 的 contained-entity status，不形成 strong ownership。
 
-`ContextState` 在这些 registry 之前创建 `ParticipantInfo`；
+`Context` 在这些 registry 之前创建 `ParticipantInfo`；
 normal runtime 不移动 State object，
 terminal transfer 又通过 unique_ptr move 保持对象地址不变，
 因此该 non-owning pointer 在 registry lifetime 内稳定。
 
 `OrphanedEndpointRegistryState` / `RetiredWaitSetRegistryState`：
 不向 Fast DDS callback 暴露 weak_ptr；
-由 ContextState unique ownership，
+由 Context unique ownership，
 terminal transfer 使用 intrusive splice / unique_ptr move，
 不得在 catastrophic path 分配内存。
 
@@ -567,7 +567,7 @@ ServerOptions
 `ContextOptions::domain_id`：
 
 ```text
-ContextState.domain_id
+Context.domain_id
     -> create_participant(domain_id, ...)
 ```
 
@@ -576,13 +576,13 @@ ContextState.domain_id
 `ContextOptions::participant_name`：
 
 ```text
-ContextState.participant_name
+Context.participant_name
     -> explicit DomainParticipantQos.name
 ```
 
 `ContextOptions::runtime_mode`：
 
-`ContextState.runtime_mode`
+`Context.runtime_mode`
 
 Context construction commit 后 immutable。
 
@@ -594,7 +594,7 @@ Fast DDS 实现不自行扩大 `dmw.md` 对这些 public fields 的合法性检�
 #### 2.7.1 RuntimeMode、Resolved DDS Naming 与 Error Priority
 
 `RuntimeMode` 在 Context 创建时解析一次并保存到
-`ContextState.runtime_mode`。同一个 Context 内不存在 endpoint 自行覆盖 RuntimeMode，也不存在“同 Context、同 logical name、不同 RuntimeMode 共存”。
+`Context.runtime_mode`。同一个 Context 内不存在 endpoint 自行覆盖 RuntimeMode，也不存在“同 Context、同 logical name、不同 RuntimeMode 共存”。
 
 所有 public endpoint/service 对外保存并返回 **logical DMW name**；resolved DDS name 只属于 implementation-internal metadata、TopicRegistry、discovery 和 interoperability diagnostic。禁止 public `name()`/等价接口泄露 runtime-mode-specific DDS prefix。
 
@@ -828,9 +828,9 @@ delete failure/exception with uncertain effect -> Indeterminate
 ### 2.9 Context Construction
 
 固定顺序：
-initialize DmwProcessRuntime
+initialize ProcessLifetime
 
-allocate ContextState
+allocate Context
 
 preallocate TerminalContextNode
 
@@ -838,7 +838,7 @@ allocate TypeRegistryState / TopicRegistryState
 
 allocate shared ParticipantObservationRegistryState
 allocate shared RemoteEndpointRegistryState
-allocate shared ServiceMatchRegistryState
+allocate shared RequestStateRegistryState
 allocate shared TargetReaderObservationRegistryState
 
 allocate OrphanedEndpointRegistryState
@@ -884,7 +884,7 @@ enum class NodePhase
 ```cpp
 struct NodeState
 {
-    std::shared_ptr<ContextState>
+    std::shared_ptr<Context>
         context;
 
     std::mutex mutex;
@@ -965,7 +965,7 @@ OperationGuard 只证明 operation 在取得时允许开始，不证明 Context 
 
 ### 2.13 Operation Gate Coverage
 
-`Context::create()` 是 OperationGuard 在创建阶段的唯一例外。此时 `ContextState` 尚未成为可用的 runtime object，因此 Context construction 本身不取得 OperationGuard，而是通过 Factory transaction 和 pre-commit failure rollback 保证原子性。
+`Context::create()` 是 OperationGuard 在创建阶段的唯一例外。此时 `Context` 尚未成为可用的 runtime object，因此 Context construction 本身不取得 OperationGuard，而是通过 Factory transaction 和 pre-commit failure rollback 保证原子性。
 
 Context 创建完成后，以下 operation 必须使用 OperationGuard：
 
@@ -1095,7 +1095,7 @@ Participant graph 标记 MayContainHiddenEntity。
 
 `DomainParticipantFactory::create_participant()` 没有更高层 DDS container 可用于恢复隐藏 Participant。
 因此 Context Factory 在调用 create_participant() 前必须已经：
-- 初始化 non-destructing DmwProcessRuntime；
+- 初始化 non-destructing ProcessLifetime；
 - 预分配 TerminalContextNode；
 - 建立 DiscoveryListener/Registry backing strong ownership；
 - 建立可 no-allocation transfer 的 partial QuarantinedParticipantInfo ownership。
@@ -1522,7 +1522,7 @@ catch (...)
 - explicit 后续 `shutdown()` 重复传播同一个 stored exception；
 - noexcept/destructor path 不传播；
 - surviving child operation 因 `RuntimeState::ShuttingDown` 始终返回 `ContextShutdown`；
-- 最后 ContextState destruction 进入 conservative terminal-retention/quarantine，不执行要求 `RuntimeState::Shutdown` 的正常 final Fast DDS teardown。
+- 最后 Context destruction 进入 conservative terminal-retention/quarantine，不执行要求 `RuntimeState::Shutdown` 的正常 final Fast DDS teardown。
 
 如果未来希望 retry Failed shutdown，必须给每个 Phase 增加独立 durable progress marker 和 idempotence evidence；V1 不定义该复杂度。
 
@@ -1547,7 +1547,7 @@ Fast DDS V1 是 `dmw.md` 所允许 shutdown result capability 的严格子集：
 
 ### 2.25 Context Facade Destruction 与 Implicit Shutdown
 
-同版本 `dmw.md` 规定 public Context handle 析构执行 best-effort implicit shutdown。本文必须把该 public rule 映射为 **与显式 `Context::shutdown()` 相同的 runtime shutdown execution state machine**，不能等到 `ContextState` 最后一个 owner 才第一次提交 shutdown。
+同版本 `dmw.md` 规定 public Context handle 析构执行 best-effort implicit shutdown。本文必须把该 public rule 映射为 **与显式 `Context::shutdown()` 相同的 runtime shutdown execution state machine**，不能等到 `Context` 最后一个 owner 才第一次提交 shutdown。
 
 正常 facade/Impl ownership 边界固定为：
 
@@ -1562,7 +1562,7 @@ Context::Impl::~Impl() noexcept
 ```
 
 如果具体 public facade 实现不是独立 `Context::Impl`，等价要求仍是：
-销毁最后一个 public Context facade representation 时，在释放其 `ContextState` strong reference 之前调用 `ContextState::shutdown_noexcept()`。
+销毁最后一个 public Context facade representation 时，在释放其 `Context` strong reference 之前调用 `Context::shutdown_noexcept()`。
 
 `shutdown_noexcept()`：
 - 复用 2.24 executor election；
@@ -1577,12 +1577,12 @@ Context::Impl::~Impl() noexcept
 ```text
 Context facade destroyed first
     -> shutdown linearization is committed immediately
-    -> surviving Node/endpoint/WaitSet may still strong-own ContextState
+    -> surviving Node/endpoint/WaitSet may still strong-own Context
     -> but every new runtime operation observes ContextShutdown
     -> surviving child can no longer observe/re-enter Active
 ```
 
-`ContextState::~ContextState() noexcept` 是最后一道 defensive barrier：
+`Context::~Context() noexcept` 是最后一道 defensive barrier：
 
 ```text
 if shutdown_execution == Idle:
@@ -1618,7 +1618,7 @@ if shutdown_execution == Failed:
 | Creation status | Fast DDS entity creation 返回或抛异常后，`CreationStatus` 应如何更新？ | Factory transaction 与 creation-status matrix |
 | Entity status | delete 返回后，`EntityStatus` 是 KnownAlive、KnownDeleted 还是 Indeterminate？ | Retirement 与 Fast DDS ReturnCode mapping |
 | Retention barrier | 无法证明删除成功时，哪些 listener、TypeSupport、Topic 或 Condition 必须继续保活？ | Contained graph、retirement 与 terminal quarantine |
-| Final authority | 谁执行 exactly-once final teardown？ | ContextState final teardown protocol |
+| Final authority | 谁执行 exactly-once final teardown？ | Context final teardown protocol |
 
 详细协议分别由后续资源章节定义；本章仅建立统一阅读模型，不引入第二份 normative state machine。
 
@@ -1626,7 +1626,7 @@ if shutdown_execution == Failed:
 
 ## 4. Message Binding、Type/Topic Registry 与 QoS
 
-本章以 canonical binding 为起点，依次定义 temporary sample、Type/Topic Registry transaction 和 Fast DDS QoS materialization。Caller 提供的 descriptor 只参与首次 canonicalization；成功取得 TypeLease 后，runtime 只使用 registry 中的 canonical authority。
+本章以 canonical binding 为起点，依次定义 temporary sample、Type/Topic Registry transaction 和 Fast DDS QoS materialization。Caller 提供的 descriptor 只参与首次 canonicalization；成功取得 TypeRegistration 后，runtime 只使用 registry 中的 canonical authority。
 
 ### 4.1 MessageType
 
@@ -1701,7 +1701,7 @@ canonical descriptor。
 后续独立 `create_message_type<PubSubTypeT>()` 即使拥有不同 `MessageType::Impl`，
 只要 BindingIdentity 相同，也只是等价 candidate；
 `TypeRegistry::acquire()` 成功后不得继续使用 caller candidate 执行 TypeSupport serialization hook，
-必须使用 `TypeLease::canonical_binding()`。
+必须使用 `TypeRegistration::canonical_binding()`。
 
 因此同一 Active TypeEntry 的硬性 invariant 是：
 registered TypeSupport
@@ -1734,7 +1734,7 @@ object-local state
 
 必须检查 canonical binding capability 的路径至少包括：
 endpoint Factory 的 Fast DDS type integration step
-TemporarySample::create(TypeLease)
+TemporarySample::create(TypeRegistration)
 publish/write serialization path
 take/read deserialization path
 Temporary -> Caller commit serialization/deserialization
@@ -1780,7 +1780,7 @@ try:
 catch (...):
     binding->capability.store(BindingCapabilityState::Degraded)
     将已经预分配 intrusive node 的 AllocatedSample
-    以 no-allocation 方式 transfer 到 DmwProcessRuntime::ProcessBindingQuarantine
+    以 no-allocation 方式 transfer 到 ProcessLifetime::ProcessBindingQuarantine
     记录固定大小 diagnostic
     不允许 exception 离开 destructor
 
@@ -1922,7 +1922,7 @@ static Result<MessageType> create(
 Binding DSO lifetime：
 只要以下任一对象仍存活：
 - `MessageType` / `MessageType::Impl`；
-- `CanonicalTypeBinding` / `TypeLease`；
+- `CanonicalTypeBinding` / `TypeRegistration`；
 - endpoint/service runtime backing；
 - `ProcessBindingQuarantine` / `ProcessTerminalQuarantine` 中保留的 CanonicalTypeBinding；
 定义 `PubSubTypeT` 的 `type_info`、vtable 和 hook code 所在 DSO **不得 unload/dlclose**。
@@ -2084,7 +2084,7 @@ class TemporarySample
 public:
     static Result<TemporarySample>
     create(
-        const TypeLease& type);
+        const TypeRegistration& type);
 
     TemporarySample(const TemporarySample&) = delete;
     TemporarySample& operator=(const TemporarySample&) = delete;
@@ -2103,7 +2103,7 @@ private:
 ```
 
 创建顺序：
-1. 从 TypeLease 取得 `canonical_binding`；
+1. 从 TypeRegistration 取得 `canonical_binding`；
 2. 检查 canonical_binding.capability == Healthy；
 3. allocate AllocatedSample；
 4. `AllocatedSample` strong-own `CanonicalTypeBinding`；
@@ -2111,7 +2111,7 @@ private:
 6. 成功后写入 `allocated_sample->data`。
 
 禁止 TemporarySample 从 caller-provided MessageType candidate 重新选择 binding；
-TypeLease acquire 后 canonical binding 是唯一 authority。
+TypeRegistration acquire 后 canonical binding 是唯一 authority。
 
 AllocatedSample allocation 抛 std::bad_alloc：
     -> 原样传播
@@ -2163,7 +2163,7 @@ checked 计算 payload capacity
 写死任意固定 payload size
 
 在调用 binding hook 前必须重新检查：
-TypeLease canonical binding capability == Healthy。
+TypeRegistration canonical binding capability == Healthy。
 如果已经 Degraded：
     -> DdsError
     -> caller object unchanged
@@ -2256,7 +2256,7 @@ Entry-local condition_variable
 
 模型，因为 Entry 可以在 waiter 睡眠期间被 erase。
 
-### 4.7 TypeEntry、TypeLease 与 Canonical Binding
+### 4.7 TypeEntry、TypeRegistration 与 Canonical Binding
 
 ```cpp
 enum class TypeRegistrationStatus
@@ -2292,16 +2292,16 @@ struct TypeEntry
 `CanonicalTypeBinding` strong-own canonical `MessageType::Impl`，
 因此 registered TypeSupport 的 lifetime 不依赖第一个 caller descriptor facade 是否仍存在。
 
-`TypeLease` 至少保存：
+`TypeRegistration` 至少保存：
 stable TypeRegistryState pointer
 entry key / identity
 std::shared_ptr<CanonicalTypeBinding> canonical_binding。
 
-`TypeLease::canonical_binding()` 是 endpoint runtime 唯一允许使用的 binding authority。
-Factory 在 acquire TypeLease 后：
+`TypeRegistration::canonical_binding()` 是 endpoint runtime 唯一允许使用的 binding authority。
+Factory 在 acquire TypeRegistration 后：
 不得继续把 caller-provided MessageType::Impl 当作 serializer/registered TypeSupport authority；
 可以只保留 caller descriptor 作为不可操作的 metadata/debug reference，
-但所有 TypeSupport hook 必须经 TypeLease canonical binding。
+但所有 TypeSupport hook 必须经 TypeRegistration canonical binding。
 
 ### 4.8 TypeRegistry Acquire Transaction
 
@@ -2322,7 +2322,7 @@ relock TypeRegistry
 registration_status = Registered
 state = Active
 ref_count = 1
-construct TypeLease with canonical_binding
+construct TypeRegistration with canonical_binding
 notify
 unlock
 return lease。
@@ -2373,7 +2373,7 @@ wait + relookup。
 
 Active same wire type name + same BindingIdentity：
     ++ref_count
-    return TypeLease referencing existing canonical_binding。
+    return TypeRegistration referencing existing canonical_binding。
 caller descriptor 本身不替换 canonical binding，
 其独立 capability 也不存在。
 
@@ -2400,7 +2400,7 @@ service serialization path
 全部观察同一 Degraded state。
 
 独立 `create_message_type()` descriptor 不能通过重新 acquire 同 key 绕过 degradation；
-它只得到同一个 canonical TypeLease。
+它只得到同一个 canonical TypeRegistration。
 
 #### 4.8.2 Type Release
 
@@ -2472,9 +2472,9 @@ struct TopicEntry
     EntityStatus entity_status{
         EntityStatus::KnownDeleted};
 
-    // Creating placeholder is intentionally allowed to exist without a TypeLease.
+    // Creating placeholder is intentionally allowed to exist without a TypeRegistration.
     // Active/Retiring/Orphaned entries that may own/reference a DDS Topic must have it engaged.
-    std::optional<TypeLease> type_dependency;
+    std::optional<TypeRegistration> type_dependency;
 
     std::size_t ref_count{0};
 };
@@ -2517,27 +2517,27 @@ Topic Fast DDS lifetime 必须独立保活 TypeSupport。
 
 ```text
 TopicRegistry mutex(rank 4)
-    -> NEVER acquire/release TypeLease
+    -> NEVER acquire/release TypeRegistration
     -> NEVER enter TypeRegistry(rank 3)
 ```
 
-所有 `TypeLease` acquire/release 都发生在 TopicRegistry mutex 外。
+所有 `TypeRegistration` acquire/release 都发生在 TopicRegistry mutex 外。
 
-### 4.10 双 TypeLease
+### 4.10 双 TypeRegistration
 
 首次 endpoint 的 ownership 固定为：
 
 ```text
 DataReaderInfo / DataWriterInfo
-    -> one endpoint TypeLease
+    -> one endpoint TypeRegistration
 
 TopicEntry
-    -> one independent Topic-owned TypeLease
+    -> one independent Topic-owned TypeRegistration
 ```
 
 两者是两个独立 TypeRegistry 引用。
 
-禁止把 endpoint TypeLease move 到 TopicEntry，也禁止 endpoint facade/Impl 再持第三个冗余 TypeLease。
+禁止把 endpoint TypeRegistration move 到 TopicEntry，也禁止 endpoint facade/Impl 再持第三个冗余 TypeRegistration。
 
 ### 4.11 Topic Acquire
 
@@ -2604,13 +2604,13 @@ unlock TopicRegistry
 
 `TopicEntry` 的字符串/fingerprint materialization必须在进入该 critical section 前已经完成；placeholder insertion 本身可能分配 map node，异常按 ordinary allocation channel传播且不留下 entry。
 
-**Stage B — acquire independent Topic-owned TypeLease with no Topic lock held**
+**Stage B — acquire independent Topic-owned TypeRegistration with no Topic lock held**
 
-`local Result<TypeLease> = TypeRegistry::acquire(...)`
+`local Result<TypeRegistration> = TypeRegistry::acquire(...)`
 
 此时 **不得持有 TopicRegistry mutex**。
 
-TypeLease acquire 返回 Error：
+TypeRegistration acquire 返回 Error：
 
 ```text
 lock TopicRegistry
@@ -2620,13 +2620,13 @@ if same key still == Creating(tx):
 else:
     registry invariant violation -> capability Degraded
 unlock
-return original TypeLease acquire Error
+return original TypeRegistration acquire Error
 ```
 
-TypeLease acquire 抛 C++ exception：
+TypeRegistration acquire 抛 C++ exception：
 执行完全相同 placeholder rollback，然后 rethrow original exception。
 
-**Stage C — publish TypeLease into same Creating transaction**
+**Stage C — publish TypeRegistration into same Creating transaction**
 
 ```text
 lock TopicRegistry
@@ -2635,16 +2635,16 @@ lookup key
 must be same Creating(tx)
 must have type_dependency == nullopt
 
-move local TypeLease -> entry.type_dependency
+move local TypeRegistration -> entry.type_dependency
 
 unlock TopicRegistry
 ```
 
 如果 same transaction 校验失败：
-- 不得把 local TypeLease move 到未知 entry；
+- 不得把 local TypeRegistration move 到未知 entry；
 - TopicRegistry capability -> `Degraded`；
 - unlock；
-- release local TypeLease outside Topic mutex；
+- release local TypeRegistration outside Topic mutex；
 - return `DdsError`。
 
 从 Stage C commit 起，Creating entry 已拥有 DDS Topic hidden-create path 所需 canonical TypeSupport lifetime。
@@ -2677,10 +2677,10 @@ relock
 verify same Creating(tx)
 creation_status = NoSideEffect
 entity_status = KnownDeleted
-move engaged Topic-owned TypeLease to local
+move engaged Topic-owned TypeRegistration to local
 erase Creating
 notify/unlock
-release local TypeLease outside Topic mutex
+release local TypeRegistration outside Topic mutex
 return mapped Error
 ```
 
@@ -2694,7 +2694,7 @@ entity_status = Indeterminate
 state = Orphaned
 creation_transaction_id = 0
 topic = nullptr
-retain engaged TypeLease / canonical binding
+retain engaged TypeRegistration / canonical binding
 participant_entities_status = MayContainHiddenEntity
 notify/unlock
 ```
@@ -2702,8 +2702,8 @@ notify/unlock
 ReturnCode failure 返回 operation-specific Error；C++ exception 在上述 evidence/ownership commit 后原样 rethrow。
 
 禁止：
-- 持 TopicRegistry mutex acquire/release TypeLease；
-- exception path erase Orphaned entry + release TypeLease；
+- 持 TopicRegistry mutex acquire/release TypeRegistration；
+- exception path erase Orphaned entry + release TypeRegistration；
 - Creating waiter自行执行 Type acquire/Fast DDS entity creation；只有持 `tx` 的 transaction owner执行 Stage B/C/Fast DDS entity creation。
 
 ### 4.12 Topic Release 与 `EntityStatus`
@@ -2730,18 +2730,18 @@ proven success / baseline-proven already deleted:
     type_dependency.reset()
     erase entry
     notify/unlock
-    release local TypeLease outside TopicRegistry mutex
+    release local TypeRegistration outside TopicRegistry mutex
 
 failure with frozen baseline evidence target definitely remains alive:
     entity_status = KnownAlive
     state = Orphaned
-    retain topic + TypeLease
+    retain topic + TypeRegistration
     allow a later individual retry
 
 ambiguous failure / exception / unknown result:
     entity_status = Indeterminate
     state = Orphaned
-    retain backing + TypeLease
+    retain backing + TypeRegistration
     participant_info.participant_entities_status = MayContainHiddenEntity
     NEVER call delete_topic(old topic pointer) again
     rely on Participant contained-graph barrier or Participant delete success
@@ -2749,7 +2749,7 @@ ambiguous failure / exception / unknown result:
 
 `RegistryEntryState::Orphaned` 只是 registry lifecycle state，**不能**替代 `EntityStatus`。后续第二轮 Topic cleanup 只允许选择 `state == Orphaned && entity_status == KnownAlive` 的 entry。
 
-任何 TypeLease release 都不得在 TopicRegistry mutex 内执行，因为 TypeLease release 可能取得 TypeRegistry mutex，而固定 lock rank 为 TypeRegistry < TopicRegistry。
+任何 TypeRegistration release 都不得在 TopicRegistry mutex 内执行，因为 TypeRegistration release 可能取得 TypeRegistry mutex，而固定 lock rank 为 TypeRegistry < TopicRegistry。
 
 ### 4.13 Fast DDS QoS Authority
 
@@ -2819,7 +2819,7 @@ Golden test 是对本节算法的验证，不是规范定义的替代品。
 DomainParticipantQos：
 base = DomainParticipantQos{}
 mandatory：
-name = ContextState.participant_name
+name = Context.participant_name
 entity_factory.autoenable_created_entities = true
 
 PublisherQos：
@@ -3411,16 +3411,16 @@ second callback drain
 
 release listener
 
-release TopicLease
+release Topic
 
-release TypeLease
+release TypeRegistration
 Fast DDS entity deletion failure/deferred
 retain:
 DDS entity pointer
 listener
 ListenerState
-TopicLease
-TypeLease
+Topic
+TypeRegistration
 进入 retirement。
 
 ### 5.7 为什么需要 Second Drain
@@ -3459,8 +3459,8 @@ struct DiscoveryListenerState
         remote_endpoints;
 
     std::weak_ptr<
-        ServiceMatchRegistryState>
-        service_matches;
+        RequestStateRegistryState>
+        request_states;
 
     std::weak_ptr<
         TargetReaderObservationRegistryState>
@@ -3469,7 +3469,7 @@ struct DiscoveryListenerState
 ```
 
 不强持有：
-ContextState
+Context
 避免：
 listener
  -> Context
@@ -3497,12 +3497,12 @@ ListenerState
 
 ### 5.10 Final Context Teardown、Implicit Shutdown 与 Callback-stack Barrier
 
-Listener 不允许成为 `ContextState` 最后一个 strong owner；listener/discovery callback只持需要的 stable state/backing，不在 callback entry中临时 strong-own ContextState。因此最后一个 public/internal Context owner的释放不能由 Fast DDS callback自动触发 Participant destruction。
+Listener 不允许成为 `Context` 最后一个 strong owner；listener/discovery callback只持需要的 stable state/backing，不在 callback entry中临时 strong-own Context。因此最后一个 public/internal Context owner的释放不能由 Fast DDS callback自动触发 Participant destruction。
 
 正常最终入口固定为：
 
 ```cpp
-ContextState::~ContextState() noexcept
+Context::~Context() noexcept
 {
     const auto shutdown_terminal =
         ensure_shutdown_terminal_for_destruction_noexcept();
@@ -3526,7 +3526,7 @@ ContextState::~ContextState() noexcept
 - `Failed` -> **不得 retry partial shutdown phases**，返回 Failed；
 - 不允许 exception越过 noexcept boundary。
 
-正常情况下，2.25 已经在 Context facade/Impl析构时提交 implicit shutdown，因此 endpoint/Node 等 surviving owners只延长 `ContextState` lifetime，不会延迟 shutdown linearization。这里是最后的 defensive barrier。
+正常情况下，2.25 已经在 Context facade/Impl析构时提交 implicit shutdown，因此 endpoint/Node 等 surviving owners只延长 `Context` lifetime，不会延迟 shutdown linearization。这里是最后的 defensive barrier。
 
 `run_final_teardown_once()` 使用 `final_teardown_state` CAS：
 
@@ -3548,7 +3548,7 @@ NotStarted -> Running -> Completed
 - ownership转移到 `ProcessTerminalQuarantine` -> `Quarantined`；
 - `Completed/Quarantined` terminal，不回退；
 - 进入函数必须断言当前线程不在任何 DMW/Fast DDS listener callback stack；
-- final teardown可以发生在任意释放最后一个合法 `ContextState` strong owner的非-callback thread，不绑定特定用户线程。
+- final teardown可以发生在任意释放最后一个合法 `Context` strong owner的非-callback thread，不绑定特定用户线程。
 
 ### 5.11 Ordinary Endpoint StatusMask
 
@@ -3731,9 +3731,9 @@ B. Remote + service dirty
    lock RemoteEndpointRegistry                    // rank 6
    update remote endpoint/tombstone
    if remote change must dirty service graph:
-       lock ServiceMatchRegistry                  // rank 7; only 6 -> 7 nesting
+       lock RequestStateRegistry                  // rank 7; only 6 -> 7 nesting
        mark Active local entries NeedsRebuild / advance generation
-       unlock ServiceMatchRegistry
+       unlock RequestStateRegistry
    unlock RemoteEndpointRegistry
 
 C. Target-specific update
@@ -3754,7 +3754,7 @@ Partial failure：
 - Participant commit失败 -> participant capability `Degraded`；不伪造 dependent success；调用 `signal_target_dependency_change()`；
 - Remote update失败 -> Remote capability `Degraded`；若丢失response-reader target correctness信息，则调用 `degrade_target_and_signal()`；
 - Target update失败 -> `degrade_target_and_signal()`；
-- Service dirty failure/exhaustion -> ServiceMatch capability `Degraded`；不回滚已提交 Participant/Remote state；
+- Service dirty failure/exhaustion -> RequestState capability `Degraded`；不回滚已提交 Participant/Remote state；
 - Participant `Removed`一旦提交永不因后续partial failure回滚。
 
 #### 5.14.3 Remote endpoint lifecycle
@@ -3872,38 +3872,38 @@ enum class MatchRebuildState
 ```
 
 ```cpp
-struct LocalServiceMatchEntry
+struct LocalRequestStateEntry
 {
     LocalEndpointId local_id;
     LocalServiceEntryPhase phase{LocalServiceEntryPhase::Active};
     MatchRebuildState rebuild_state{MatchRebuildState::Clean};
-    std::uint64_t match_generation{0};
+    std::uint64_t state_generation{0};
     std::uint64_t observed_remote_registry_generation{0};
     set<RemoteEndpointGuid> matched;
 };
 ```
 
 ```cpp
-struct ServiceMatchRegistryState
+struct RequestStateRegistryState
 {
     std::mutex mutex;
     DiscoveryRegistryCapability capability{DiscoveryRegistryCapability::Healthy};
-    LocalServiceMatchTable entries;
+    LocalRequestStateTable entries;
 };
 ```
 
 `NeedsRebuild` 是 **per-entry dirty state**，不是全局 capability。一个 local service endpoint 的 transient ordering/match delta 不得把其它 service endpoint 一起标脏。
-`ServiceMatchRegistryState.capability == Degraded` 只表示 registry structure/invariant 已无法可信维护。
+`RequestStateRegistryState.capability == Degraded` 只表示 registry structure/invariant 已无法可信维护。
 
-`match_generation` checked monotonic、never wrap。若某 Active/Closing entry 的一次新 logical edge/phase mutation 需要再次 increment，而当前值已经是 `UINT64_MAX`：
+`state_generation` checked monotonic、never wrap。若某 Active/Closing entry 的一次新 logical edge/phase mutation 需要再次 increment，而当前值已经是 `UINT64_MAX`：
 
-`ServiceMatchRegistryState.capability = Degraded`
+`RequestStateRegistryState.capability = Degraded`
 
 V1 不定义 per-entry Degraded，也不把 generation 归零；这是避免 stale rebuild ABA 的唯一 terminal 处理。之后所有依赖 exact service graph 的 operation -> `DdsError`，普通 matched-count query 仍可独立工作。
 
 local endpoint close/unregister：
-1. 在 ServiceMatchRegistry mutex 下 `phase Active -> Closing`；
-2. checked advance 该 entry `match_generation`；
+1. 在 RequestStateRegistry mutex 下 `phase Active -> Closing`；
+2. checked advance 该 entry `state_generation`；
 3. 从可 rebuild/availability candidate 中排除；
 4. Fast DDS listener/match teardown 完成后 `Closing -> Removed`；
 5. late callback/rebuild result 看到非 Active phase 必须丢弃，不能重建已关闭 endpoint。
@@ -3914,17 +3914,17 @@ Fast DDS matched callback 是 QoS compatibility authority；DMW 不重新实现 
 
 Matched callback：
 - 先独立更新 ordinary matched count；
-- lock ServiceMatchRegistry；
+- lock RequestStateRegistry；
 - lookup local Active entry；不存在/Closing/Removed -> late callback no-op；
-- checked increment `match_generation`；若已为 `UINT64_MAX` 且仍需 increment，则 global ServiceMatchRegistry capability -> Degraded，停止 exact graph mutation；
+- checked increment `state_generation`；若已为 `UINT64_MAX` 且仍需 increment，则 global RequestStateRegistry capability -> Degraded，停止 exact graph mutation；
 - 如果 `current_count_change` 与 last remote identity 可证明 exactly one add/remove，允许无分配/受控分配 fast-path 更新 matched set；
 - unexpected delta、identity 暂不可解释、fast-path allocation failure -> 仅该 entry `NeedsRebuild`；callback 不做 Fast DDS discovery enumeration；
 - registry structure corruption -> global capability Degraded。
 
 RemoteEndpointRegistry successful add/change/remove/participant-remove commit 后：
 - checked advance `registry_generation`；
-- 按 lock rank RemoteEndpointRegistry -> ServiceMatchRegistry；
-- 对所有 Active local service entries 设置 `NeedsRebuild` 并 checked increment 各自 `match_generation`；任一 entry generation 已耗尽且仍需 increment -> global ServiceMatchRegistry capability Degraded。
+- 按 lock rank RemoteEndpointRegistry -> RequestStateRegistry；
+- 对所有 Active local service entries 设置 `NeedsRebuild` 并 checked increment 各自 `state_generation`；任一 entry generation 已耗尽且仍需 increment -> global RequestStateRegistry capability Degraded。
 V1 允许 O(number_of_local_service_entries) 的 bounded iteration；不得在 callback 中为 dirty notification 新分配容器。
 这样无需 correctness-sensitive reverse index，也不会漏掉一个 remote discovery change 对 service pairing 的影响。
 
@@ -3937,10 +3937,10 @@ OperationGuard
 
 atomic check ParticipantObservationRegistry capability == Healthy
 
-lock ServiceMatchRegistry
+lock RequestStateRegistry
 verify global capability Healthy
 verify entry Active
-snapshot local_id + match_generation + stable DDS endpoint Info
+snapshot local_id + state_generation + stable DDS endpoint Info
 unlock
 
 lock RemoteEndpointRegistry
@@ -3963,9 +3963,9 @@ relock RemoteEndpointRegistry
 verify capability/generation still compatible
 unlock
 
-relock ServiceMatchRegistry
+relock RequestStateRegistry
 verify entry still Active
-verify match_generation unchanged
+verify state_generation unchanged
 if stale -> discard and retry/leave NeedsRebuild
 else atomic replace matched set; rebuild_state=Clean
 ```
@@ -4393,8 +4393,8 @@ struct DataReaderInfo
     std::shared_ptr<ListenerState>
         listener_state;
 
-    TopicLease topic;
-    TypeLease type;
+    Topic topic;
+    TypeRegistration type;
 
     WaitSetHoldState waitset_holds;
 };
@@ -4431,8 +4431,8 @@ struct DataWriterInfo
     std::shared_ptr<ListenerState>
         listener_state;
 
-    TopicLease topic;
-    TypeLease type;
+    Topic topic;
+    TypeRegistration type;
 };
 ```
 
@@ -4572,14 +4572,14 @@ LocalEndpointId
 preallocated retirement / hidden-entity node
 canonical binding is reached through DataReaderInfo.type
 
-Endpoint TypeLease ownership 唯一规则：
-- `DataWriterInfo::type` / `DataReaderInfo::type` 是 endpoint 唯一 TypeLease owner；
-- `TopicEntry` 额外持有一个 independent Topic-owned TypeLease；
-- endpoint facade/Impl、EventSource、WaitableState 不再重复持有第三个 TypeLease；
+Endpoint TypeRegistration ownership 唯一规则：
+- `DataWriterInfo::type` / `DataReaderInfo::type` 是 endpoint 唯一 TypeRegistration owner；
+- `TopicEntry` 额外持有一个 independent Topic-owned TypeRegistration；
+- endpoint facade/Impl、EventSource、WaitableState 不再重复持有第三个 TypeRegistration；
 - public endpoint state 可以保存 caller `MessageType` metadata/facade，但该 metadata 不增加 TypeRegistry lease refcount，也不是 runtime hook authority。
 
 Public endpoint state 可以保留 caller MessageType metadata，
-但 runtime TypeSupport hook authority 必须来自 `TypeLease::canonical_binding()`；
+但 runtime TypeSupport hook authority 必须来自 `TypeRegistration::canonical_binding()`；
 不得直接回到 Factory caller descriptor 调用 serialize/deserialize/createData/deleteData。
 
 <a id="fastdds-endpoint-create-transaction"></a>
@@ -4587,8 +4587,8 @@ Public endpoint state 可以保留 caller MessageType metadata，
 #### 6.10.1 DataReader / DataWriter Creation Transaction
 
 在调用 create_datareader()/create_datawriter() 前必须已经完成：
-- TypeLease acquired；
-- TopicLease acquired；
+- TypeRegistration acquired；
+- Topic acquired；
 - backing allocated；
 - listener/listener_state allocated and bound；
 - WaitSet hold state initialized（Reader）；
@@ -4605,7 +4605,7 @@ info.creation_status = HandleKnown
 nullptr 表示该调用没有创建隐藏 target entity，
 才可：
 creation_status = NoSideEffect
-rollback listener/TopicLease/TypeLease/backing
+rollback listener/Topic/TypeRegistration/backing
 return DdsError。
 
 如果该 no-side-effect evidence 未被冻结：
@@ -4628,8 +4628,8 @@ rethrow original exception。
 
 该 orphan backing 必须继续 strong-own：
 listener / listener_state
-TopicLease
-TypeLease / canonical binding
+Topic
+TypeRegistration / canonical binding
 Reader WaitSet backing state（如适用）。
 
 如果隐藏 DDS entity 实际存在，以上 ownership 保证其 Fast DDS listener / Topic / TypeSupport 引用不会悬空。
@@ -4677,7 +4677,7 @@ OperationGuard
 
 endpoint Alive
 
-TypeLease canonical binding capability == Healthy ?
+TypeRegistration canonical binding capability == Healthy ?
     no -> DdsError
 
 Fast DDS DataWriter::write()
@@ -4712,7 +4712,7 @@ checked conversion 失败/负值/invariant violation -> `DdsError`；Fast DDS C+
 remaining = begin_take_scan_budget(reader)
 while remaining > 0:
 
-    TypeLease canonical binding capability == Healthy ?
+    TypeRegistration canonical binding capability == Healthy ?
         no -> DdsError
 
     create/reset TemporarySample
@@ -4864,8 +4864,8 @@ struct ServerRetirement
 两侧：
 独立 CreationStatus/EntityStatus
 独立 listener
-独立 TopicLease
-独立 TypeLease
+独立 Topic
+独立 TypeRegistration
 第一侧 delete failure：
 不阻止仍然安全的第二侧 cleanup
 
@@ -5593,7 +5593,7 @@ enum class WaitableCloseReason
 
 struct WaitableState
 {
-    std::shared_ptr<ContextState>
+    std::shared_ptr<Context>
         context;
 
     std::mutex mutex;
@@ -5791,7 +5791,7 @@ Poisoned：
 ```cpp
 struct WaitSetState
 {
-    std::shared_ptr<ContextState>
+    std::shared_ptr<Context>
         context;
 
     std::mutex topology_mutex;
@@ -5936,7 +5936,7 @@ WaitSetState 最后一个 strong owner 释放以前，
 ```text
 validate ordinary public arguments
 
-validate same Context using stable ContextState identity
+validate same Context using stable Context identity
     no:
         -> InvalidArgument
         -> no RegistrationState
@@ -7115,7 +7115,7 @@ parent barrier success 后：
 在 registry mutex 下 unlink hidden node；
 unlock；
 执行必要 callback drain；
-release listener/TopicLease/TypeLease/backing。
+release listener/Topic/TypeRegistration/backing。
 
 barrier failure/exception：
 保留 hidden node；
@@ -7238,8 +7238,8 @@ for every DataWriterInfo:
 
 然后：
 - 禁止再调用 `delete_datareader/delete_datawriter/delete_topic/delete_subscriber/delete_publisher` 使用 barrier 前 raw pointer；
-- 对所有 endpoint listener 执行必要 second drain，之后释放 listener/TopicLease/TypeLease/backing；
-- TopicRegistry 在 mutex 下把可释放 TopicEntry/lease 移出到 local cleanup list，unlock 后释放 TypeLease；
+- 对所有 endpoint listener 执行必要 second drain，之后释放 listener/Topic/TypeRegistration/backing；
+- TopicRegistry 在 mutex 下把可释放 TopicEntry/lease 移出到 local cleanup list，unlock 后释放 TypeRegistration；
 - hidden/known TopicEntry 都按 KnownDeleted evidence reconciliation，不只处理 hidden entry；
 - Type registration 仍由 `TypeRegistrationStatus` 管理；Participant contained barrier success 不自动伪造 unregister_type success。
 
@@ -7288,8 +7288,8 @@ reader = nullptr
 然后：
 second listener drain
 release listener
-release TopicLease
-release TypeLease
+release Topic
+release TypeRegistration
 
 ### 9.11 DDS Publisher Success
 
@@ -7308,7 +7308,7 @@ DomainParticipant::delete_contained_entities()。
 该 API 在 frozen Fast DDS 2.6.12 baseline 中被用作 Participant-contained entity cleanup barrier；
 targeted baseline test 必须验证 success 后：
 - remaining Publisher/Subscriber/Topic 不再 Fast DDS-live；
-- hidden create 预留 listener/TopicLease/TypeLease backing 可以在 callback drain 后释放；
+- hidden create 预留 listener/Topic/TypeRegistration backing 可以在 callback drain 后释放；
 - 已知 raw pointer 不再执行 individual delete，避免 double delete。
 
 failure/exception：
@@ -7365,8 +7365,8 @@ struct QuarantinedParticipantInfo
     std::shared_ptr<RemoteEndpointRegistryState>
         remote_endpoints;
 
-    std::shared_ptr<ServiceMatchRegistryState>
-        service_matches;
+    std::shared_ptr<RequestStateRegistryState>
+        request_states;
 
     std::shared_ptr<TargetReaderObservationRegistryState>
         target_readers;
@@ -7377,9 +7377,9 @@ struct QuarantinedParticipantInfo
 };
 ```
 
-### 9.15 Retirement 不得强持 ContextState
+### 9.15 Retirement 不得强持 Context
 
-TopicLease / TypeLease 内部指向 stable RegistryState，而不是 `shared_ptr<ContextState>`，否则：
+Topic / TypeRegistration 内部指向 stable RegistryState，而不是 `shared_ptr<Context>`，否则：
 
 ```text
 Context
@@ -7394,20 +7394,20 @@ Context
 `TypeRegistryState` / `TopicRegistryState`：
 由 unique_ptr ownership；
 移动到 QuarantinedParticipantInfo 后 State object 地址不变；
-TypeLease / TopicLease 保存的 stable State pointer 仍有效。
+TypeRegistration / Topic 保存的 stable State pointer 仍有效。
 
 以下 discovery-related state 由 shared_ptr ownership：
 - `ParticipantObservationRegistryState`
 - `RemoteEndpointRegistryState`
-- `ServiceMatchRegistryState`
+- `RequestStateRegistryState`
 - `TargetReaderObservationRegistryState`
 
 terminal transfer 通过 shared_ptr move 保持同一 control block / object；
 `DiscoveryListenerState` 的 weak_ptr 仍可安全 lock，直到 final listener drain 完成。
 
-Participant observation entries本身 Context-lifetime stable；Remote/Target state中保存的 shared participant handles不会反向 strong-own ContextState。
+Participant observation entries本身 Context-lifetime stable；Remote/Target state中保存的 shared participant handles不会反向 strong-own Context。
 
-Retirement Info 不得反向 strong-own ContextState。
+Retirement Info 不得反向 strong-own Context。
 
 ### 9.16 TerminalContextNode
 
@@ -7456,7 +7456,7 @@ quarantine 必须继续保活 discovery listener/state 和所有可能被隐藏 
 后续 Context 可复用的 DDS entity owner。
 
 初始化：
-DmwProcessRuntime 在第一个 Context DDS resource 创建前完成 process runtime 初始化。
+ProcessLifetime 在第一个 Context DDS resource 创建前完成 process runtime 初始化。
 
 推荐唯一模型：
 
@@ -7486,7 +7486,7 @@ static ProcessTerminalQuarantine& quarantine()
 }
 
 该 `new` 只允许发生在：
-DmwProcessRuntime 初始化阶段
+ProcessLifetime 初始化阶段
 且必须早于第一个 Participant create。
 
 catastrophic terminal adoption path 本身不得执行：
@@ -7503,8 +7503,8 @@ shared ownership control-block allocation。
 terminal adoption 的 ownership handoff 必须先于可能抛异常的 mutex bookkeeping：
 
 ```text
-raw = ContextState.terminal_node.release()
-// 从此 ContextState 不再析构 raw
+raw = Context.terminal_node.release()
+// 从此 Context 不再析构 raw
 adopt_released_node(raw) noexcept
 ```
 
@@ -7601,7 +7601,7 @@ adoption path 必须 no-allocation。
 4   TopicRegistry
 5   ParticipantObservationRegistry
 6   RemoteEndpointRegistry
-7   ServiceMatchRegistry
+7   RequestStateRegistry
 8   TargetReaderObservationRegistry
 9   OrphanedEndpointRegistry
 10  RetiredWaitSetRegistry
@@ -7618,12 +7618,12 @@ adoption path 必须 no-allocation。
 - rank 数值只描述**允许的嵌套方向：低 -> 高**；
 - ParticipantObservation callback handoff 按 [discovery commit order](#fastdds-discovery-commit-order) 通常选择“unlock rank 5，再进入 rank 6/8”，而不是依赖嵌套；
 - 唯一允许的 discovery cross-registry nested edge 是 [discovery commit order](#fastdds-discovery-commit-order) 定义的
-  `RemoteEndpointRegistry(rank 6) -> ServiceMatchRegistry(rank 7)`；该 edge用于把 remote
+  `RemoteEndpointRegistry(rank 6) -> RequestStateRegistry(rank 7)`；该 edge用于把 remote
   mutation与 affected local service entries 的 `NeedsRebuild` publication放在同一 commit
   boundary；除此之外 discovery registry之间均先 unlock 再 handoff；
 - Target predicate绝不从 rank 8 反向进入 Participant(rank 5) 或 Remote(rank 6)；participant lifecycle/capability通过 stable entry atomic snapshot读取；
 - Pending(rank 16) 与 Target(rank 8) 在 `send_response()` 中永不同时持有；
-- Topic(rank 4) 永不调用 TypeLease acquire/release，因此不存在 Topic -> Type(rank 3)。
+- Topic(rank 4) 永不调用 TypeRegistration acquire/release，因此不存在 Topic -> Type(rank 3)。
 
 ### 10.2 Same-rank Rule
 
@@ -8103,11 +8103,11 @@ Phase 1 **不再维护第二份文字清单**。唯一 checklist authority 是 [
 合并后，本文只规定这些 public behavior 的 Fast DDS 实现，不再自行扩大 public guarantee。
 Phase 2 — Process / Context
 实现：
-DmwProcessRuntime
+ProcessLifetime
 
 lock-free monotonic IDs
 
-ContextState
+Context
 
 NodeState
 
@@ -8126,7 +8126,7 @@ SerializationScratch
 TypeRegistry
 TopicRegistry
 
-dual TypeLease
+dual TypeRegistration
 
 explicit Fast DDS QoS
 
@@ -8151,7 +8151,7 @@ RemoteEndpointRegistry
 
 ordinary matched count
 
-ServiceMatchRegistry
+RequestStateRegistry
 
 TargetReaderObservationRegistry
 Phase 6 — WaitSet
@@ -8346,18 +8346,18 @@ does not overwrite ContextShutdown
 #### 11.2.1 Context Shutdown Executor / Implicit Shutdown Tests
 
 Public lifetime-legal tests：
-- destroy Context facade while Node/Publisher/Subscriber/Client/Server/WaitSet still strong-own `ContextState`；
+- destroy Context facade while Node/Publisher/Subscriber/Client/Server/WaitSet still strong-own `Context`；
 - facade destructor commits `Active -> ShuttingDown` before releasing its strong state owner；
 - surviving child operation -> `ContextShutdown`，never observes Active again；
 - explicit `shutdown()` completed under legal synchronization, then facade destruction -> no second executor/no duplicate request-all；
-- last `ContextState` owner destruction with execution `Idle` -> defensive `shutdown_noexcept()`；
+- last `Context` owner destruction with execution `Idle` -> defensive `shutdown_noexcept()`；
 - last owner sees `Completed` -> normal final teardown；
 - last owner sees `Failed` -> no retry of partial phases, terminal retention/quarantine。
 
 **禁止**测试“同一个 public Context object 的 `shutdown()` 与其 destructor 无同步并发”；该场景违反 public facade lifetime contract并可能构成 C++ UB。
 
 Internal state-machine concurrency tests：
-- two legal internal holders concurrently enter `ContextState::shutdown()` / `shutdown_noexcept()` -> exactly one `Idle -> Running` executor；
+- two legal internal holders concurrently enter `Context::shutdown()` / `shutdown_noexcept()` -> exactly one `Idle -> Running` executor；
 - waiter sees Running and waits；
 - executor success -> `Completed + RuntimeState::Shutdown`，all waiters wake；
 - inject unexpected exception after each Phase A/B/C/D boundary -> executor commits `Failed + stored exception_ptr + notify_all`；
@@ -8458,15 +8458,15 @@ TypeRegistry：
 
 TopicRegistry three-stage transaction：
 - Absent insert Creating(tx) under Topic lock；
-- unlock Topic before TypeLease acquire；
+- unlock Topic before TypeRegistration acquire；
 - instrumentation asserts **TypeRegistry mutex is never acquired while TopicRegistry mutex is held**；
-- TypeLease acquire Error -> relock same tx, erase placeholder, notify, release outside lock；
-- TypeLease acquire exception -> same rollback then rethrow；
+- TypeRegistration acquire Error -> relock same tx, erase placeholder, notify, release outside lock；
+- TypeRegistration acquire exception -> same rollback then rethrow；
 - concurrent waiter observes Creating and does not run a second Type acquire/create_topic；
-- Stage C tx mismatch -> Topic capability Degraded + local TypeLease released outside Topic lock；
-- create_topic hidden-side-effect exception -> Orphaned retains engaged TypeLease；
+- Stage C tx mismatch -> Topic capability Degraded + local TypeRegistration released outside Topic lock；
+- create_topic hidden-side-effect exception -> Orphaned retains engaged TypeRegistration；
 - creation transaction ID never reuse/wrap；exhausted absent acquire -> ResourceExhausted；
-- TopicEntry erase/move TypeLease under Topic mutex, TypeLease destruction/release only after unlock；
+- TopicEntry erase/move TypeRegistration under Topic mutex, TypeRegistration destruction/release only after unlock；
 - generated lock-edge graph contains no `TopicRegistry(4) -> TypeRegistry(3)` edge。
 
 Participant/Remote authority：
@@ -8738,7 +8738,7 @@ service_is_available triggers affected-entry rebuild
 rebuild success
     -> entry Clean; global registry capability remains Healthy
 
-rebuild concurrent match_generation change
+rebuild concurrent state_generation change
     -> stale rebuild discarded/retried
 
 remote endpoint temporarily absent from RemoteEndpointRegistry
@@ -8757,7 +8757,7 @@ rebuild heap allocation failure
 
 Graph corruption / impossible identity conversion：
 service availability -> DdsError
-corresponding RemoteEndpointRegistry/ServiceMatchRegistry global capability -> Degraded
+corresponding RemoteEndpointRegistry/RequestStateRegistry global capability -> Degraded
 普通 matched query可以保持独立。
 
 ### 11.15 Target Reader History
@@ -8957,13 +8957,13 @@ create_topic valid handle -> HandleKnown
 nullptr with frozen no-side-effect evidence -> NoSideEffect rollback
 ambiguous nullptr/failure -> SideEffectIndeterminate + parent graph MayContainHiddenEntity
 create_datareader exception after entered Fast DDS API call
-    -> orphan backing retains listener/TopicLease/TypeLease
+    -> orphan backing retains listener/Topic/TypeRegistration
     -> Subscriber graph MayContainHiddenEntity
     -> original exception rethrown after adoption
 create_datawriter exception -> symmetric Publisher behavior
 create_topic exception
     -> TopicEntry Orphaned with null handle
-    -> TypeLease retained
+    -> TypeRegistration retained
     -> Participant graph MayContainHiddenEntity
     -> original exception rethrown
 Client/Server second-child create exception after first child success
@@ -9196,9 +9196,9 @@ fixed diagnostic counters thread-safe
 
 #### 11.21.2 Final Teardown / Container / Topic Status Tests
 
-last ContextState owner released from user thread -> exactly one NotStarted->Running winner
+last Context owner released from user thread -> exactly one NotStarted->Running winner
 retirement retry concurrent with final owner release -> no second final teardown
-listener callback cannot become last ContextState strong owner
+listener callback cannot become last Context strong owner
 publisher/subscriber delete failure -> EntityStatus Indeterminate
 participant barrier is invoked for publisher/subscriber graph uncertainty and endpoint Indeterminate handles
 ProcessTerminalQuarantine mutex lock injected exception -> no terminate; released node intentionally leaked
@@ -9229,7 +9229,7 @@ Service match：
 - local endpoint Closing/Removed + late callback/rebuild -> discarded；
 - remote/service registry generation change during rebuild -> stale result discarded；
 - callback allocation failure -> affected capability Degraded, no exception escape；
-- `match_generation == UINT64_MAX` + new mutation -> global ServiceMatchRegistry capability Degraded；exact operation -> DdsError。
+- `state_generation == UINT64_MAX` + new mutation -> global RequestStateRegistry capability Degraded；exact operation -> DdsError。
 
 TargetReader：
 - PendingEntry strong-owns immutable `TargetReaderKey` carrying stable participant observation handle；
@@ -9385,12 +9385,12 @@ Type / Topic
 Type identity = wire name + BindingIdentity。
 Type Registry 是 Context mandatory。
 Topic Registry 是 Context mandatory；primary key = resolved DDS topic name only，wire type/fingerprint 是 name-exclusive invariant fields。
-discovery-related RegistryState 由 ContextState shared_ptr strong-own，listener 只 weak-own。
+discovery-related RegistryState 由 Context shared_ptr strong-own，listener 只 weak-own。
 Topic Fast DDS QoS 使用 canonical TopicQos，与 endpoint Qos 解耦。
 同名同 wire type Topic 不允许 first-creator-wins QoS。
-Topic 自己持 TypeLease。
-Endpoint TypeLease 与 Topic TypeLease 独立。
-Topic Acquire 使用 Creating(tx) placeholder -> unlock Topic -> TypeLease acquire -> relock same tx；Topic-owned TypeLease acquire/release永远发生在 TopicRegistry mutex外，禁止 Topic(4) -> Type(3)。
+Topic 自己持 TypeRegistration。
+Endpoint TypeRegistration 与 Topic TypeRegistration 独立。
+Topic Acquire 使用 Creating(tx) placeholder -> unlock Topic -> TypeRegistration acquire -> relock same tx；Topic-owned TypeRegistration acquire/release永远发生在 TopicRegistry mutex外，禁止 Topic(4) -> Type(3)。
 Registry Fast DDS API call不在 Registry mutex内。
 register_type/create_topic/DDS endpoint create 在进入 Fast DDS API call 前必须已有 ownership record 和预分配异常接管路径。
 entered Fast DDS API call 后 exception 必须先提交 Indeterminate/SideEffectIndeterminate evidence 与 backing ownership，再向外传播。
@@ -9405,7 +9405,7 @@ Message binding / data
 custom PubSubTypeT 必须满足 4.2.1 lifecycle/exception/thread-safety contract。
 BindingCapabilityState = Healthy/Degraded，按 Context × canonical TypeEntry 共享且 degradation 单向。
 同一 Context 内相同 wire name + BindingIdentity 只能有一个 canonical binding authority。
-TypeLease acquire 后 endpoint/TemporarySample/TypeSupport hook 只使用 canonical binding，caller descriptor 不再是 runtime authority。
+TypeRegistration acquire 后 endpoint/TemporarySample/TypeSupport hook 只使用 canonical binding，caller descriptor 不再是 runtime authority。
 deleteData exception 不能逃出 noexcept destructor，并把 AllocatedSample adoption 到 ProcessBindingQuarantine。
 ordinary non-bad_alloc C++ exception 不转换为 DdsError；完成必要 lifetime evidence 后原样传播。
 deserialize false/bad_alloc/其它 exception 所有失败出口均保证 caller object valid/destructible。
@@ -9432,7 +9432,7 @@ Discovery
 RemoteEndpointRegistry capability 仅 Healthy/Degraded；service NeedsRebuild 是 per-local-entry state。
 Remote endpoint lifecycle Active/Removed/ParticipantRemoved terminal rules、registry generation 和 late-callback policy 已冻结。
 ParticipantObservationRegistryState 是唯一 participant lifecycle/tombstone authority；RemoteEndpointRegistry/TargetReaderRegistry只保存 stable participant observation handle，不复制 tombstone table。
-ContextState strong-owns discovery RegistryState；
+Context strong-owns discovery RegistryState；
 DiscoveryListenerState 只保存 weak_ptr；
 terminal transfer 后 strong ownership 由 QuarantinedParticipantInfo 保持。
 actual Fast DDS matching 是 QoS compatibility authority。
@@ -9545,7 +9545,7 @@ Liveliness duration conversion checked。
 announcement period计算不发生乘法 overflow。
 Retirement
 Endpoint retirement adoption no-allocation。
-retirement Info不强持 ContextState。
+retirement Info不强持 Context。
 WaitSet unresolved WaitSetInfo阻止 Context Fast DDS teardown。
 delete_contained failure产生 Indeterminate handles。
 Indeterminate raw pointer不再 endpoint-level delete。
@@ -9594,11 +9594,11 @@ cleanup diagnostic不能改变 primary public result。
 | NAME-002 | ServiceKey equality/hash authority字段精确冻结；diagnostic logical/RuntimeMode字段不参与identity |
 | TYPE-001 | 同 Context 同 wire name + BindingIdentity 只有一个 canonical binding |
 | TYPE-002 | entered Fast DDS API call exception 先提交 lifecycle status/ownership 再传播 |
-| TYPE-003 | endpoint TypeLease 只由 DataReaderInfo/DataWriterInfo 持有；TopicEntry 另持 independent lease |
+| TYPE-003 | endpoint TypeRegistration 只由 DataReaderInfo/DataWriterInfo 持有；TopicEntry 另持 independent lease |
 | TOPIC-001 | TopicRegistry primary key = resolved DDS topic name only；wire type mismatch -> TypeMismatch |
 | TOPIC-002 | TopicEntry 的 CreationStatus 与 EntityStatus 分离；Indeterminate Topic* 永不 individual retry |
 | TOPIC-003 | `TopicQosFingerprint` 按其 canonical policy 集合执行 semantic equality/hash；禁止 raw-byte/padding hash |
-| TOPIC-004 | Absent Topic使用Creating(tx)三阶段事务；Topic mutex下绝不acquire/release TypeLease；transaction token never reuse/wrap |
+| TOPIC-004 | Absent Topic使用Creating(tx)三阶段事务；Topic mutex下绝不acquire/release TypeRegistration；transaction token never reuse/wrap |
 | DISC-001 | ParticipantObservationRegistryState 是唯一 Participant lifecycle/tombstone authority；Remote/Target不复制participant table |
 | DISC-002 | Remote endpoint absent-remove materializes tombstone；Removed+later add while participant Active -> Degraded；terminal不resurrection |
 | DISC-003 | Service NeedsRebuild 是 per-local entry；rebuild用generation防stale commit |
@@ -9661,10 +9661,10 @@ Fast DDS-specific mapping仍只存在于本文，例如：
 
 ### 12.2 最终内部架构
 
-下图中 `ContextState`、`NodeState` 和 `RegistrationState` 属于 `dmw::impl`；`ParticipantInfo`、`DataReaderInfo`、`DataWriterInfo`、`ConditionInfo` 和 `WaitSetInfo` 属于 `dmw::impl::fastdds`。
+下图中 `Context`、`NodeState` 和 `RegistrationState` 属于 `dmw::impl`；`ParticipantInfo`、`DataReaderInfo`、`DataWriterInfo`、`ConditionInfo` 和 `WaitSetInfo` 属于 `dmw::impl::fastdds`。
 
 ```text
-                         DmwProcessRuntime
+                         ProcessLifetime
                                 │
                 ┌───────────────┴──────────────┐
                 │                              │
@@ -9678,7 +9678,7 @@ Fast DDS-specific mapping仍只存在于本文，例如：
                                                 │
                                              Context
                                                 │
-                                      shared ContextState
+                                      shared Context
                                                 │
         ┌───────────────────────────────────────┼─────────────────────────┐
         │                                       │                         │
@@ -9687,7 +9687,7 @@ Fast DDS-specific mapping仍只存在于本文，例如：
         │                                       │                         │
         │                                       ▼                         └── TopicEntry
         │                                   TypeEntry                          │
-        │                                       │                              └── TypeLease
+        │                                       │                              └── TypeRegistration
         │                                       ▼
         │                             CanonicalTypeBinding
         │                                       │
@@ -9703,7 +9703,7 @@ Fast DDS-specific mapping仍只存在于本文，例如：
         ├── ChildRegistry
         ├── ParticipantObservationRegistry  (canonical participant tombstone authority)
         ├── RemoteEndpointRegistry
-        ├── ServiceMatchRegistry
+        ├── RequestStateRegistry
         ├── TargetReaderObservationRegistry
         ├── OrphanedEndpointRegistry
         └── RetiredWaitSetRegistry
@@ -9816,7 +9816,7 @@ ProcessTerminalQuarantine
 - Service fallback GUID 的含义、response-reader removal history 的保留与 duplicate request 的重新 reserve；
 - Event 对 pre-creation history 的 replay 语义、WaitSet 对 Event cursor 的消费语义（V1 不消费，Event 为 level-triggered）、多 Event 独立消费与 counter overflow；
 - `NoData` 与 post-take conversion 的 output guarantee；
-- Topic 与 endpoint 的 TypeLease ownership，以及同一 Context 内 TypeRegistry 的 canonical binding 选择；
+- Topic 与 endpoint 的 TypeRegistration ownership，以及同一 Context 内 TypeRegistry 的 canonical binding 选择；
 - 独立 descriptor 不得绕过 BindingCapability degradation；
 - `register_type`/`create_topic`/`create_datareader`/`create_datawriter` 进入 Fast DDS API call 后发生异常时，必须先记录 `Indeterminate`/`SideEffectIndeterminate` status 再传播；
 - 无 DDS entity pointer 的 hidden contained entity 由哪个 parent container deletion barrier 最终释放；

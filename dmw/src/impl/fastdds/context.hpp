@@ -1,5 +1,5 @@
-#ifndef DMW_IMPL__FASTDDS__CONTEXT_STATE_HPP_
-#define DMW_IMPL__FASTDDS__CONTEXT_STATE_HPP_
+#ifndef DMW_IMPL__FASTDDS__CONTEXT_HPP_
+#define DMW_IMPL__FASTDDS__CONTEXT_HPP_
 
 #include <atomic>
 #include <condition_variable>
@@ -31,71 +31,71 @@ namespace impl {
 
 namespace fastdds {
 
-class ContextState {
+class Context {
 public:
-    class TopicLease;
+    class Topic;
 
     /// Non-copyable ownership of one endpoint reference to a DDS type registration.
-    class TypeLease {
+    class TypeRegistration {
     public:
-        TypeLease() noexcept = default;
-        ~TypeLease() noexcept;
+        TypeRegistration() noexcept = default;
+        ~TypeRegistration() noexcept;
 
-        TypeLease(const TypeLease&) = delete;
-        TypeLease& operator=(const TypeLease&) = delete;
+        TypeRegistration(const TypeRegistration&) = delete;
+        TypeRegistration& operator=(const TypeRegistration&) = delete;
 
-        TypeLease(TypeLease&& other) noexcept;
-        TypeLease& operator=(TypeLease&& other) noexcept;
+        TypeRegistration(TypeRegistration&& other) noexcept;
+        TypeRegistration& operator=(TypeRegistration&& other) noexcept;
 
     private:
-        friend class ContextState;
-        friend class TopicLease;
+        friend class Context;
+        friend class Topic;
 
-        TypeLease(ContextState* context, std::string type_name) noexcept
+        TypeRegistration(Context* context, std::string type_name) noexcept
         : context_(context), type_name_(std::move(type_name)) {}
 
         void reset() noexcept;
         void disarm() noexcept;
 
-        ContextState* context_{nullptr};
+        Context* context_{nullptr};
         std::string type_name_;
     };
 
-    /// Non-copyable ownership of one endpoint reference to a DDS Topic.
+    /// Non-copyable RAII wrapper for one endpoint reference to a DDS Topic.
     ///
-    /// A lease keeps the Topic and its wire-type registration alive until the
+    /// Keeps the Topic and its wire-type registration alive until the
     /// endpoint has deleted its DataReader or DataWriter.  It is intentionally
     /// an implementation type: public entities retain it through their PImpl.
-    class TopicLease {
+    class Topic {
     public:
-        TopicLease() noexcept = default;
-        ~TopicLease() noexcept;
+        Topic() noexcept = default;
+        ~Topic() noexcept;
 
-        TopicLease(const TopicLease&) = delete;
-        TopicLease& operator=(const TopicLease&) = delete;
+        Topic(const Topic&) = delete;
+        Topic& operator=(const Topic&) = delete;
 
-        TopicLease(TopicLease&& other) noexcept;
-        TopicLease& operator=(TopicLease&& other) noexcept;
+        Topic(Topic&& other) noexcept;
+        Topic& operator=(Topic&& other) noexcept;
 
         eprosima::fastdds::dds::Topic* get() const noexcept { return topic_; }
 
     private:
-        friend class ContextState;
+        friend class Context;
 
-        TopicLease(
-            ContextState* context, eprosima::fastdds::dds::Topic* topic, std::string topic_name,
-            TypeLease type_lease) noexcept
+        Topic(
+            Context* context, eprosima::fastdds::dds::Topic* topic, std::string topic_name,
+            TypeRegistration type_registration) noexcept
         : context_(context),
           topic_(topic),
           topic_name_(std::move(topic_name)),
-          type_lease_(std::move(type_lease)) {}
+          type_registration_(std::move(type_registration)) {}
 
         void reset() noexcept;
 
-        ContextState* context_{nullptr};
+        Context* context_{nullptr};
         eprosima::fastdds::dds::Topic* topic_{nullptr};
         std::string topic_name_;
-        TypeLease type_lease_;
+        TypeRegistration type_registration_;
     };
 
     class OperationGuard {
@@ -112,23 +112,23 @@ public:
         explicit operator bool() const noexcept { return state_ != nullptr; }
 
     private:
-        friend class ContextState;
+        friend class Context;
 
-        explicit OperationGuard(ContextState* state) noexcept : state_(state) {}
+        explicit OperationGuard(Context* state) noexcept : state_(state) {}
 
-        ContextState* state_{nullptr};
+        Context* state_{nullptr};
     };
 
-    ContextState(
+    Context(
         eprosima::fastdds::dds::DomainParticipantFactory* factory,
         eprosima::fastdds::dds::DomainParticipant* participant,
         eprosima::fastdds::dds::Publisher* publisher,
         eprosima::fastdds::dds::Subscriber* subscriber, std::uint32_t domain_id,
         RuntimeMode runtime_mode) noexcept;
-    ~ContextState() noexcept;
+    ~Context() noexcept;
 
-    ContextState(const ContextState&) = delete;
-    ContextState& operator=(const ContextState&) = delete;
+    Context(const Context&) = delete;
+    Context& operator=(const Context&) = delete;
 
     eprosima::fastdds::dds::DomainParticipant* participant() const noexcept;
     eprosima::fastdds::dds::Publisher* publisher() const noexcept;
@@ -151,7 +151,7 @@ public:
         return target_readers_;
     }
 
-    Result<TopicLease> acquire_topic(
+    Result<Topic> acquire_topic(
         const MessageType& type, const std::string& dds_topic_name, const Qos& qos);
 
 private:
@@ -187,7 +187,7 @@ private:
     };
 
     bool release_topic(std::string topic_name) noexcept;
-    Result<TypeLease> acquire_type(const MessageType& type);
+    Result<TypeRegistration> acquire_type(const MessageType& type);
     void release_type(std::string type_name) noexcept;
 
     eprosima::fastdds::dds::DomainParticipantFactory* factory_;
@@ -225,4 +225,4 @@ private:
 }  // namespace impl
 }  // namespace dmw
 
-#endif  // DMW_IMPL__FASTDDS__CONTEXT_STATE_HPP_
+#endif  // DMW_IMPL__FASTDDS__CONTEXT_HPP_

@@ -34,7 +34,7 @@ Server::Impl::~Impl() noexcept {
         try {
             listener_detached = response_writer_->set_listener(nullptr) ==
                                 eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
-            if (listener_detached) response_match_listener_->close_and_drain();
+            if (listener_detached) response_listener_->close_and_drain();
         } catch (...) {
             listener_detached = false;
         }
@@ -45,8 +45,8 @@ Server::Impl::~Impl() noexcept {
                 // The Context container remains the conservative ownership barrier.
             }
         } else {
-            impl::fastdds::DmwProcessRuntime::instance().retain_writer_listener(
-                std::move(response_match_listener_));
+            impl::fastdds::ProcessLifetime::instance().retain_writer_listener(
+                std::move(response_listener_));
         }
         response_writer_ = nullptr;
     }
@@ -168,18 +168,18 @@ Result<void> Server::Impl::send_response(const RequestId& request_id, const void
     const auto response_deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
     if (has_target_reader) {
-        impl::ResponseWriterMatchState::WaitStatus target;
+        impl::ResponseState::TargetStatus target;
         try {
-            target = response_match_state_->wait_for_match(
-                sample_identity.writer_guid(), response_deadline);
+            target =
+                response_state_->wait_for_target(sample_identity.writer_guid(), response_deadline);
         } catch (...) {
             std::lock_guard lock(pending_mutex_);
             const auto pending = pending_.find(request_id);
             if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
             throw;
         }
-        if (target != impl::ResponseWriterMatchState::WaitStatus::Matched) {
-            if (target == impl::ResponseWriterMatchState::WaitStatus::Removed) {
+        if (target != impl::ResponseState::TargetStatus::Ready) {
+            if (target == impl::ResponseState::TargetStatus::Removed) {
                 if (release_pending_request(request_id))
                     request_wait_state_->set_blocking_enabled(true);
                 return Result<void>::success();
@@ -187,7 +187,7 @@ Result<void> Server::Impl::send_response(const RequestId& request_id, const void
             std::lock_guard lock(pending_mutex_);
             const auto pending = pending_.find(request_id);
             if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
-            if (target == impl::ResponseWriterMatchState::WaitStatus::Degraded) {
+            if (target == impl::ResponseState::TargetStatus::Unavailable) {
                 return Result<void>::failure(
                     Error(ErrorCode::DdsError, "Response reader discovery state is unavailable"));
             }
@@ -206,13 +206,13 @@ Result<void> Server::Impl::send_response(const RequestId& request_id, const void
         return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
     if (has_target_reader) {
-        auto final_target = response_match_state_->check_target(sample_identity.writer_guid());
-        if (final_target == impl::ResponseWriterMatchState::WaitStatus::Timeout) {
+        auto final_target = response_state_->check_target(sample_identity.writer_guid());
+        if (final_target == impl::ResponseState::TargetStatus::TimedOut) {
             try {
-                // A match may disappear transiently between the first wait
+                // A target may disappear transiently between the first wait
                 // and the write commit.  Continue only until the original
                 // absolute deadline; never start a second 100 ms interval.
-                final_target = response_match_state_->wait_for_match(
+                final_target = response_state_->wait_for_target(
                     sample_identity.writer_guid(), response_deadline);
             } catch (...) {
                 std::lock_guard lock(pending_mutex_);
@@ -221,21 +221,21 @@ Result<void> Server::Impl::send_response(const RequestId& request_id, const void
                 throw;
             }
         }
-        if (final_target == impl::ResponseWriterMatchState::WaitStatus::Removed) {
+        if (final_target == impl::ResponseState::TargetStatus::Removed) {
             if (release_pending_request(request_id))
                 request_wait_state_->set_blocking_enabled(true);
             return Result<void>::success();
         }
-        if (final_target != impl::ResponseWriterMatchState::WaitStatus::Matched) {
+        if (final_target != impl::ResponseState::TargetStatus::Ready) {
             std::lock_guard lock(pending_mutex_);
             const auto pending = pending_.find(request_id);
             if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
-            if (final_target == impl::ResponseWriterMatchState::WaitStatus::Degraded) {
+            if (final_target == impl::ResponseState::TargetStatus::Unavailable) {
                 return Result<void>::failure(
                     Error(ErrorCode::DdsError, "Response reader discovery state is unavailable"));
             }
             return Result<void>::failure(
-                Error(ErrorCode::Timeout, "Response reader lost its match before write"));
+                Error(ErrorCode::Timeout, "Response reader is unavailable before write"));
         }
     }
 

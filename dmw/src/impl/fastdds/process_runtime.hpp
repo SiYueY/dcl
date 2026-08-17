@@ -23,14 +23,14 @@ namespace fastdds {
 ///
 /// Fast DDS can retain callbacks and endpoint bindings after a failed delete.
 /// Releasing the corresponding C++ listener in that state would turn a
-/// recoverable DDS failure into a use-after-free.  The runtime intentionally
+/// recoverable DDS failure into a use-after-free.  The retention owner intentionally
 /// has process lifetime: quarantined objects are only safe to release at the
 /// Fast DDS process termination barrier.
-class DmwProcessRuntime final {
+class ProcessLifetime final {
 public:
-    static DmwProcessRuntime& instance() noexcept {
-        static auto* runtime = new DmwProcessRuntime();
-        return *runtime;
+    static ProcessLifetime& instance() noexcept {
+        static auto* lifetime = new ProcessLifetime();
+        return *lifetime;
     }
 
     void retain_participant(
@@ -97,7 +97,7 @@ private:
         std::unique_ptr<ParticipantObservationListener> listener;
     };
 
-    DmwProcessRuntime() = default;
+    ProcessLifetime() = default;
 
     mutable std::mutex mutex_;
     std::vector<QuarantinedParticipant> participants_;

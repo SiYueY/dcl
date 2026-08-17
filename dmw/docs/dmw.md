@@ -885,7 +885,7 @@ Context facade
     ↓
 Context::Impl
     ↓
-shared_ptr<ContextState>
+shared_ptr<Context>
     ▲      ▲       ▲
     │      │       │
   Node   WaitSet  Endpoint
@@ -1525,7 +1525,7 @@ best-effort shutdown_noexcept()
 
 Context facade 析构不等于立刻删除 DomainParticipant。
 
-### 5.11 ContextState 最终销毁
+### 5.11 Context 最终销毁
 
 如果还有 child：
 
@@ -1540,13 +1540,13 @@ GuardCondition
 Event
 ```
 
-依赖 `ContextState`：
+依赖 `Context`：
 
 ```text
 Context facade gone
         │
         ▼
-ContextState remains
+Context remains
         │
         ▼
 children safely destruct
@@ -4857,16 +4857,15 @@ dmw/
         ├── message_type_impl.hpp
         ├── event_parent_state.hpp
         ├── event_parent_state.cpp
-        ├── endpoint_state.hpp
-        ├── service_state.hpp
         ├── reader_wait_state.hpp
-        ├── service_match_state.hpp
+        ├── request.hpp
+        ├── response.hpp
         ├── participant_observation.hpp
         ├── temporary_sample.hpp
         ├── lock_rank.hpp
         ├── name.hpp
         └── fastdds/
-            ├── context_state.hpp
+            ├── context.hpp
             ├── identity.hpp
             ├── message_type.cpp
             ├── process_runtime.hpp
@@ -4915,7 +4914,7 @@ PublisherImpl
 共享 state 使用：
 
 ```text
-ContextState
+Context
 NodeState
 WaitableState
 RegistrationState
@@ -5608,7 +5607,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 29. `Impl::destroy()` noexcept。
 30. `Impl::destroy()` idempotent。
 31. cleanup failure 不阻断其余 cleanup。
-32. ContextState 可晚于 facade 销毁。
+32. Context 可晚于 facade 销毁。
 33. Node facade 可以早于 endpoint。
 34. Context facade 可以早于 children。
 35. Context shutdown 后 child 仍可安全析构。

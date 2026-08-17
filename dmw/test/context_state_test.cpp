@@ -4,7 +4,7 @@
 #include <memory>
 #include <thread>
 
-#include "impl/fastdds/context_state.hpp"
+#include "impl/fastdds/context.hpp"
 #include "impl/reader_wait_state.hpp"
 
 namespace dmw {
@@ -24,7 +24,7 @@ public:
 }  // namespace dmw
 
 int main() {
-    auto state = std::make_shared<dmw::impl::fastdds::ContextState>(
+    auto state = std::make_shared<dmw::impl::fastdds::Context>(
         nullptr, nullptr, nullptr, nullptr, 17U, dmw::RuntimeMode::DDS);
     int first_count = 0;
     int removed_count = 0;
@@ -53,7 +53,7 @@ int main() {
     assert(first_count == 1);
     assert(state->register_shutdown_callback([] {}) == 0);
 
-    auto second_state = std::make_shared<dmw::impl::fastdds::ContextState>(
+    auto second_state = std::make_shared<dmw::impl::fastdds::Context>(
         nullptr, nullptr, nullptr, nullptr, 18U, dmw::RuntimeMode::DDS);
     auto operation = second_state->try_acquire_operation();
     assert(operation);

@@ -8,7 +8,7 @@
 #include <mutex>
 
 #include "dmw/guard_condition.hpp"
-#include "impl/fastdds/context_state.hpp"
+#include "impl/fastdds/context.hpp"
 #include "impl/lock_rank.hpp"
 
 namespace dmw {
@@ -20,10 +20,10 @@ struct Registration;
 
 class GuardConditionState {
 public:
-    explicit GuardConditionState(std::shared_ptr<impl::fastdds::ContextState> state) noexcept
+    explicit GuardConditionState(std::shared_ptr<impl::fastdds::Context> state) noexcept
     : context_state(std::move(state)) {}
 
-    const std::shared_ptr<impl::fastdds::ContextState>& context() const noexcept {
+    const std::shared_ptr<impl::fastdds::Context>& context() const noexcept {
         return context_state;
     }
 
@@ -78,7 +78,7 @@ public:
 private:
     friend struct impl::Registration;
 
-    std::shared_ptr<impl::fastdds::ContextState> context_state;
+    std::shared_ptr<impl::fastdds::Context> context_state;
     // Generations preserve merged-trigger semantics without relying on a
     // boolean transition that can wrap silently under sustained triggering.
     std::atomic<std::uint64_t> trigger_generation{0};
@@ -94,7 +94,7 @@ private:
 
 class GuardCondition::Impl {
 public:
-    explicit Impl(std::shared_ptr<impl::fastdds::ContextState> state) noexcept
+    explicit Impl(std::shared_ptr<impl::fastdds::Context> state) noexcept
     : state_(std::make_shared<GuardConditionState>(std::move(state))) {}
     ~Impl() noexcept { state_->close(); }
 

@@ -19,7 +19,7 @@ enum class LockRank : unsigned char {
     TopicRegistry = 4,
     ParticipantObservation = 5,
     RemoteEndpoint = 6,
-    ServiceMatch = 7,
+    RequestState = 7,
     TargetReader = 8,
     OrphanedEndpoint = 9,
     RetiredWaitSet = 10,

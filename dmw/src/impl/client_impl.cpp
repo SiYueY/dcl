@@ -36,7 +36,7 @@ Client::Impl::~Impl() noexcept {
             }
         }
         if (!listener_detached) {
-            impl::fastdds::DmwProcessRuntime::instance().retain_reader_listener(
+            impl::fastdds::ProcessLifetime::instance().retain_reader_listener(
                 std::move(response_listener_));
         }
         response_reader_ = nullptr;
@@ -54,7 +54,7 @@ Client::Impl::~Impl() noexcept {
             listener_detached = false;
         }
         if (!listener_detached) {
-            impl::fastdds::DmwProcessRuntime::instance().retain_writer_listener(
+            impl::fastdds::ProcessLifetime::instance().retain_writer_listener(
                 std::move(request_listener_));
         }
         request_writer_ = nullptr;
@@ -130,12 +130,12 @@ Result<bool> Client::Impl::service_is_available() const {
     if (!operation)
         return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
 
-    if (match_state_->is_degraded()) {
+    if (request_state_->is_degraded()) {
         return Result<bool>::failure(
             Error(ErrorCode::DdsError, "Service discovery state is unavailable"));
     }
     try {
-        return Result<bool>::success(match_state_->has_candidate());
+        return Result<bool>::success(request_state_->is_available());
     } catch (const std::bad_alloc&) {
         // The service state is snapshotted before lower-ranked discovery
         // registries are inspected.  Keep allocation failure inside Result.

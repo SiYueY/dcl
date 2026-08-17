@@ -17,14 +17,14 @@
 #include "impl/node_impl.hpp"
 #include "impl/client_impl.hpp"
 #include "impl/server_impl.hpp"
-#include "impl/service_match_state.hpp"
+#include "impl/response.hpp"
 
 namespace dmw {
 
 namespace {
 
 void delete_writer_noexcept(
-    impl::fastdds::ContextState& state, eprosima::fastdds::dds::DataWriter* writer) noexcept {
+    impl::fastdds::Context& state, eprosima::fastdds::dds::DataWriter* writer) noexcept {
     if (writer == nullptr) return;
     try {
         state.publisher()->delete_datawriter(writer);
@@ -35,7 +35,7 @@ void delete_writer_noexcept(
 }
 
 void delete_reader_noexcept(
-    impl::fastdds::ContextState& state, eprosima::fastdds::dds::DataReader* reader) noexcept {
+    impl::fastdds::Context& state, eprosima::fastdds::dds::DataReader* reader) noexcept {
     if (reader == nullptr) return;
     try {
         state.subscriber()->delete_datareader(reader);
@@ -46,7 +46,7 @@ void delete_reader_noexcept(
 
 template <typename Listener>
 void delete_writer_listener_noexcept(
-    impl::fastdds::ContextState& state, eprosima::fastdds::dds::DataWriter* writer,
+    impl::fastdds::Context& state, eprosima::fastdds::dds::DataWriter* writer,
     std::unique_ptr<Listener>& listener) noexcept {
     if (writer == nullptr) return;
     bool detached = false;
@@ -59,13 +59,13 @@ void delete_writer_listener_noexcept(
         detached = false;
     }
     if (!detached) {
-        impl::fastdds::DmwProcessRuntime::instance().retain_writer_listener(std::move(listener));
+        impl::fastdds::ProcessLifetime::instance().retain_writer_listener(std::move(listener));
     }
 }
 
 template <typename Listener>
 void delete_reader_listener_noexcept(
-    impl::fastdds::ContextState& state, eprosima::fastdds::dds::DataReader* reader,
+    impl::fastdds::Context& state, eprosima::fastdds::dds::DataReader* reader,
     std::unique_ptr<Listener>& listener) noexcept {
     if (reader == nullptr) return;
     bool detached = false;
@@ -78,12 +78,11 @@ void delete_reader_listener_noexcept(
         detached = false;
     }
     if (!detached) {
-        impl::fastdds::DmwProcessRuntime::instance().retain_reader_listener(std::move(listener));
+        impl::fastdds::ProcessLifetime::instance().retain_reader_listener(std::move(listener));
     }
 }
 
-std::string dds_topic_name(
-    const impl::fastdds::ContextState& state, const std::string& logical_name) {
+std::string dds_topic_name(const impl::fastdds::Context& state, const std::string& logical_name) {
     const std::string path = logical_name.substr(1);
     if (state.runtime_mode() == RuntimeMode::ROS2) {
         return "rt/" + path;
@@ -92,7 +91,7 @@ std::string dds_topic_name(
 }
 
 std::string service_topic_name(
-    const impl::fastdds::ContextState& state, const std::string& logical_name, bool request) {
+    const impl::fastdds::Context& state, const std::string& logical_name, bool request) {
     const std::string path = logical_name.substr(1);
     if (state.runtime_mode() == RuntimeMode::ROS2) {
         return (request ? "rq/" : "rr/") + path + (request ? "Request" : "Reply");
@@ -206,15 +205,15 @@ Result<std::unique_ptr<Client>> Node::Impl::create_client(
         impl_->context_state_->acquire_topic(type.response_type(), response_topic_name, qos);
     if (!response_topic)
         return Result<std::unique_ptr<Client>>::failure(std::move(response_topic.error()));
-    auto match_state = std::make_shared<impl::ServiceMatchState>(
+    auto request_state = std::make_shared<impl::RequestState>(
         impl_->context_state_->participant_observations(),
         impl_->context_state_->remote_endpoints(), request_topic_name,
         std::string(type.request_type().type_name()), response_topic_name,
         std::string(type.response_type().type_name()));
     auto request_listener =
-        std::make_unique<impl::RequestWriterMatchListener>(std::weak_ptr(match_state));
+        std::make_unique<impl::RequestWriterListener>(std::weak_ptr(request_state));
     auto response_listener =
-        std::make_unique<impl::ResponseReaderMatchListener>(std::weak_ptr(match_state));
+        std::make_unique<impl::ResponseReaderListener>(std::weak_ptr(request_state));
     auto* writer = impl_->context_state_->publisher()->create_datawriter(
         request_topic.value().get(), writer_qos.value(), request_listener.get());
     if (writer == nullptr)
@@ -231,7 +230,7 @@ Result<std::unique_ptr<Client>> Node::Impl::create_client(
     try {
         client_impl = std::unique_ptr<Client::Impl>(new Client::Impl(
             impl_->context_state_, writer, reader, std::move(logical_name.value()),
-            type.response_type(), std::move(match_state), std::move(request_listener),
+            type.response_type(), std::move(request_state), std::move(request_listener),
             std::move(response_listener), std::move(request_topic.value()),
             std::move(response_topic.value())));
     } catch (...) {
@@ -270,25 +269,25 @@ Result<std::unique_ptr<Server>> Node::Impl::create_server(
         service_topic_name(*impl_->context_state_, logical_name.value(), false), qos);
     if (!response_topic)
         return Result<std::unique_ptr<Server>>::failure(std::move(response_topic.error()));
-    auto response_match_state = std::make_shared<impl::ResponseWriterMatchState>(
+    auto response_state = std::make_shared<impl::ResponseState>(
         impl_->context_state_->participant_observations(), impl_->context_state_->target_readers());
     impl_->context_state_->participant_observations()->add_dependency_wake(
-        [weak = std::weak_ptr<impl::ResponseWriterMatchState>(response_match_state)] {
+        [weak = std::weak_ptr<impl::ResponseState>(response_state)] {
             if (const auto state = weak.lock()) state->notify_dependency_change();
         });
     impl_->context_state_->target_readers()->add_dependency_wake(
-        [weak = std::weak_ptr<impl::ResponseWriterMatchState>(response_match_state)] {
+        [weak = std::weak_ptr<impl::ResponseState>(response_state)] {
             if (const auto state = weak.lock()) state->notify_dependency_change();
         });
-    auto response_match_listener =
-        std::make_unique<impl::ResponseWriterMatchListener>(std::weak_ptr(response_match_state));
+    auto response_listener =
+        std::make_unique<impl::ResponseWriterListener>(std::weak_ptr(response_state));
     auto* reader = impl_->context_state_->subscriber()->create_datareader(
         request_topic.value().get(), reader_qos.value());
     if (reader == nullptr)
         return Result<std::unique_ptr<Server>>::failure(
             Error(ErrorCode::DdsError, "Fast DDS failed to create request reader"));
     auto* writer = impl_->context_state_->publisher()->create_datawriter(
-        response_topic.value().get(), writer_qos.value(), response_match_listener.get());
+        response_topic.value().get(), writer_qos.value(), response_listener.get());
     if (writer == nullptr) {
         delete_reader_noexcept(*impl_->context_state_, reader);
         return Result<std::unique_ptr<Server>>::failure(
@@ -298,11 +297,11 @@ Result<std::unique_ptr<Server>> Node::Impl::create_server(
     try {
         server_impl = std::unique_ptr<Server::Impl>(new Server::Impl(
             impl_->context_state_, reader, writer, std::move(logical_name.value()),
-            options.max_pending_requests, type.request_type(), std::move(response_match_state),
-            std::move(response_match_listener), std::move(request_topic.value()),
+            options.max_pending_requests, type.request_type(), std::move(response_state),
+            std::move(response_listener), std::move(request_topic.value()),
             std::move(response_topic.value())));
     } catch (...) {
-        delete_writer_listener_noexcept(*impl_->context_state_, writer, response_match_listener);
+        delete_writer_listener_noexcept(*impl_->context_state_, writer, response_listener);
         delete_reader_noexcept(*impl_->context_state_, reader);
         throw;
     }

@@ -7,22 +7,22 @@
 #include <fastdds/dds/publisher/DataWriter.hpp>
 
 #include "dmw/publisher.hpp"
-#include "impl/endpoint_state.hpp"
+#include "impl/event_parent_state.hpp"
+#include "impl/fastdds/context.hpp"
 
 namespace dmw {
 
 class Publisher::Impl {
 public:
     Impl(
-        std::shared_ptr<impl::fastdds::ContextState> state,
-        eprosima::fastdds::dds::DataWriter* writer, std::string topic_name, MessageType type,
-        impl::fastdds::ContextState::TopicLease topic_lease) noexcept
+        std::shared_ptr<impl::fastdds::Context> state, eprosima::fastdds::dds::DataWriter* writer,
+        std::string topic_name, MessageType type, impl::fastdds::Context::Topic topic) noexcept
     : state_(std::move(state)),
       writer_(writer),
       topic_name_(std::move(topic_name)),
       type_(std::move(type)),
       event_parent_(std::make_shared<impl::EventParentState>(state_)),
-      topic_lease_(std::move(topic_lease)) {}
+      topic_(std::move(topic)) {}
     ~Impl() noexcept;
 
     Result<void> publish(const void* message);
@@ -32,12 +32,12 @@ public:
     Result<std::unique_ptr<Event>> create_event(EventType type);
 
 private:
-    std::shared_ptr<impl::fastdds::ContextState> state_;
+    std::shared_ptr<impl::fastdds::Context> state_;
     eprosima::fastdds::dds::DataWriter* writer_;
     std::string topic_name_;
     MessageType type_;
     std::shared_ptr<impl::EventParentState> event_parent_;
-    impl::fastdds::ContextState::TopicLease topic_lease_;
+    impl::fastdds::Context::Topic topic_;
 };
 
 }  // namespace dmw

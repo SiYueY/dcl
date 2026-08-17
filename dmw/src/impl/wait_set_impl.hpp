@@ -28,7 +28,7 @@
 #include "impl/publisher_impl.hpp"
 #include "impl/subscriber_impl.hpp"
 #include "impl/event_impl.hpp"
-#include "impl/fastdds/context_state.hpp"
+#include "impl/fastdds/context.hpp"
 #include "impl/fastdds/return_code.hpp"
 #include "impl/guard_condition_impl.hpp"
 #include "impl/lock_rank.hpp"
@@ -225,8 +225,7 @@ struct Registration {
 
 class WaitSetState final : public std::enable_shared_from_this<WaitSetState> {
 public:
-    WaitSetState(
-        std::shared_ptr<impl::fastdds::ContextState> context_state, std::uint64_t wait_set_id)
+    WaitSetState(std::shared_ptr<impl::fastdds::Context> context_state, std::uint64_t wait_set_id)
     : context_state_(std::move(context_state)), wait_set_id_(wait_set_id) {}
 
     ~WaitSetState() noexcept { close(); }
@@ -592,7 +591,7 @@ public:
         return closing_;
     }
 
-    std::shared_ptr<impl::fastdds::ContextState> context_state_;
+    std::shared_ptr<impl::fastdds::Context> context_state_;
     const std::uint64_t wait_set_id_;
     std::shared_ptr<WaitSetWake> wake_{std::make_shared<WaitSetWake>()};
 

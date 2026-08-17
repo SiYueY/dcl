@@ -4,13 +4,13 @@
 #include <memory>
 
 #include "dmw/context.hpp"
-#include "impl/fastdds/context_state.hpp"
+#include "impl/fastdds/context.hpp"
 
 namespace dmw {
 
 class Context::Impl {
 public:
-    explicit Impl(std::shared_ptr<impl::fastdds::ContextState> state) noexcept
+    explicit Impl(std::shared_ptr<impl::fastdds::Context> state) noexcept
     : state_(std::move(state)) {}
 
     static Result<std::unique_ptr<Context>> create(const ContextOptions& options);
@@ -23,7 +23,7 @@ public:
     Result<std::unique_ptr<WaitSet>> create_wait_set(const WaitSetOptions& options);
 
 private:
-    std::shared_ptr<impl::fastdds::ContextState> state_;
+    std::shared_ptr<impl::fastdds::Context> state_;
 };
 
 }  // namespace dmw
