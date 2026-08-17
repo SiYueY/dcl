@@ -42,28 +42,27 @@ EventInfo difference(const EventInfo& current, const EventInfo& cursor) {
 
 }  // namespace
 
-Result<TakeStatus> Event::Impl::take(EventInfo& info) {
-    const auto operation = parent_->context_state->try_acquire_operation();
+Result<bool> Event::Impl::take(EventInfo& info) {
+    const auto operation = parent_->context->try_acquire_operation();
     if (!operation) {
-        return Result<TakeStatus>::failure(
-            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
     if (!parent_->alive.load(std::memory_order_acquire)) {
-        return Result<TakeStatus>::failure(
+        return Result<bool>::failure(
             Error(ErrorCode::ParentDestroyed, "Event parent is destroyed"));
     }
     if (parent_->is_exhausted()) {
-        return Result<TakeStatus>::failure(Error(
+        return Result<bool>::failure(Error(
             ErrorCode::ResourceExhausted, "Event generation or registration ID is exhausted"));
     }
     const auto current = parent_->snapshot(type_);
     if (current.generation == cursor_.generation) {
-        return Result<TakeStatus>::success(TakeStatus::NoData);
+        return Result<bool>::success(false);
     }
     info = difference(current.info, cursor_.info);
     cursor_ = current;
     wait_state_->clear_pending();
-    return Result<TakeStatus>::success(TakeStatus::Taken);
+    return Result<bool>::success(true);
 }
 
 }  // namespace dmw

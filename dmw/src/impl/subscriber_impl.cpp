@@ -46,7 +46,7 @@ Subscriber::Impl::~Impl() noexcept {
         const bool reader_closed = wait_state_->close();
         if (listener_detached && reader_closed) {
             try {
-                state_->subscriber()->delete_datareader(reader_);
+                context_->subscriber()->delete_datareader(reader_);
             } catch (...) {
                 // See Publisher::Impl::~Impl(): a Context container is the
                 // final ownership barrier when individual deletion fails.
@@ -56,29 +56,26 @@ Subscriber::Impl::~Impl() noexcept {
     }
 }
 
-Result<TakeStatus> Subscriber::Impl::take(void* message, MessageInfo& info) {
+Result<bool> Subscriber::Impl::read(void* message, MessageInfo& info) {
     if (message == nullptr)
-        return Result<TakeStatus>::failure(
-            Error(ErrorCode::InvalidArgument, "Message must not be null"));
-    const auto operation = state_->try_acquire_operation();
+        return Result<bool>::failure(Error(ErrorCode::InvalidArgument, "Message must not be null"));
+    const auto operation = context_->try_acquire_operation();
     if (!operation)
-        return Result<TakeStatus>::failure(
-            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
     auto remaining = reader_->get_unread_count();
     while (remaining-- != 0U) {
         auto sample = impl::TemporarySample::create(type_);
-        if (!sample) return Result<TakeStatus>::failure(std::move(sample.error()));
+        if (!sample) return Result<bool>::failure(std::move(sample.error()));
         eprosima::fastdds::dds::SampleInfo sample_info;
         const auto result = reader_->take_next_sample(sample.value().data(), &sample_info);
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_NO_DATA)
-            return Result<TakeStatus>::success(TakeStatus::NoData);
+            return Result<bool>::success(false);
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
-            return Result<TakeStatus>::failure(
-                impl::fastdds::to_error(result, "Fast DDS take failed"));
+            return Result<bool>::failure(impl::fastdds::to_error(result, "Fast DDS take failed"));
         if (!sample_info.valid_data) continue;
 
         auto committed = sample.value().commit_to(message);
-        if (!committed) return Result<TakeStatus>::failure(std::move(committed.error()));
+        if (!committed) return Result<bool>::failure(std::move(committed.error()));
 
         MessageInfo updated;
         updated.writer_timestamp = to_nanoseconds(sample_info.source_timestamp);
@@ -92,13 +89,13 @@ Result<TakeStatus> Subscriber::Impl::take(void* message, MessageInfo& info) {
         updated.writer_sequence =
             impl::fastdds::writer_sequence(sample_info.sample_identity.sequence_number());
         info = updated;
-        return Result<TakeStatus>::success(TakeStatus::Taken);
+        return Result<bool>::success(true);
     }
-    return Result<TakeStatus>::success(TakeStatus::NoData);
+    return Result<bool>::success(false);
 }
 
 Result<std::size_t> Subscriber::Impl::matched_publisher_count() const {
-    const auto operation = state_->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<std::size_t>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
@@ -118,7 +115,7 @@ Result<std::unique_ptr<Event>> Subscriber::Impl::create_event(EventType type) {
         return Result<std::unique_ptr<Event>>::failure(
             Error(ErrorCode::InvalidArgument, "EventType is not valid for Subscriber"));
     }
-    const auto operation = state_->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<std::unique_ptr<Event>>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
@@ -127,7 +124,7 @@ Result<std::unique_ptr<Event>> Subscriber::Impl::create_event(EventType type) {
         return Result<std::unique_ptr<Event>>::failure(
             Error(ErrorCode::ParentDestroyed, "Subscriber is destroyed"));
     }
-    auto wait_state = std::make_shared<GuardConditionState>(state_);
+    auto wait_state = std::make_shared<GuardConditionState>(context_);
     auto attached = event_parent_->attach(*reader_);
     if (!attached) return Result<std::unique_ptr<Event>>::failure(std::move(attached.error()));
     const auto cursor = event_parent_->snapshot(type);

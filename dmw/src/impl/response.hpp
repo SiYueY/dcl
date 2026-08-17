@@ -34,16 +34,22 @@ private:
 };
 
 /// Tracks response readers observed by one response writer.
-class ResponseState {
+class ResponseState : public std::enable_shared_from_this<ResponseState> {
 public:
     /// Removed is terminal for an exact response reader: writing a response
     /// after its reader has disappeared is neither useful nor required.
     enum class TargetStatus { Ready, Removed, TimedOut, Unavailable };
 
-    explicit ResponseState(
-        std::weak_ptr<ParticipantObservationRegistry> participants = {},
-        std::weak_ptr<TargetReaderObservationRegistry> target_readers = {}) noexcept
-    : participants_(std::move(participants)), target_readers_(std::move(target_readers)) {}
+    explicit ResponseState(std::weak_ptr<DiscoveryGraph> graph = {}) noexcept
+    : graph_(std::move(graph)) {}
+
+    void subscribe_to_graph() {
+        if (const auto graph = graph_.lock()) {
+            subscription_ = graph->subscribe([state = weak_from_this()](std::uint64_t) {
+                if (const auto value = state.lock()) value->notify_dependency_change();
+            });
+        }
+    }
 
     void observe_reader(
         const eprosima::fastdds::dds::InstanceHandle_t& handle, std::int32_t change) {
@@ -75,7 +81,7 @@ public:
     TargetStatus wait_for_target(
         const eprosima::fastrtps::rtps::GUID_t& reader,
         std::chrono::steady_clock::time_point deadline) {
-        auto target = target_snapshot(reader);
+        auto status = target_status(reader);
         std::unique_lock lock(mutex_);
         const auto ready = [this, &reader] {
             return std::any_of(
@@ -84,17 +90,14 @@ public:
         };
         if (degraded_) return TargetStatus::Unavailable;
         while (true) {
-            if (degraded_ || participant_degraded(target)) return TargetStatus::Unavailable;
-            if (target_removed(target)) return TargetStatus::Removed;
+            if (degraded_ || status == TargetStatus::Unavailable) return TargetStatus::Unavailable;
+            if (status == TargetStatus::Removed) return TargetStatus::Removed;
             if (ready()) return TargetStatus::Ready;
             if (cv_.wait_until(lock, deadline) == std::cv_status::timeout) {
                 return TargetStatus::TimedOut;
             }
-            // Never enter Participant/Target registry while holding this
-            // target state mutex.  Refresh the stable participant handle
-            // outside the lock, then inspect only atomic lifecycle fields.
             lock.unlock();
-            target = target_snapshot(reader);
+            status = target_status(reader);
             lock.lock();
         }
     }
@@ -103,10 +106,10 @@ public:
     /// never waits: it closes the interval between wait_for_target() and DDS
     /// write where discovery may have reported a terminal removal.
     TargetStatus check_target(const eprosima::fastrtps::rtps::GUID_t& reader) const noexcept {
-        const auto target = target_snapshot(reader);
+        const auto status = target_status(reader);
         std::lock_guard lock(mutex_);
-        if (degraded_ || participant_degraded(target)) return TargetStatus::Unavailable;
-        if (target_removed(target)) return TargetStatus::Removed;
+        if (degraded_ || status == TargetStatus::Unavailable) return TargetStatus::Unavailable;
+        if (status == TargetStatus::Removed) return TargetStatus::Removed;
         return std::any_of(
                    readers_.begin(), readers_.end(),
                    [&reader](const ReaderCount& candidate) { return candidate.guid == reader; })
@@ -124,36 +127,19 @@ public:
     void notify_dependency_change() noexcept { cv_.notify_all(); }
 
 private:
-    TargetReaderObservationRegistry::Snapshot target_snapshot(
-        const eprosima::fastrtps::rtps::GUID_t& reader) const noexcept {
-        const auto targets = target_readers_.lock();
-        auto snapshot =
-            targets ? targets->snapshot(reader) : TargetReaderObservationRegistry::Snapshot{};
-        // This helper is called only before taking (or after releasing) the
-        // response-target mutex.  It captures a stable participant handle so
-        // the predicate itself needs only an atomic lifecycle read.
-        if (!snapshot.participant) {
-            if (const auto participants = participants_.lock()) {
-                snapshot.participant = participants->lookup(reader.guidPrefix);
-            }
+    TargetStatus target_status(const eprosima::fastrtps::rtps::GUID_t& reader) const noexcept {
+        const auto graph = graph_.lock();
+        if (!graph || graph->health() != DiscoveryHealth::Healthy) return TargetStatus::Unavailable;
+        switch (graph->endpoint(reader)) {
+            case EndpointState::Removed:
+                return TargetStatus::Removed;
+            case EndpointState::Unavailable:
+                return TargetStatus::Unavailable;
+            case EndpointState::Active:
+            case EndpointState::Unknown:
+                return TargetStatus::TimedOut;
         }
-        return snapshot;
-    }
-
-    bool participant_degraded(
-        const TargetReaderObservationRegistry::Snapshot& target) const noexcept {
-        const auto participants = participants_.lock();
-        const auto targets = target_readers_.lock();
-        return (participants && participants->capability() != DiscoveryCapability::Healthy) ||
-               (targets && targets->capability() != DiscoveryCapability::Healthy) ||
-               target.state == RemoteEndpointObservationState::Degraded;
-    }
-
-    static bool target_removed(const TargetReaderObservationRegistry::Snapshot& target) noexcept {
-        return target.state == RemoteEndpointObservationState::Removed ||
-               (target.participant &&
-                target.participant->lifecycle.load(std::memory_order_acquire) ==
-                    ParticipantLifecycle::Removed);
+        return TargetStatus::Unavailable;
     }
 
     struct ReaderCount {
@@ -165,8 +151,8 @@ private:
     std::condition_variable_any cv_;
     bool degraded_{false};
     std::vector<ReaderCount> readers_;
-    std::weak_ptr<ParticipantObservationRegistry> participants_;
-    std::weak_ptr<TargetReaderObservationRegistry> target_readers_;
+    std::weak_ptr<DiscoveryGraph> graph_;
+    DiscoveryGraph::Subscription subscription_;
 };
 
 class ResponseWriterListener final : public eprosima::fastdds::dds::DataWriterListener {

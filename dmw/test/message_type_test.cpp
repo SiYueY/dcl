@@ -197,11 +197,11 @@ int main() {
             // establishment cycle on loaded DDS hosts.  Re-publish the same
             // sample while waiting; success still requires a real remote
             // take, not merely a match notification.
-            assert(cross_context_publisher.value()->publish(&cross_context_message));
+            assert(cross_context_publisher.value()->write(&cross_context_message));
             auto take =
-                cross_context_subscriber.value()->take(&cross_context_message, cross_context_info);
+                cross_context_subscriber.value()->read(&cross_context_message, cross_context_info);
             assert(take);
-            cross_context_received = take.value() == dmw::TakeStatus::Taken;
+            cross_context_received = take.value();
             if (!cross_context_received) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
@@ -237,7 +237,7 @@ int main() {
             auto take = cross_context_server.value()->take_request(
                 &cross_context_request, received_cross_context_request_id);
             assert(take);
-            cross_context_request_received = take.value() == dmw::TakeStatus::Taken;
+            cross_context_request_received = take.value();
             if (!cross_context_request_received) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
@@ -254,7 +254,7 @@ int main() {
             auto take = cross_context_client.value()->take_response(
                 &cross_context_response, received_cross_context_response_id);
             assert(take);
-            cross_context_response_received = take.value() == dmw::TakeStatus::Taken;
+            cross_context_response_received = take.value();
             if (!cross_context_response_received) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
@@ -291,11 +291,11 @@ int main() {
         assert(matched);
         assert(matched.value() == 0);
         int isolated_message = 4;
-        assert(domain_a_publisher.value()->publish(&isolated_message));
+        assert(domain_a_publisher.value()->write(&isolated_message));
         dmw::MessageInfo isolated_info;
-        auto isolated_take = domain_b_subscriber.value()->take(&isolated_message, isolated_info);
+        auto isolated_take = domain_b_subscriber.value()->read(&isolated_message, isolated_info);
         assert(isolated_take);
-        assert(isolated_take.value() == dmw::TakeStatus::NoData);
+        assert(!isolated_take.value());
     }
 
     {
@@ -331,13 +331,13 @@ int main() {
         }
         assert(ros_profile_matched);
         int ros_profile_message = 5;
-        assert(ros_publisher.value()->publish(&ros_profile_message));
+        assert(ros_publisher.value()->write(&ros_profile_message));
         dmw::MessageInfo ros_profile_info;
         bool ros_profile_received = false;
         for (int attempt = 0; attempt < 30 && !ros_profile_received; ++attempt) {
-            auto take = ros_subscriber.value()->take(&ros_profile_message, ros_profile_info);
+            auto take = ros_subscriber.value()->read(&ros_profile_message, ros_profile_info);
             assert(take);
-            ros_profile_received = take.value() == dmw::TakeStatus::Taken;
+            ros_profile_received = take.value();
             if (!ros_profile_received) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
@@ -369,7 +369,7 @@ int main() {
         for (int attempt = 0; attempt < 30 && !ros_request_received; ++attempt) {
             auto take = ros_server.value()->take_request(&ros_request, ros_server_request_id);
             assert(take);
-            ros_request_received = take.value() == dmw::TakeStatus::Taken;
+            ros_request_received = take.value();
             if (!ros_request_received) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
@@ -382,7 +382,7 @@ int main() {
         for (int attempt = 0; attempt < 30 && !ros_response_received; ++attempt) {
             auto take = ros_client.value()->take_response(&ros_response, ros_response_id);
             assert(take);
-            ros_response_received = take.value() == dmw::TakeStatus::Taken;
+            ros_response_received = take.value();
             if (!ros_response_received) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
@@ -404,7 +404,7 @@ int main() {
     surviving_endpoint_context.value().reset();
     int surviving_message = 0;
     auto after_context_destruction =
-        surviving_endpoint_publisher.value()->publish(&surviving_message);
+        surviving_endpoint_publisher.value()->write(&surviving_message);
     assert(!after_context_destruction);
     assert(after_context_destruction.error().code() == dmw::ErrorCode::ContextShutdown);
     surviving_endpoint_publisher.value().reset();
@@ -451,14 +451,14 @@ int main() {
     assert(node_surviving_subscriber);
     transient_node.value().reset();
     int node_surviving_message = 11;
-    assert(node_surviving_publisher.value()->publish(&node_surviving_message));
+    assert(node_surviving_publisher.value()->write(&node_surviving_message));
     dmw::MessageInfo node_surviving_info;
     bool node_surviving_received = false;
     for (int attempt = 0; attempt < 30 && !node_surviving_received; ++attempt) {
         auto take =
-            node_surviving_subscriber.value()->take(&node_surviving_message, node_surviving_info);
+            node_surviving_subscriber.value()->read(&node_surviving_message, node_surviving_info);
         assert(take);
-        node_surviving_received = take.value() == dmw::TakeStatus::Taken;
+        node_surviving_received = take.value();
         if (!node_surviving_received) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     assert(node_surviving_received);
@@ -512,7 +512,7 @@ int main() {
         [&] { data_wait_result.emplace(data_wait_set.value()->wait(data_wait_timeout.value())); });
 
     int message = 0;
-    assert(publisher.value()->publish(&message));
+    assert(publisher.value()->write(&message));
     data_wait_thread.join();
     assert(data_wait_result && *data_wait_result);
     assert(data_wait_result->value().status() == dmw::WaitStatus::Ready);
@@ -523,9 +523,9 @@ int main() {
     dmw::MessageInfo info;
     bool received = false;
     for (int attempt = 0; attempt < 30 && !received; ++attempt) {
-        auto take = subscriber.value()->take(&message, info);
+        auto take = subscriber.value()->read(&message, info);
         assert(take);
-        received = take.value() == dmw::TakeStatus::Taken;
+        received = take.value();
         if (!received) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     assert(received);
@@ -628,7 +628,7 @@ int main() {
     for (int attempt = 0; attempt < 30 && !request_received; ++attempt) {
         auto take = server.value()->take_request(&request, request_id);
         assert(take);
-        request_received = take.value() == dmw::TakeStatus::Taken;
+        request_received = take.value();
         if (!request_received) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     assert(request_received);
@@ -656,7 +656,7 @@ int main() {
     for (int attempt = 0; attempt < 30 && !response_received; ++attempt) {
         auto take = client.value()->take_response(&response, response_id);
         assert(take);
-        response_received = take.value() == dmw::TakeStatus::Taken;
+        response_received = take.value();
         if (!response_received) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     assert(response_received);
@@ -671,7 +671,7 @@ int main() {
     for (int attempt = 0; attempt < 30 && !second_request_received; ++attempt) {
         auto take = server.value()->take_request(&second_request, second_request_id);
         assert(take);
-        second_request_received = take.value() == dmw::TakeStatus::Taken;
+        second_request_received = take.value();
         if (!second_request_received) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     assert(second_request_received);
@@ -683,14 +683,14 @@ int main() {
     dmw::RequestId unexpected_response_id;
     auto unexpected_response = client.value()->take_response(&response, unexpected_response_id);
     assert(unexpected_response);
-    assert(unexpected_response.value() == dmw::TakeStatus::NoData);
+    assert(!unexpected_response.value());
 
     dmw::RequestId second_response_id;
     bool second_response_received = false;
     for (int attempt = 0; attempt < 30 && !second_response_received; ++attempt) {
         auto take = late_client.value()->take_response(&second_response, second_response_id);
         assert(take);
-        second_response_received = take.value() == dmw::TakeStatus::Taken;
+        second_response_received = take.value();
         if (!second_response_received) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     assert(second_response_received);
@@ -727,7 +727,7 @@ int main() {
         auto take =
             capacity_server.value()->take_request(&capacity_request, first_capacity_request_id);
         assert(take);
-        first_capacity_taken = take.value() == dmw::TakeStatus::Taken;
+        first_capacity_taken = take.value();
         if (!first_capacity_taken) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     assert(first_capacity_taken);
@@ -758,7 +758,7 @@ int main() {
         auto take =
             capacity_server.value()->take_request(&next_capacity_request, next_capacity_request_id);
         assert(take);
-        second_capacity_taken = take.value() == dmw::TakeStatus::Taken;
+        second_capacity_taken = take.value();
         if (!second_capacity_taken) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     assert(second_capacity_taken);
@@ -796,7 +796,7 @@ int main() {
     auto incompatible_subscriber = conflict_node.value()->create_subscriber(
         generated.value(), "fingerprint", conflicting_topic_qos);
     assert(!incompatible_subscriber);
-    assert(incompatible_subscriber.error().code() == dmw::ErrorCode::DdsError);
+    assert(incompatible_subscriber.error().code() == dmw::ErrorCode::DDSError);
 
     auto null_result = dmw::fastdds::MessageTypeAdapter::create({}, typeid(NamedTopicDataType));
     assert(!null_result);

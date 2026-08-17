@@ -81,17 +81,12 @@ int main() {
 
     eprosima::fastrtps::rtps::GuidPrefix_t prefix;
     prefix.value[0] = 42;
-    const auto observations = second_state->participant_observations();
-    const auto active = observations->observe(prefix, false);
-    assert(active);
-    assert(active->lifecycle.load() == dmw::impl::ParticipantLifecycle::Active);
-    const auto tombstone = observations->observe(prefix, true);
-    assert(tombstone == active);
-    assert(tombstone->lifecycle.load() == dmw::impl::ParticipantLifecycle::Removed);
+    const auto graph = second_state->discovery_graph();
+    graph->apply_participant(prefix, dmw::impl::DiscoveryChange::Added);
+    graph->apply_participant(prefix, dmw::impl::DiscoveryChange::Removed);
     // Tombstones are terminal under the frozen GuidPrefix deployment constraint.
-    assert(observations->observe(prefix, false) == tombstone);
-    assert(tombstone->lifecycle.load() == dmw::impl::ParticipantLifecycle::Removed);
-    assert(observations->capability() == dmw::impl::DiscoveryCapability::Degraded);
+    graph->apply_participant(prefix, dmw::impl::DiscoveryChange::Added);
+    assert(graph->health() == dmw::impl::DiscoveryHealth::Unavailable);
 
     auto reader_wait_state = std::make_shared<dmw::impl::ReaderWaitState>(second_state, nullptr);
     dmw::impl::ReaderWaitStateTestAccess::set_claim_in_progress(reader_wait_state, true);

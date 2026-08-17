@@ -23,7 +23,7 @@ enum class ErrorCode {
     IncompatibleQos,
     ParentDestroyed,
     ResourceExhausted,
-    DdsError,
+    DDSError,
     ContextShutdown
 };
 

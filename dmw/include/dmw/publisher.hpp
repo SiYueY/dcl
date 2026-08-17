@@ -28,8 +28,8 @@ public:
     Publisher(Publisher&&) = delete;
     Publisher& operator=(Publisher&&) = delete;
 
-    /// Publish a non-null object matching message_type().
-    Result<void> publish(const void* message);
+    /// Write a non-null object matching message_type().
+    Result<void> write(const void* message);
 
     std::string_view topic_name() const noexcept;
     const MessageType& message_type() const noexcept;

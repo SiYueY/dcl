@@ -7,7 +7,6 @@
 
 #include "dmw/request_id.hpp"
 #include "dmw/result.hpp"
-#include "dmw/take_status.hpp"
 #include "dmw/visibility_control.hpp"
 
 namespace dmw {
@@ -30,8 +29,8 @@ public:
     /// Send a non-null request object matching the Client's request MessageType.
     Result<RequestId> send_request(const void* request);
 
-    /// Take a response addressed to this Client; NoData leaves both outputs unchanged.
-    Result<TakeStatus> take_response(void* response, RequestId& request_id);
+    /// Take a response addressed to this Client; false leaves both outputs unchanged.
+    Result<bool> take_response(void* response, RequestId& request_id);
 
     /// Return a snapshot without combining endpoints from different participants.
     Result<bool> service_is_available() const;

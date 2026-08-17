@@ -8,7 +8,6 @@
 
 #include "dmw/request_id.hpp"
 #include "dmw/result.hpp"
-#include "dmw/take_status.hpp"
 #include "dmw/visibility_control.hpp"
 
 namespace dmw {
@@ -31,7 +30,7 @@ public:
     Server& operator=(Server&&) = delete;
 
     /// Take a request and register its RequestId as pending.
-    Result<TakeStatus> take_request(void* request, RequestId& request_id);
+    Result<bool> take_request(void* request, RequestId& request_id);
 
     /// Respond only to a RequestId currently pending on this Server.
     Result<void> send_response(const RequestId& request_id, const void* response);

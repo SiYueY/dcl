@@ -253,7 +253,7 @@ private:
 EventParentState::~EventParentState() noexcept = default;
 
 EventParentState::EventParentState(std::shared_ptr<fastdds::Context> context) noexcept
-: context_state(std::move(context)) {}
+: context(std::move(context)) {}
 
 void EventParentState::drain_listeners() noexcept {
     if (writer_listener_) writer_listener_->close_and_drain();

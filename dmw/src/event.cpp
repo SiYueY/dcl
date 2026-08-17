@@ -12,6 +12,6 @@ Event::~Event() noexcept = default;
 
 EventType Event::type() const noexcept { return impl_->type(); }
 
-Result<TakeStatus> Event::take(EventInfo& info) { return impl_->take(info); }
+Result<bool> Event::take(EventInfo& info) { return impl_->take(info); }
 
 }  // namespace dmw

@@ -19,7 +19,7 @@ Publisher::Impl::~Impl() noexcept {
                                 eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
             if (listener_detached) {
                 event_parent_->drain_listeners();
-                state_->publisher()->delete_datawriter(writer_);
+                context_->publisher()->delete_datawriter(writer_);
             }
         } catch (...) {
             listener_detached = false;
@@ -31,20 +31,20 @@ Publisher::Impl::~Impl() noexcept {
     }
 }
 
-Result<void> Publisher::Impl::publish(const void* message) {
+Result<void> Publisher::Impl::write(const void* message) {
     if (message == nullptr)
         return Result<void>::failure(Error(ErrorCode::InvalidArgument, "Message must not be null"));
-    const auto operation = state_->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation)
         return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
     if (!writer_->write(const_cast<void*>(message))) {
-        return Result<void>::failure(Error(ErrorCode::DdsError, "Fast DDS write failed"));
+        return Result<void>::failure(Error(ErrorCode::DDSError, "Fast DDS write failed"));
     }
     return Result<void>::success();
 }
 
 Result<std::size_t> Publisher::Impl::matched_subscriber_count() const {
-    const auto operation = state_->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<std::size_t>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
@@ -64,7 +64,7 @@ Result<std::unique_ptr<Event>> Publisher::Impl::create_event(EventType type) {
         return Result<std::unique_ptr<Event>>::failure(
             Error(ErrorCode::InvalidArgument, "EventType is not valid for Publisher"));
     }
-    const auto operation = state_->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<std::unique_ptr<Event>>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
@@ -73,7 +73,7 @@ Result<std::unique_ptr<Event>> Publisher::Impl::create_event(EventType type) {
         return Result<std::unique_ptr<Event>>::failure(
             Error(ErrorCode::ParentDestroyed, "Publisher is destroyed"));
     }
-    auto wait_state = std::make_shared<GuardConditionState>(state_);
+    auto wait_state = std::make_shared<GuardConditionState>(context_);
     auto attached = event_parent_->attach(*writer_);
     if (!attached) return Result<std::unique_ptr<Event>>::failure(std::move(attached.error()));
     const auto cursor = event_parent_->snapshot(type);

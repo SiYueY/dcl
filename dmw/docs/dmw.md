@@ -394,10 +394,10 @@ typed API 属于：
 Topic：
 
 ```cpp
-Result<void> Publisher::publish(
+Result<void> Publisher::write(
     const void* message);
 
-Result<TakeStatus> Subscriber::take(
+Result<bool> Subscriber::read(
     void* message,
     MessageInfo& info);
 ```
@@ -408,11 +408,11 @@ Service：
 Result<RequestId> Client::send_request(
     const void* request);
 
-Result<TakeStatus> Client::take_response(
+Result<bool> Client::take_response(
     void* response,
     RequestId& request_id);
 
-Result<TakeStatus> Server::take_request(
+Result<bool> Server::take_request(
     void* request,
     RequestId& request_id);
 
@@ -428,9 +428,9 @@ Result<void> Server::send_response(
 以下参数不得为 `nullptr`：
 
 ```text
-Publisher::publish(message)
+Publisher::write(message)
 
-Subscriber::take(message, ...)
+Subscriber::read(message, ...)
 
 Client::send_request(request)
 
@@ -461,7 +461,7 @@ DMW 不访问该指针。
 ```cpp
 Foo wrong_message;
 
-bar_publisher->publish(&wrong_message);
+bar_publisher->write(&wrong_message);
 ```
 
 如果 Publisher 实际绑定的是：
@@ -492,17 +492,17 @@ bar_publisher->publish(&wrong_message);
 
 它不用于尝试识别任意 `void*` 的真实 C++ 动态类型。
 
-#### 3.5.4 `take()` 输出状态
+#### 3.5.4 接收输出状态
 
 如果：
 
 ```cpp
-subscriber.take(message, info)
+subscriber.read(message, info)
 ```
 
 返回：
 
-`success + TakeStatus::NoData`
+`success + false`
 
 则：
 
@@ -538,7 +538,7 @@ InvalidState
 
 该错误返回：
 
-`DdsError`
+`DDSError`
 
 或与实际错误更匹配的 ErrorCode。
 
@@ -560,14 +560,14 @@ error after Fast DDS status consumption
 #### 3.5.6 Service take 输出与有限扫描
 
 `Client::take_response()` 与 `Server::take_request()` 对 payload、`RequestId` 和其它 public
-metadata 使用同一事务边界：`NoData` 或 middleware sample consumption 前的任何失败保持
+metadata 使用同一事务边界：`false` 或 middleware sample consumption 前的任何失败保持
 全部 caller output 不变；sample 已消费后的 metadata conversion、correlation、payload
 commit、Error 或允许传播的 C++ exception，只保证全部 output 仍 valid/destructible，字段
 内容可以 unspecified，sample 可以已经从 middleware history 移除。
 
 需要过滤 invalid、foreign、duplicate 或不可关联 sample 的任意 public `take()`，单次调用
 必须使用有限的 call-start candidate budget：filtered sample 消耗 budget，并发新 arrival 不得
-延长本次调用；budget 耗尽且没有 returnable sample 时返回 `TakeStatus::NoData`。因此 NoData
+延长本次调用；budget 耗尽且没有 returnable sample 时返回 `false`。因此 `false`
 是“本次有限候选扫描未取得 public sample”，不保证返回瞬间 middleware history 绝对为空。
 后续调用可以继续处理剩余或新到达 sample。
 
@@ -620,8 +620,6 @@ QosDuration
 
 EventType
 EventInfo
-
-TakeStatus
 
 WaitTimeout
 WaitToken
@@ -936,7 +934,7 @@ enum class ErrorCode
 
     ResourceExhausted,
 
-    DdsError,
+    DDSError,
 
     ContextShutdown
 };
@@ -1199,7 +1197,7 @@ std::bad_alloc
 
 ```text
 Subscriber no sample
-    -> TakeStatus::NoData
+    -> success + false
 
 WaitSet timeout
     -> WaitStatus::Timeout
@@ -1717,7 +1715,7 @@ NotFound
 最后才是：
 
 ```text
-DdsError
+DDSError
 Timeout
 ```
 
@@ -2431,8 +2429,8 @@ public:
     Subscriber(Subscriber&&) = delete;
     Subscriber& operator=(Subscriber&&) = delete;
 
-    Result<TakeStatus>
-    take(
+    Result<bool>
+    read(
         void* message,
         MessageInfo& info);
 
@@ -2461,28 +2459,15 @@ private:
 };
 ```
 
-### 8.4 TakeStatus
-
-```cpp
-enum class TakeStatus
-{
-    Taken,
-    NoData
-};
-```
+### 8.4 非阻塞接收结果
 
 ```text
-Result error
-    -> operation failed
-
-success + Taken
-    -> data returned
-
-success + NoData
-    -> no sample currently available
+Result error    -> operation failed
+success + true  -> data returned
+success + false -> no sample currently available
 ```
 
-NoData 不是 Error。
+`false` 不是 Error。
 
 ### 8.5 MessageInfo
 
@@ -2675,7 +2660,7 @@ public:
     send_request(
         const void* request);
 
-    Result<TakeStatus>
+    Result<bool>
     take_response(
         void* response,
         RequestId& request_id);
@@ -2712,7 +2697,7 @@ public:
     Server(Server&&) = delete;
     Server& operator=(Server&&) = delete;
 
-    Result<TakeStatus>
+    Result<bool>
     take_request(
         void* request,
         RequestId& request_id);
@@ -2821,7 +2806,7 @@ removed
 如果 response write：
 
 ```text
-DdsError
+DDSError
 or
 Timeout
 ```
@@ -3841,7 +3826,7 @@ public:
 
     EventType type() const noexcept;
 
-    Result<TakeStatus>
+    Result<bool>
     take(EventInfo& info);
 
 private:
@@ -4135,9 +4120,9 @@ record diagnostic
 V1 要求以下 API 可以被不同应用线程并发调用：
 
 ```text
-Publisher::publish()
+Publisher::write()
 
-Subscriber::take()
+Subscriber::read()
 
 Publisher::matched_subscriber_count()
 
@@ -4805,8 +4790,6 @@ dmw/
 │       ├── gid.hpp
 │       ├── message_info.hpp
 │       ├── request_id.hpp
-│       ├── take_status.hpp
-│       │
 │       ├── wait_set.hpp
 │       ├── wait_timeout.hpp
 │       ├── wait_token.hpp
@@ -4860,7 +4843,7 @@ dmw/
         ├── reader_wait_state.hpp
         ├── request.hpp
         ├── response.hpp
-        ├── participant_observation.hpp
+        ├── discovery_graph.hpp
         ├── temporary_sample.hpp
         ├── lock_rank.hpp
         ├── name.hpp

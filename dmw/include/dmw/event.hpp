@@ -6,7 +6,6 @@
 
 #include "dmw/event_info.hpp"
 #include "dmw/result.hpp"
-#include "dmw/take_status.hpp"
 #include "dmw/visibility_control.hpp"
 
 namespace dmw {
@@ -30,7 +29,7 @@ public:
     /// Take the current event status without invoking user callbacks.
     ///
     /// Returns ParentDestroyed when the parent is gone and the Context remains active.
-    Result<TakeStatus> take(EventInfo& info);
+    Result<bool> take(EventInfo& info);
 
 private:
     friend class Publisher;

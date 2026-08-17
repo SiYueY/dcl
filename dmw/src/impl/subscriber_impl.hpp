@@ -16,18 +16,18 @@ namespace dmw {
 class Subscriber::Impl {
 public:
     Impl(
-        std::shared_ptr<impl::fastdds::Context> state, eprosima::fastdds::dds::DataReader* reader,
+        std::shared_ptr<impl::fastdds::Context> context, eprosima::fastdds::dds::DataReader* reader,
         std::string topic_name, MessageType type, impl::fastdds::Context::Topic topic) noexcept
-    : state_(state),
+    : context_(context),
       reader_(reader),
       topic_name_(std::move(topic_name)),
       type_(std::move(type)),
-      wait_state_(std::make_shared<impl::ReaderWaitState>(std::move(state), reader)),
-      event_parent_(std::make_shared<impl::EventParentState>(state_)),
+      wait_state_(std::make_shared<impl::ReaderWaitState>(std::move(context), reader)),
+      event_parent_(std::make_shared<impl::EventParentState>(context_)),
       topic_(std::move(topic)) {}
     ~Impl() noexcept;
 
-    Result<TakeStatus> take(void* message, MessageInfo& info);
+    Result<bool> read(void* message, MessageInfo& info);
     std::string_view topic_name() const noexcept { return topic_name_; }
     const MessageType& message_type() const noexcept { return type_; }
     Result<std::size_t> matched_publisher_count() const;
@@ -37,7 +37,7 @@ public:
     }
 
 private:
-    std::shared_ptr<impl::fastdds::Context> state_;
+    std::shared_ptr<impl::fastdds::Context> context_;
     eprosima::fastdds::dds::DataReader* reader_;
     std::string topic_name_;
     MessageType type_;

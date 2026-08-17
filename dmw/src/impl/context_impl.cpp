@@ -109,7 +109,7 @@ Context::~Context() noexcept {
         if (!listener_safe_to_destroy) {
             // An unconfirmed detach leaves Fast DDS free to enter the
             // listener.  Do not attempt contained-entity or participant
-            // deletion in that state: retain both at the process barrier.
+            // deletion in that context: retain both at the process barrier.
             ProcessLifetime::instance().retain_participant(
                 factory_, participant_, std::move(participant_listener_));
             participant_ = nullptr;
@@ -139,10 +139,9 @@ Context::~Context() noexcept {
 }
 
 Result<void> Context::install_discovery_listener() noexcept {
-    std::unique_ptr<ParticipantObservationListener> listener;
+    std::unique_ptr<DiscoveryListener> listener;
     try {
-        listener = std::make_unique<ParticipantObservationListener>(
-            participant_observations_, remote_endpoints_, target_readers_);
+        listener = std::make_unique<DiscoveryListener>(discovery_graph_);
         const auto result = participant_->set_listener(listener.get());
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
             ProcessLifetime::instance().retain_participant_listener(std::move(listener));
@@ -157,7 +156,7 @@ Result<void> Context::install_discovery_listener() noexcept {
         // barrier.  If construction threw, listener is simply null.
         ProcessLifetime::instance().retain_participant_listener(std::move(listener));
         return Result<void>::failure(
-            Error(ErrorCode::DdsError, "Fast DDS discovery listener setup failed"));
+            Error(ErrorCode::DDSError, "Fast DDS discovery listener setup failed"));
     }
 }
 
@@ -235,28 +234,28 @@ void Context::Topic::reset() noexcept {
 bool Context::is_shutdown() const noexcept { return shutdown_.load(std::memory_order_acquire); }
 
 Context::OperationGuard::~OperationGuard() noexcept {
-    if (state_ != nullptr) {
-        std::lock_guard lock(state_->operation_mutex_);
-        --state_->active_operations_;
-        if (state_->active_operations_ == 0) {
-            state_->operation_cv_.notify_all();
+    if (context_ != nullptr) {
+        std::lock_guard lock(context_->operation_mutex_);
+        --context_->active_operations_;
+        if (context_->active_operations_ == 0) {
+            context_->operation_cv_.notify_all();
         }
     }
 }
 
 Context::OperationGuard::OperationGuard(OperationGuard&& other) noexcept
-: state_(std::exchange(other.state_, nullptr)) {}
+: context_(std::exchange(other.context_, nullptr)) {}
 
 Context::OperationGuard& Context::OperationGuard::operator=(OperationGuard&& other) noexcept {
     if (this != &other) {
-        if (state_ != nullptr) {
-            std::lock_guard lock(state_->operation_mutex_);
-            --state_->active_operations_;
-            if (state_->active_operations_ == 0) {
-                state_->operation_cv_.notify_all();
+        if (context_ != nullptr) {
+            std::lock_guard lock(context_->operation_mutex_);
+            --context_->active_operations_;
+            if (context_->active_operations_ == 0) {
+                context_->operation_cv_.notify_all();
             }
         }
-        state_ = std::exchange(other.state_, nullptr);
+        context_ = std::exchange(other.context_, nullptr);
     }
     return *this;
 }
@@ -298,7 +297,7 @@ void Context::shutdown() noexcept {
             child->callback();
         } catch (...) {
             // Shutdown is noexcept. A best-effort notification must not prevent
-            // later waitables from observing the terminal Context state.
+            // later waitables from observing the terminal Context context.
         }
         {
             std::lock_guard lock(shutdown_children_mutex_);
@@ -356,7 +355,7 @@ Result<Context::TypeRegistration> Context::acquire_type(const MessageType& type)
             }
             if (type_it->second.phase == RegistryEntryPhase::Orphaned) {
                 return Result<TypeRegistration>::failure(
-                    Error(ErrorCode::DdsError, "DDS type registration state is indeterminate"));
+                    Error(ErrorCode::DDSError, "DDS type registration context is indeterminate"));
             }
             type_registry_cv_.wait(lock);
         }
@@ -407,7 +406,7 @@ Result<Context::Topic> Context::acquire_topic(
         while (true) {
             if (topic_registry_degraded_) {
                 return Result<Topic>::failure(
-                    Error(ErrorCode::DdsError, "DDS topic registry is degraded"));
+                    Error(ErrorCode::DDSError, "DDS topic registry is degraded"));
             }
             const auto topic_it = topics_.find(dds_topic_name);
             if (topic_it == topics_.end()) {
@@ -422,7 +421,7 @@ Result<Context::Topic> Context::acquire_topic(
             if (!same_topic_qos(topic_it->second.qos, qos)) {
                 topic_registry_degraded_ = true;
                 return Result<Topic>::failure(
-                    Error(ErrorCode::DdsError, "DDS topic has conflicting canonical QoS"));
+                    Error(ErrorCode::DDSError, "DDS topic has conflicting canonical QoS"));
             }
             if (topic_it->second.phase == RegistryEntryPhase::Active) {
                 ++topic_it->second.endpoint_reference_count;
@@ -432,7 +431,7 @@ Result<Context::Topic> Context::acquire_topic(
             }
             if (topic_it->second.phase == RegistryEntryPhase::Orphaned) {
                 return Result<Topic>::failure(
-                    Error(ErrorCode::DdsError, "DDS topic creation state is indeterminate"));
+                    Error(ErrorCode::DDSError, "DDS topic creation context is indeterminate"));
             }
             topic_registry_cv_.wait(lock);
         }
@@ -472,14 +471,14 @@ Result<Context::Topic> Context::acquire_topic(
         topic_registry_cv_.notify_all();
         if (topic == nullptr) {
             return Result<Topic>::failure(
-                Error(ErrorCode::DdsError, "Fast DDS failed to create the topic"));
+                Error(ErrorCode::DDSError, "Fast DDS failed to create the topic"));
         }
         return Result<Topic>::success(
             Topic(this, topic, dds_topic_name, std::move(type_registration.value())));
     }
 
     return Result<Topic>::failure(
-        Error(ErrorCode::DdsError, "DDS topic creation did not complete"));
+        Error(ErrorCode::DDSError, "DDS topic creation did not complete"));
 }
 
 bool Context::release_topic(std::string topic_name) noexcept {
@@ -588,7 +587,7 @@ Result<std::unique_ptr<Context>> Context::Impl::create(const ContextOptions& opt
     auto* participant = factory->create_participant(options.domain_id, qos);
     if (participant == nullptr) {
         return Result<std::unique_ptr<Context>>::failure(
-            Error(ErrorCode::DdsError, "Fast DDS failed to create a DomainParticipant"));
+            Error(ErrorCode::DDSError, "Fast DDS failed to create a DomainParticipant"));
     }
     ParticipantCreationGuard participant_guard(factory, participant);
 
@@ -597,25 +596,25 @@ Result<std::unique_ptr<Context>> Context::Impl::create(const ContextOptions& opt
         participant->create_subscriber(eprosima::fastdds::dds::SUBSCRIBER_QOS_DEFAULT);
     if (publisher == nullptr || subscriber == nullptr) {
         return Result<std::unique_ptr<Context>>::failure(
-            Error(ErrorCode::DdsError, "Fast DDS failed to create a Context container"));
+            Error(ErrorCode::DDSError, "Fast DDS failed to create a Context container"));
     }
 
-    auto state = std::make_shared<impl::fastdds::Context>(
+    auto context = std::make_shared<impl::fastdds::Context>(
         factory, participant, publisher, subscriber, options.domain_id, options.runtime_mode);
     // From this point Context is the sole owner, including listener
     // installation failure paths.
     participant_guard.release();
-    auto discovery = state->install_discovery_listener();
+    auto discovery = context->install_discovery_listener();
     if (!discovery) return Result<std::unique_ptr<Context>>::failure(std::move(discovery.error()));
-    auto impl = std::make_unique<Impl>(std::move(state));
+    auto impl = std::make_unique<Impl>(std::move(context));
     return Result<std::unique_ptr<Context>>::success(
         std::unique_ptr<Context>(new Context(std::move(impl))));
 }
 
-std::uint32_t Context::Impl::domain_id() const noexcept { return state_->domain_id(); }
-bool Context::Impl::is_shutdown() const noexcept { return state_->is_shutdown(); }
+std::uint32_t Context::Impl::domain_id() const noexcept { return context_->domain_id(); }
+bool Context::Impl::is_shutdown() const noexcept { return context_->is_shutdown(); }
 Result<void> Context::Impl::shutdown() {
-    state_->shutdown();
+    context_->shutdown();
     return Result<void>::success();
 }
 
@@ -629,26 +628,26 @@ Result<std::unique_ptr<Node>> Context::Impl::create_node(const NodeOptions& opti
     if (!node_namespace) {
         return Result<std::unique_ptr<Node>>::failure(std::move(node_namespace.error()));
     }
-    const auto operation = state_->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<std::unique_ptr<Node>>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
 
     auto node_impl =
-        std::make_unique<Node::Impl>(state_, options.name, std::move(node_namespace.value()));
+        std::make_unique<Node::Impl>(context_, options.name, std::move(node_namespace.value()));
     return Result<std::unique_ptr<Node>>::success(
         std::unique_ptr<Node>(new Node(std::move(node_impl))));
 }
 
 Result<std::unique_ptr<GuardCondition>> Context::Impl::create_guard_condition(
     const GuardConditionOptions&) {
-    const auto operation = state_->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<std::unique_ptr<GuardCondition>>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
-    auto guard_impl = std::make_unique<GuardCondition::Impl>(state_);
+    auto guard_impl = std::make_unique<GuardCondition::Impl>(context_);
     return Result<std::unique_ptr<GuardCondition>>::success(
         std::unique_ptr<GuardCondition>(new GuardCondition(std::move(guard_impl))));
 }

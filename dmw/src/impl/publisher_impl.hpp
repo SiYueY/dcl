@@ -15,24 +15,24 @@ namespace dmw {
 class Publisher::Impl {
 public:
     Impl(
-        std::shared_ptr<impl::fastdds::Context> state, eprosima::fastdds::dds::DataWriter* writer,
+        std::shared_ptr<impl::fastdds::Context> context, eprosima::fastdds::dds::DataWriter* writer,
         std::string topic_name, MessageType type, impl::fastdds::Context::Topic topic) noexcept
-    : state_(std::move(state)),
+    : context_(std::move(context)),
       writer_(writer),
       topic_name_(std::move(topic_name)),
       type_(std::move(type)),
-      event_parent_(std::make_shared<impl::EventParentState>(state_)),
+      event_parent_(std::make_shared<impl::EventParentState>(context_)),
       topic_(std::move(topic)) {}
     ~Impl() noexcept;
 
-    Result<void> publish(const void* message);
+    Result<void> write(const void* message);
     std::string_view topic_name() const noexcept { return topic_name_; }
     const MessageType& message_type() const noexcept { return type_; }
     Result<std::size_t> matched_subscriber_count() const;
     Result<std::unique_ptr<Event>> create_event(EventType type);
 
 private:
-    std::shared_ptr<impl::fastdds::Context> state_;
+    std::shared_ptr<impl::fastdds::Context> context_;
     eprosima::fastdds::dds::DataWriter* writer_;
     std::string topic_name_;
     MessageType type_;

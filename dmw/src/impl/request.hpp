@@ -15,7 +15,7 @@
 #include <fastdds/rtps/common/Guid.h>
 
 #include "impl/lock_rank.hpp"
-#include "impl/participant_observation.hpp"
+#include "impl/discovery_graph.hpp"
 
 namespace dmw {
 
@@ -25,12 +25,10 @@ namespace impl {
 class RequestState {
 public:
     explicit RequestState(
-        std::weak_ptr<ParticipantObservationRegistry> participants = {},
-        std::weak_ptr<RemoteEndpointRegistry> endpoints = {}, std::string request_topic = {},
+        std::weak_ptr<DiscoveryGraph> graph = {}, std::string request_topic = {},
         std::string request_type = {}, std::string response_topic = {},
         std::string response_type = {}) noexcept
-    : participants_(std::move(participants)),
-      endpoints_(std::move(endpoints)),
+    : graph_(std::move(graph)),
       request_topic_(std::move(request_topic)),
       request_type_(std::move(request_type)),
       response_topic_(std::move(response_topic)),
@@ -46,14 +44,13 @@ public:
     }
 
     bool is_available() const {
-        // Do not hold the request-state lock while entering the participant
-        // or endpoint registries.  Those registries have lower ranks, and a
+        // Do not hold the request-state lock while entering the discovery
+        // graph.  It has a lower rank, and a
         // DDS callback is deliberately only a local snapshot rather than
         // discovery authority.
         std::vector<ParticipantCount> requests;
         std::vector<ParticipantCount> responses;
-        std::weak_ptr<ParticipantObservationRegistry> participants;
-        std::weak_ptr<RemoteEndpointRegistry> endpoints;
+        std::weak_ptr<DiscoveryGraph> graph;
         std::string request_topic;
         std::string request_type;
         std::string response_topic;
@@ -63,37 +60,28 @@ public:
             if (degraded_) return false;
             requests = request_participants_;
             responses = response_participants_;
-            participants = participants_;
-            endpoints = endpoints_;
+            graph = graph_;
             request_topic = request_topic_;
             request_type = request_type_;
             response_topic = response_topic_;
             response_type = response_type_;
         }
 
-        if (const auto participant_registry = participants.lock()) {
-            if (participant_registry->capability() != DiscoveryCapability::Healthy) return false;
-        }
+        const auto discovery = graph.lock();
+        if (discovery && discovery->health() != DiscoveryHealth::Healthy) return false;
         for (const auto& request : requests) {
             const auto response = std::find_if(
                 responses.begin(), responses.end(), [&request](const ParticipantCount& candidate) {
                     return candidate.prefix == request.prefix;
                 });
             if (response == responses.end()) continue;
-            if (const auto participant_registry = participants.lock()) {
-                if (const auto participant = participant_registry->lookup(request.prefix)) {
-                    if (participant->lifecycle.load(std::memory_order_acquire) ==
-                        ParticipantLifecycle::Removed) {
-                        continue;
-                    }
-                }
-            }
-            if (const auto endpoint_registry = endpoints.lock()) {
-                const auto pairing = endpoint_registry->service_pair(
+            if (discovery) {
+                const auto pairing = discovery->service(
                     request.prefix, request_topic, request_type, response_topic, response_type);
-                if (pairing == ServicePairObservation::Degraded) return false;
-                if (pairing == ServicePairObservation::Incomplete) continue;
-                if (pairing == ServicePairObservation::Complete) return true;
+                if (pairing == ServiceState::Unavailable) return false;
+                if (pairing == ServiceState::Incomplete || pairing == ServiceState::Unknown)
+                    continue;
+                if (pairing == ServiceState::Complete) return true;
                 // Once endpoint discovery is installed, a DDS callback
                 // alone is not authority for service availability.  Wait for
                 // the exact request-reader/response-writer graph commit.
@@ -106,11 +94,8 @@ public:
 
     bool is_degraded() const noexcept {
         std::lock_guard lock(mutex_);
-        const auto participants = participants_.lock();
-        const auto endpoints = endpoints_.lock();
-        return degraded_ ||
-               (participants && participants->capability() != DiscoveryCapability::Healthy) ||
-               (endpoints && endpoints->capability() != DiscoveryCapability::Healthy);
+        const auto graph = graph_.lock();
+        return degraded_ || (graph && graph->health() != DiscoveryHealth::Healthy);
     }
 
     void degrade() noexcept {
@@ -160,8 +145,7 @@ private:
     bool degraded_{false};
     std::vector<ParticipantCount> request_participants_;
     std::vector<ParticipantCount> response_participants_;
-    std::weak_ptr<ParticipantObservationRegistry> participants_;
-    std::weak_ptr<RemoteEndpointRegistry> endpoints_;
+    std::weak_ptr<DiscoveryGraph> graph_;
     std::string request_topic_;
     std::string request_type_;
     std::string response_topic_;

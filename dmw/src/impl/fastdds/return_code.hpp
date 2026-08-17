@@ -31,7 +31,7 @@ inline ErrorCode to_return_code(eprosima::fastrtps::types::ReturnCode_t code) no
         case ReturnCode::RETCODE_ILLEGAL_OPERATION:
             return ErrorCode::InvalidState;
         default:
-            return ErrorCode::DdsError;
+            return ErrorCode::DDSError;
     }
 }
 

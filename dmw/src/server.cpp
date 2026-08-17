@@ -12,7 +12,7 @@ Server::~Server() noexcept = default;
 
 std::string_view Server::service_name() const noexcept { return impl_->service_name(); }
 
-Result<TakeStatus> Server::take_request(void* request, RequestId& request_id) {
+Result<bool> Server::take_request(void* request, RequestId& request_id) {
     return impl_->take_request(request, request_id);
 }
 

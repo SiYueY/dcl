@@ -103,7 +103,7 @@ struct WaitSetWake {
 
 enum class RegistrationPhase { Attached, Detaching, Detached };
 
-enum class AttachResult { Attached, AlreadyRegistered, Closing, DdsError };
+enum class AttachResult { Attached, AlreadyRegistered, Closing, DDSError };
 
 struct Registration {
     std::uint64_t id{0};
@@ -225,8 +225,8 @@ struct Registration {
 
 class WaitSetState final : public std::enable_shared_from_this<WaitSetState> {
 public:
-    WaitSetState(std::shared_ptr<impl::fastdds::Context> context_state, std::uint64_t wait_set_id)
-    : context_state_(std::move(context_state)), wait_set_id_(wait_set_id) {}
+    WaitSetState(std::shared_ptr<impl::fastdds::Context> context, std::uint64_t wait_set_id)
+    : context_(std::move(context)), wait_set_id_(wait_set_id) {}
 
     ~WaitSetState() noexcept { close(); }
 
@@ -242,13 +242,13 @@ public:
                 control_condition_attached_ = true;
             } catch (...) {
                 return Result<void>::failure(
-                    Error(ErrorCode::DdsError, "Fast DDS control condition attachment failed"));
+                    Error(ErrorCode::DDSError, "Fast DDS control condition attachment failed"));
             }
         }
         note_topology_mutation();
         const std::weak_ptr<WaitSetState> weak_state = weak_from_this();
-        shutdown_callback_id_ = context_state_->register_shutdown_callback([weak_state] {
-            if (const auto state = weak_state.lock()) state->wake_->notify();
+        shutdown_callback_id_ = context_->register_shutdown_callback([weak_state] {
+            if (const auto context = weak_state.lock()) context->wake_->notify();
         });
         if (shutdown_callback_id_ != 0) return Result<void>::success();
 
@@ -276,7 +276,7 @@ public:
         }
         if (poisoned_) {
             return Result<std::uint64_t>::failure(
-                Error(ErrorCode::DdsError, "WaitSet topology is poisoned"));
+                Error(ErrorCode::DDSError, "WaitSet topology is poisoned"));
         }
         if (next_registration_id_ == 0) {
             return Result<std::uint64_t>::failure(
@@ -295,9 +295,9 @@ public:
             wait_set_id_, wake_,
             [this, registration] { return attach_reader_condition(*registration); },
             [weak_state, weak_registration] {
-                const auto state = weak_state.lock();
+                const auto context = weak_state.lock();
                 const auto detached_registration = weak_registration.lock();
-                return state && detached_registration && state->detach(detached_registration);
+                return context && detached_registration && context->detach(detached_registration);
             });
         if (attach == AttachResult::AlreadyRegistered) {
             return Result<std::uint64_t>::failure(
@@ -307,9 +307,9 @@ public:
             return Result<std::uint64_t>::failure(
                 Error(ErrorCode::ParentDestroyed, "Waitable is closing"));
         }
-        if (attach == AttachResult::DdsError) {
+        if (attach == AttachResult::DDSError) {
             return Result<std::uint64_t>::failure(
-                Error(ErrorCode::DdsError, "Fast DDS failed to attach a reader condition"));
+                Error(ErrorCode::DDSError, "Fast DDS failed to attach a reader condition"));
         }
         if (registration->phase.load(std::memory_order_acquire) != RegistrationPhase::Attached) {
             registration->release(
@@ -324,9 +324,9 @@ public:
             std::lock_guard reader_lock(registration->reader->callback_mutex);
             registration->reader->topology_callback = [weak_state,
                                                        weak_registration](bool enabled) {
-                const auto state = weak_state.lock();
+                const auto context = weak_state.lock();
                 const auto current = weak_registration.lock();
-                if (state && current) state->set_reader_blocking(*current, enabled);
+                if (context && current) context->set_reader_blocking(*current, enabled);
             };
         }
 
@@ -334,9 +334,9 @@ public:
         try {
             registrations_.emplace(id, registration);
         } catch (...) {
-            // claim() published registration state before this allocation.  A
+            // claim() published registration context before this allocation.  A
             // failed map insertion must restore the waitable to the exact
-            // pre-add state so a retry is not spuriously AlreadyRegistered.
+            // pre-add context so a retry is not spuriously AlreadyRegistered.
             registration->release(
                 wait_set_id_, [this](eprosima::fastdds::dds::Condition& condition) {
                     return detach_native_condition(condition);
@@ -431,8 +431,7 @@ public:
             shutdown_callback_id = shutdown_callback_id_;
             shutdown_callback_id_ = 0;
         }
-        if (shutdown_callback_id != 0)
-            context_state_->unregister_shutdown_callback(shutdown_callback_id);
+        if (shutdown_callback_id != 0) context_->unregister_shutdown_callback(shutdown_callback_id);
         while (true) {
             std::shared_ptr<Registration> registration;
             {
@@ -451,7 +450,7 @@ public:
             if (control_condition_attached_) {
                 if (!wake_->detach(native_wait_set_)) {
                     // No public object owns this private control condition.
-                    // Keep it alive with the WaitSet state on teardown.
+                    // Keep it alive with the WaitSet context on teardown.
                 }
                 control_condition_attached_ = false;
             }
@@ -466,7 +465,7 @@ public:
         }
         if (poisoned_) {
             return Result<void>::failure(
-                Error(ErrorCode::DdsError, "WaitSet topology is poisoned"));
+                Error(ErrorCode::DDSError, "WaitSet topology is poisoned"));
         }
         if (waiting_) {
             return Result<void>::failure(
@@ -514,7 +513,7 @@ public:
         if (!wake_->replace(native_wait_set_)) {
             poisoned_.store(true, std::memory_order_release);
             return Result<void>::failure(
-                Error(ErrorCode::DdsError, "Fast DDS control guard replacement failed"));
+                Error(ErrorCode::DDSError, "Fast DDS control guard replacement failed"));
         }
         note_topology_mutation();
         return Result<void>::success();
@@ -551,16 +550,16 @@ private:
             if (condition.set_enabled_statuses(
                     eprosima::fastdds::dds::StatusMask::data_available()) !=
                 eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
-                return AttachResult::DdsError;
+                return AttachResult::DDSError;
             }
             const auto result = native_wait_set_.attach_condition(condition);
             if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
-                return AttachResult::DdsError;
+                return AttachResult::DDSError;
             }
             registration.reader_condition = &condition;
             return AttachResult::Attached;
         } catch (...) {
-            return AttachResult::DdsError;
+            return AttachResult::DDSError;
         }
     }
 
@@ -591,7 +590,7 @@ public:
         return closing_;
     }
 
-    std::shared_ptr<impl::fastdds::Context> context_state_;
+    std::shared_ptr<impl::fastdds::Context> context_;
     const std::uint64_t wait_set_id_;
     std::shared_ptr<WaitSetWake> wake_{std::make_shared<WaitSetWake>()};
 
@@ -610,47 +609,47 @@ public:
 
 class WaitActivityGuard {
 public:
-    explicit WaitActivityGuard(std::shared_ptr<WaitSetState> state) noexcept
-    : state_(std::move(state)) {}
-    ~WaitActivityGuard() noexcept { state_->end_wait(); }
+    explicit WaitActivityGuard(std::shared_ptr<WaitSetState> context) noexcept
+    : context_(std::move(context)) {}
+    ~WaitActivityGuard() noexcept { context_->end_wait(); }
 
     WaitActivityGuard(const WaitActivityGuard&) = delete;
     WaitActivityGuard& operator=(const WaitActivityGuard&) = delete;
 
 private:
-    std::shared_ptr<WaitSetState> state_;
+    std::shared_ptr<WaitSetState> context_;
 };
 
 inline Result<std::uint64_t> add_guard(
-    const std::shared_ptr<WaitSetState>& state, const std::shared_ptr<GuardConditionState>& guard,
+    const std::shared_ptr<WaitSetState>& context, const std::shared_ptr<GuardConditionState>& guard,
     WaitableKind kind) {
-    if (guard->context() != state->context_state_) {
+    if (guard->context() != context->context_) {
         return Result<std::uint64_t>::failure(
             Error(ErrorCode::InvalidArgument, "Waitable belongs to another Context"));
     }
-    const auto operation = state->context_state_->try_acquire_operation();
+    const auto operation = context->context_->try_acquire_operation();
     if (!operation) {
         return Result<std::uint64_t>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
-    auto registration = state->add(guard, nullptr, kind);
+    auto registration = context->add(guard, nullptr, kind);
     if (!registration) return Result<std::uint64_t>::failure(std::move(registration.error()));
     return registration;
 }
 
 inline Result<std::uint64_t> add_reader(
-    const std::shared_ptr<WaitSetState>& state,
+    const std::shared_ptr<WaitSetState>& context,
     const std::shared_ptr<impl::ReaderWaitState>& reader, WaitableKind kind) {
-    if (reader->context() != state->context_state_) {
+    if (reader->context() != context->context_) {
         return Result<std::uint64_t>::failure(
             Error(ErrorCode::InvalidArgument, "Waitable belongs to another Context"));
     }
-    const auto operation = state->context_state_->try_acquire_operation();
+    const auto operation = context->context_->try_acquire_operation();
     if (!operation) {
         return Result<std::uint64_t>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
-    auto registration = state->add(nullptr, reader, kind);
+    auto registration = context->add(nullptr, reader, kind);
     if (!registration) return Result<std::uint64_t>::failure(std::move(registration.error()));
     return registration;
 }
@@ -659,16 +658,17 @@ inline Result<std::uint64_t> add_reader(
 
 class WaitSet::Impl {
 public:
-    explicit Impl(std::shared_ptr<impl::WaitSetState> state) noexcept : state_(std::move(state)) {}
+    explicit Impl(std::shared_ptr<impl::WaitSetState> context) noexcept
+    : context_(std::move(context)) {}
 
-    ~Impl() noexcept { state_->close(); }
+    ~Impl() noexcept { context_->close(); }
     Result<WaitToken> add(const std::shared_ptr<GuardConditionState>&, WaitableKind);
     Result<WaitToken> add(const std::shared_ptr<impl::ReaderWaitState>&, WaitableKind);
     Result<void> remove(WaitToken);
     Result<WaitResult> wait(WaitTimeout);
 
 private:
-    std::shared_ptr<impl::WaitSetState> state_;
+    std::shared_ptr<impl::WaitSetState> context_;
 };
 
 }  // namespace dmw

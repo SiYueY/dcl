@@ -23,7 +23,7 @@
 #include "dmw/qos.hpp"
 #include "dmw/result.hpp"
 #include "impl/lock_rank.hpp"
-#include "impl/participant_observation.hpp"
+#include "impl/discovery_graph.hpp"
 
 namespace dmw {
 
@@ -109,14 +109,14 @@ public:
         OperationGuard(OperationGuard&& other) noexcept;
         OperationGuard& operator=(OperationGuard&& other) noexcept;
 
-        explicit operator bool() const noexcept { return state_ != nullptr; }
+        explicit operator bool() const noexcept { return context_ != nullptr; }
 
     private:
         friend class Context;
 
-        explicit OperationGuard(Context* state) noexcept : state_(state) {}
+        explicit OperationGuard(Context* context) noexcept : context_(context) {}
 
-        Context* state_{nullptr};
+        Context* context_{nullptr};
     };
 
     Context(
@@ -141,15 +141,7 @@ public:
     std::uint64_t register_shutdown_callback(std::function<void()> callback);
     void unregister_shutdown_callback(std::uint64_t id) noexcept;
     Result<void> install_discovery_listener() noexcept;
-    std::shared_ptr<ParticipantObservationRegistry> participant_observations() const noexcept {
-        return participant_observations_;
-    }
-    std::shared_ptr<RemoteEndpointRegistry> remote_endpoints() const noexcept {
-        return remote_endpoints_;
-    }
-    std::shared_ptr<TargetReaderObservationRegistry> target_readers() const noexcept {
-        return target_readers_;
-    }
+    std::shared_ptr<DiscoveryGraph> discovery_graph() const noexcept { return discovery_graph_; }
 
     Result<Topic> acquire_topic(
         const MessageType& type, const std::string& dds_topic_name, const Qos& qos);
@@ -212,13 +204,8 @@ private:
     bool topic_registry_degraded_{false};
     std::unordered_map<std::string, RegisteredType> registered_types_;
     std::unordered_map<std::string, RegisteredTopic> topics_;
-    std::shared_ptr<ParticipantObservationRegistry> participant_observations_{
-        std::make_shared<ParticipantObservationRegistry>()};
-    std::shared_ptr<RemoteEndpointRegistry> remote_endpoints_{
-        std::make_shared<RemoteEndpointRegistry>()};
-    std::shared_ptr<TargetReaderObservationRegistry> target_readers_{
-        std::make_shared<TargetReaderObservationRegistry>()};
-    std::unique_ptr<ParticipantObservationListener> participant_listener_;
+    std::shared_ptr<DiscoveryGraph> discovery_graph_{std::make_shared<DiscoveryGraph>()};
+    std::unique_ptr<DiscoveryListener> participant_listener_;
 };
 
 }  // namespace fastdds

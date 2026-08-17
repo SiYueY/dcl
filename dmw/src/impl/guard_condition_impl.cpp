@@ -8,10 +8,10 @@
 
 namespace dmw {
 
-Result<void> GuardCondition::Impl::trigger() { return state_->trigger(); }
+Result<void> GuardCondition::Impl::trigger() { return context_->trigger(); }
 
 Result<void> GuardConditionState::trigger() {
-    const auto operation = context_state->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }

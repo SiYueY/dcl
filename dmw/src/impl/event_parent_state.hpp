@@ -78,7 +78,7 @@ public:
         }
     }
 
-    std::shared_ptr<fastdds::Context> context_state;
+    std::shared_ptr<fastdds::Context> context;
     std::atomic<bool> alive{true};
     mutable RankedMutex<LockRank::EndpointRuntime> mutex;
 

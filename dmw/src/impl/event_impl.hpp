@@ -27,7 +27,7 @@ public:
     }
 
     EventType type() const noexcept { return type_; }
-    Result<TakeStatus> take(EventInfo& info);
+    Result<bool> take(EventInfo& info);
     const std::shared_ptr<GuardConditionState>& wait_state() const noexcept { return wait_state_; }
 
 private:

@@ -12,9 +12,9 @@ namespace dmw {
 class Node::Impl {
 public:
     Impl(
-        std::shared_ptr<impl::fastdds::Context> context_state, std::string name,
+        std::shared_ptr<impl::fastdds::Context> context, std::string name,
         std::string node_namespace) noexcept
-    : context_state_(std::move(context_state)),
+    : context_(std::move(context)),
       name_(std::move(name)),
       node_namespace_(std::move(node_namespace)) {}
 
@@ -30,7 +30,7 @@ public:
         const ServiceType&, std::string_view, const Qos&, const ServerOptions&);
 
 private:
-    std::shared_ptr<impl::fastdds::Context> context_state_;
+    std::shared_ptr<impl::fastdds::Context> context_;
     std::string name_;
     std::string node_namespace_;
 };

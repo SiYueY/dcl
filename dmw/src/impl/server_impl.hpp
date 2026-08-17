@@ -20,7 +20,7 @@ namespace dmw {
 class Server::Impl {
 public:
     Impl(
-        std::shared_ptr<impl::fastdds::Context> state,
+        std::shared_ptr<impl::fastdds::Context> context,
         eprosima::fastdds::dds::DataReader* request_reader,
         eprosima::fastdds::dds::DataWriter* response_writer, std::string service_name,
         std::size_t max_pending_requests, MessageType request_type,
@@ -28,7 +28,7 @@ public:
         std::unique_ptr<impl::ResponseWriterListener> response_listener,
         impl::fastdds::Context::Topic request_topic,
         impl::fastdds::Context::Topic response_topic) noexcept
-    : state_(state),
+    : context_(context),
       request_reader_(request_reader),
       response_writer_(response_writer),
       service_name_(std::move(service_name)),
@@ -37,13 +37,13 @@ public:
       response_state_(std::move(response_state)),
       response_listener_(std::move(response_listener)),
       request_wait_state_(
-          std::make_shared<impl::ReaderWaitState>(std::move(state), request_reader)),
+          std::make_shared<impl::ReaderWaitState>(std::move(context), request_reader)),
       request_topic_(std::move(request_topic)),
       response_topic_(std::move(response_topic)) {}
     ~Impl() noexcept;
 
     std::string_view service_name() const noexcept { return service_name_; }
-    Result<TakeStatus> take_request(void* request, RequestId& request_id);
+    Result<bool> take_request(void* request, RequestId& request_id);
     Result<void> send_response(const RequestId& request_id, const void* response);
     const std::shared_ptr<impl::ReaderWaitState>& wait_state() const noexcept {
         return request_wait_state_;
@@ -78,7 +78,7 @@ private:
         return was_full;
     }
 
-    std::shared_ptr<impl::fastdds::Context> state_;
+    std::shared_ptr<impl::fastdds::Context> context_;
     eprosima::fastdds::dds::DataReader* request_reader_;
     eprosima::fastdds::dds::DataWriter* response_writer_;
     std::string service_name_;

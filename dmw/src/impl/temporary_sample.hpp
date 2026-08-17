@@ -20,7 +20,7 @@ public:
         void* data = support->createData();
         if (data == nullptr) {
             return Result<TemporarySample>::failure(
-                Error(ErrorCode::DdsError, "Fast DDS type support failed to allocate a sample"));
+                Error(ErrorCode::DDSError, "Fast DDS type support failed to allocate a sample"));
         }
         return Result<TemporarySample>::success(TemporarySample(support, data));
     }
@@ -46,11 +46,11 @@ public:
             support_->getSerializedSizeProvider(data_)());
         if (!support_->serialize(data_, &payload)) {
             return Result<void>::failure(
-                Error(ErrorCode::DdsError, "Fast DDS sample serialization failed"));
+                Error(ErrorCode::DDSError, "Fast DDS sample serialization failed"));
         }
         if (!support_->deserialize(&payload, destination)) {
             return Result<void>::failure(
-                Error(ErrorCode::DdsError, "Fast DDS sample deserialization failed"));
+                Error(ErrorCode::DDSError, "Fast DDS sample deserialization failed"));
         }
         return Result<void>::success();
     }

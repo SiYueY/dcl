@@ -147,16 +147,16 @@ int main() {
             // writer-reader route on some Fast DDS discovery cycles.  Keep
             // publishing the identical sample until the route accepts it.
             ros_publisher->publish(from_ros);
-            auto take = subscriber.value()->take(&dmw_received, message_info);
+            auto take = subscriber.value()->read(&dmw_received, message_info);
             assert(take);
-            return take.value() == dmw::TakeStatus::Taken;
+            return take.value();
         }));
         assert(dmw_received.data == from_ros.data);
 
         std_msgs::msg::String from_dmw;
         from_dmw.data = "from dmw";
         assert(wait_until([&publisher, &from_dmw, &ros_node, &ros_received] {
-            assert(publisher.value()->publish(&from_dmw));
+            assert(publisher.value()->write(&from_dmw));
             rclcpp::spin_some(ros_node);
             return ros_received == "from dmw";
         }));

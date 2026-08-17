@@ -11,7 +11,7 @@
 #include <fastdds/dds/publisher/DataWriterListener.hpp>
 #include <fastdds/dds/subscriber/DataReaderListener.hpp>
 
-#include "impl/participant_observation.hpp"
+#include "impl/discovery_graph.hpp"
 
 namespace dmw {
 
@@ -36,7 +36,7 @@ public:
     void retain_participant(
         eprosima::fastdds::dds::DomainParticipantFactory* factory,
         eprosima::fastdds::dds::DomainParticipant* participant,
-        std::unique_ptr<ParticipantObservationListener> listener = {}) noexcept {
+        std::unique_ptr<DiscoveryListener> listener = {}) noexcept {
         if (participant == nullptr) return;
         try {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -94,7 +94,7 @@ private:
     struct QuarantinedParticipant {
         eprosima::fastdds::dds::DomainParticipantFactory* factory;
         eprosima::fastdds::dds::DomainParticipant* participant;
-        std::unique_ptr<ParticipantObservationListener> listener;
+        std::unique_ptr<DiscoveryListener> listener;
     };
 
     ProcessLifetime() = default;

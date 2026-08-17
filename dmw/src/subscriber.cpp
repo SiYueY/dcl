@@ -11,8 +11,8 @@ Subscriber::Subscriber(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(im
 
 Subscriber::~Subscriber() noexcept = default;
 
-Result<TakeStatus> Subscriber::take(void* message, MessageInfo& info) {
-    return impl_->take(message, info);
+Result<bool> Subscriber::read(void* message, MessageInfo& info) {
+    return impl_->read(message, info);
 }
 
 std::string_view Subscriber::topic_name() const noexcept { return impl_->topic_name(); }

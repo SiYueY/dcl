@@ -10,7 +10,6 @@
 #include "dmw/message_info.hpp"
 #include "dmw/message_type.hpp"
 #include "dmw/result.hpp"
-#include "dmw/take_status.hpp"
 #include "dmw/visibility_control.hpp"
 
 namespace dmw {
@@ -30,8 +29,9 @@ public:
     Subscriber(Subscriber&&) = delete;
     Subscriber& operator=(Subscriber&&) = delete;
 
-    /// Take into a non-null object matching message_type().
-    Result<TakeStatus> take(void* message, MessageInfo& info);
+    /// Non-blockingly read one available sample into a non-null object
+    /// matching message_type().
+    Result<bool> read(void* message, MessageInfo& info);
 
     std::string_view topic_name() const noexcept;
     const MessageType& message_type() const noexcept;

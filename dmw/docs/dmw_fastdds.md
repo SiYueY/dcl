@@ -722,7 +722,7 @@ response_wire_type_name
 
 `logical_service_name` 与 `runtime_mode` 不参与 equality/hash；原因是 Registry 是 Context-scoped，resolved DDS names 已经编码 runtime-mode-specific naming。它们只用于 diagnostic 与 invariant validation。
 
-若两个 equality-authority fields 完全相同的 key 却具有不同 `logical_service_name` 或不同 `runtime_mode`，表示 resolver/implementation invariant corruption：相关 registry capability -> `Degraded`，operation -> `DdsError`；不能把它们静默视为两个 service identity。
+若两个 equality-authority fields 完全相同的 key 却具有不同 `logical_service_name` 或不同 `runtime_mode`，表示 resolver/implementation invariant corruption：相关 registry capability -> `Degraded`，operation -> `DDSError`；不能把它们静默视为两个 service identity。
 
 `ServiceKeyHash` 必须：
 - 只 hash 与 equality 相同的四个 authority fields；
@@ -1541,7 +1541,7 @@ private control wake failure不直接导致 shutdown failure，因为 logical ca
 这些只进入 Fast DDS cleanup diagnostics，不能 retroactively 改变 shutdown result。
 
 Fast DDS V1 是 `dmw.md` 所允许 shutdown result capability 的严格子集：
-- Fast DDS 实现不为了 final cleanup failure 人为返回一个 terminal `DdsError`；
+- Fast DDS 实现不为了 final cleanup failure 人为返回一个 terminal `DDSError`；
 - unexpected ordinary C++ exception 仍按统一 exception boundary 原样传播，并由 `ShutdownExecutionState::Failed + exception_ptr` 使并发/后续 caller 得到一致 terminal observation；
 - 若未来新增可观察的 non-exception shutdown Error result，再同步 `dmw.md` 与本文。
 
@@ -1730,7 +1730,7 @@ Context state
 parent state
 object-local state
 优先级检查后，若下一步必须调用 canonical binding 且 capability == Degraded：
-    -> DdsError
+    -> DDSError
 
 必须检查 canonical binding capability 的路径至少包括：
 endpoint Factory 的 Fast DDS type integration step
@@ -1823,7 +1823,7 @@ std::bad_alloc：
 
 其它未预期 C++ exception：
     ordinary runtime -> 原样传播
-    不得转换或伪装成 DdsError / Unsupported / ResourceExhausted
+    不得转换或伪装成 DDSError / Unsupported / ResourceExhausted
 
 noexcept Fast DDS listener callback：
     catch (...)
@@ -1842,7 +1842,7 @@ noexcept destructor / retirement / rollback cleanup：
 不能在 logical effect 已提交以后向 caller 抛出一个看似“operation failed”的异常。
 
 返回 false：
-serialize()/deserialize() -> DdsError
+serialize()/deserialize() -> DDSError
 因为这是 binding/TypeSupport hook 自己报告的正常 failure result，
 不是未预期 C++ exception。
 
@@ -1854,7 +1854,7 @@ size > Fast DDS payload representable range
 不一致的负/非法 representation
 执行 checked validation。
 无法表示：
-DdsError
+DDSError
 真正 heap allocation failure：
 std::bad_alloc 原样传播。
 
@@ -1914,7 +1914,7 @@ static Result<MessageType> create(
 异常规则：
 - allocation `std::bad_alloc` 原样传播；
 - `getName()`、TypeSupport wrapper 或其它 binding construction 抛未预期 C++ exception：完成已建立的局部 RAII rollback 后原样传播；
-- Fast DDS/TypeSupport exception 不转换成 `DdsError`；
+- Fast DDS/TypeSupport exception 不转换成 `DDSError`；
 - 在 facade commit 前失败不得留下 TypeRegistry entry 或 Fast DDS registration。
 
 `wire_type_name` 在 Impl 构造后 immutable；后续不得再次调用可变化的 `getName()` 决定 Registry identity。
@@ -2007,12 +2007,12 @@ RequestId unknown sequence：
 
 send_request()：
 Fast DDS write 成功但返回 unknown request sample sequence
-    -> DdsError
+    -> DDSError
     -> 不发布新的 public RequestId
 
 Server::take_request()：
 已经消费的 sample identity sequence unknown
-    -> DdsError
+    -> DDSError
     -> public output 按 post-consumption error guarantee 处理
 
 Client::take_response()：
@@ -2118,7 +2118,7 @@ AllocatedSample allocation 抛 std::bad_alloc：
     -> 不调用 createData()
 
 createData() 返回 nullptr：
-    -> DdsError
+    -> DDSError
 
 createData() 抛 std::bad_alloc：
     -> 原样传播
@@ -2165,11 +2165,11 @@ checked 计算 payload capacity
 在调用 binding hook 前必须重新检查：
 TypeRegistration canonical binding capability == Healthy。
 如果已经 Degraded：
-    -> DdsError
+    -> DDSError
     -> caller object unchanged
 
 Serialize returns false：
-    -> DdsError
+    -> DDSError
     -> caller object unchanged
 
 Serialize throws std::bad_alloc：
@@ -2185,7 +2185,7 @@ Payload heap allocation failure：
     -> caller object unchanged
 
 Deserialize returns false：
-    -> DdsError
+    -> DDSError
     -> DDS sample 已消费
     -> caller object valid/destructible
     -> fields unspecified
@@ -2384,7 +2384,7 @@ Retiring：
 wait + relookup。
 
 Orphaned：
-    -> DdsError。
+    -> DDSError。
 不得建立第二个同 key Fast DDS registration 与 indeterminate historical registration 竞争。
 
 #### 4.8.1 Binding Degradation Propagation
@@ -2509,7 +2509,7 @@ Topic creation transaction ID：
 - absent acquire 需要新 token但 allocator exhausted -> `ResourceExhausted`，不伪造 registry corruption；
 - transaction ID 是 implementation-internal evidence token，不是 public WaitToken；若 ID 已分配而随后 Creating map-node insertion 抛 `std::bad_alloc`，允许留下 ID gap，但不得留下 placeholder/Fast DDS side effect。
 
-`TopicRegistryCapability::Degraded` 表示 name-exclusive registry invariant 已无法可信维护；之后依赖 TopicRegistry 的新 Factory 在完成更高优先级 public/Context/parent/local 检查后返回 `DdsError`。已有 TopicEntry 和 endpoint Info 仍按 conservative teardown 保活/清理。
+`TopicRegistryCapability::Degraded` 表示 name-exclusive registry invariant 已无法可信维护；之后依赖 TopicRegistry 的新 Factory 在完成更高优先级 public/Context/parent/local 检查后返回 `DDSError`。已有 TopicEntry 和 endpoint Info 仍按 conservative teardown 保活/清理。
 
 Topic Fast DDS lifetime 必须独立保活 TypeSupport。
 
@@ -2551,7 +2551,7 @@ lock TopicRegistry
 lookup key
 ```
 
-若 registry capability 已 Degraded：在 public/Context/parent/local 优先级检查之后返回 `DdsError`。
+若 registry capability 已 Degraded：在 public/Context/parent/local 优先级检查之后返回 `DDSError`。
 
 Existing entry：
 
@@ -2561,7 +2561,7 @@ same resolved name + different wire type
 
 same name/type + different canonical TopicQos fingerprint
     -> TopicRegistry capability = Degraded
-    -> DdsError
+    -> DDSError
 
 same name/type/fingerprint + Active
     -> assert type_dependency engaged
@@ -2573,7 +2573,7 @@ Creating/Retiring
     -> wake 后 relookup primary name
 
 Orphaned
-    -> DdsError
+    -> DDSError
     -> 不得创建第二个同名 DDS Topic 来绕过未知旧状态
 ```
 
@@ -2645,7 +2645,7 @@ unlock TopicRegistry
 - TopicRegistry capability -> `Degraded`；
 - unlock；
 - release local TypeRegistration outside Topic mutex；
-- return `DdsError`。
+- return `DDSError`。
 
 从 Stage C commit 起，Creating entry 已拥有 DDS Topic hidden-create path 所需 canonical TypeSupport lifetime。
 
@@ -2989,7 +2989,7 @@ Hash 只允许对同一 canonical representation 按上述固定 policy 顺序�
 
 TopicRegistry 中保存 canonical representation 或其 collision-safe fingerprint object；如果实现只缓存 hash value，发生 hash collision 时仍必须回到 semantic equality，不能把 hash 相等当作 QoS 相等。
 
-同一 resolved DDS topic name + same wire type 的 canonical TopicQos semantic equality 必须唯一；检测到不同 canonical fingerprint 表示 implementation invariant violation -> TopicRegistry capability `Degraded` + `DdsError`。
+同一 resolved DDS topic name + same wire type 的 canonical TopicQos semantic equality 必须唯一；检测到不同 canonical fingerprint 表示 implementation invariant violation -> TopicRegistry capability `Degraded` + `DDSError`。
 
 ### 4.19 KeepLast
 
@@ -3020,7 +3020,7 @@ normalize_limit(limit, required):
     if limit == LENGTH_UNLIMITED:
         return LENGTH_UNLIMITED
     if limit < 0:
-        -> DdsError  // impossible/corrupt canonical baseline
+        -> DDSError  // impossible/corrupt canonical baseline
     return max(limit, required)
 
 resource_limits.max_samples_per_instance =
@@ -3050,7 +3050,7 @@ DMW public QoS 合法，
 
 本文 deterministic resolver 根据自身 frozen baseline / normalization
 产生内部自相矛盾 policy：
-    -> DdsError
+    -> DDSError
     -> internal invariant diagnostic
 
 resolver 已生成本文认为合法的 Fast DDS QoS，
@@ -3593,7 +3593,7 @@ publish atomic snapshot
 matched-count capability
     -> Degraded
 后续 query：
-DdsError
+DDSError
 
 ### 5.14 ParticipantObservationRegistry 与 RemoteEndpoint State
 
@@ -3665,7 +3665,7 @@ get_or_create_participant_observation(prefix):
     lock ParticipantObservationRegistry                 // rank 5
     if capability != Healthy:
         unlock
-        return DdsError
+        return DDSError
 
     if entries contains prefix:
         snapshot existing stable handle
@@ -3679,7 +3679,7 @@ get_or_create_participant_observation(prefix):
     if capability != Healthy:
         unlock
         destroy candidate outside lock
-        return DdsError
+        return DDSError
 
     if entries now contains prefix:
         snapshot existing stable handle
@@ -3899,7 +3899,7 @@ struct RequestStateRegistryState
 
 `RequestStateRegistryState.capability = Degraded`
 
-V1 不定义 per-entry Degraded，也不把 generation 归零；这是避免 stale rebuild ABA 的唯一 terminal 处理。之后所有依赖 exact service graph 的 operation -> `DdsError`，普通 matched-count query 仍可独立工作。
+V1 不定义 per-entry Degraded，也不把 generation 归零；这是避免 stale rebuild ABA 的唯一 terminal 处理。之后所有依赖 exact service graph 的 operation -> `DDSError`，普通 matched-count query 仍可独立工作。
 
 local endpoint close/unregister：
 1. 在 RequestStateRegistry mutex 下 `phase Active -> Closing`；
@@ -3973,7 +3973,7 @@ else atomic replace matched set; rebuild_state=Clean
 如果 Fast DDS matched snapshot 中 remote endpoint 尚未出现在 RemoteEndpointRegistry：视为 discovery ordering transient；保持该 entry `NeedsRebuild`，`service_is_available()` 保守返回 false。
 
 `std::bad_alloc` 在普通 rebuild 路径原样传播，entry 保持 NeedsRebuild。
-Fast DDS discovery enumeration Unsupported/不可恢复 error、identity 无法可靠转换、registry invariant corruption -> 相应 registry capability Degraded，后续 exact graph operation -> DdsError。
+Fast DDS discovery enumeration Unsupported/不可恢复 error、identity 无法可靠转换、registry invariant corruption -> 相应 registry capability Degraded，后续 exact graph operation -> DDSError。
 
 Service availability pairing：RemoteEndpointRegistry 按 remote Participant GuidPrefix 分组；只有同一 remote Participant 同时具有 compatible request/response counterpart 才返回 true，禁止跨 Participant 拼接。
 
@@ -4089,7 +4089,7 @@ struct TargetReaderObservationRegistryState
 
 所有 target generation checked monotonic、never wrap。
 global/per-entry/dependency generation耗尽 -> Target capability `Degraded`；
-后续 target resolution -> `DdsError`。
+后续 target resolution -> `DDSError`。
 
 Target entry/materialization 必须先在 **不持 Target mutex** 的情况下从 ParticipantObservationRegistry获取 stable participant handle，然后再 lock Target registry publish target-specific state；禁止 Target(rank 8) -> Participant(rank 5)。
 
@@ -4142,7 +4142,7 @@ target_key.participant == null
     -> invariant corruption -> Target capability Degraded
 
 ParticipantObservationRegistry capability != Healthy
-    -> DdsError
+    -> DDSError
 
 target_key.participant->lifecycle == Removed
     -> effective ParticipantRemoved
@@ -4202,19 +4202,19 @@ predicate不获取 ParticipantObservationRegistry mutex。为了同时避免 loc
 
 ```text
 // optional fast precheck
-if participant capability atomic != Healthy -> DdsError
-if target_key.participant == null -> invariant -> Target Degraded/DdsError
+if participant capability atomic != Healthy -> DDSError
+if target_key.participant == null -> invariant -> Target Degraded/DDSError
 if participant.lifecycle atomic == Removed -> ParticipantRemoved
 
 unique_lock TargetReaderObservationRegistry.mutex
 
 // mandatory under-Target-mutex recheck
 if participant capability atomic != Healthy:
-    unlock -> DdsError
+    unlock -> DDSError
 if participant.lifecycle atomic == Removed:
     unlock -> ParticipantRemoved
 if Target capability != Healthy:
-    unlock -> DdsError
+    unlock -> DDSError
 
 lookup exact/service-specific state
 snapshot target registry/entry generation
@@ -4343,7 +4343,7 @@ internal build failure
 该情况不会新增 public WaitSet token：
 WaitSetInfo construction fails
     ->
-DdsError
+DDSError
 
 ### 6.3 Hold Release
 
@@ -4606,7 +4606,7 @@ nullptr 表示该调用没有创建隐藏 target entity，
 才可：
 creation_status = NoSideEffect
 rollback listener/Topic/TypeRegistration/backing
-return DdsError。
+return DDSError。
 
 如果该 no-side-effect evidence 未被冻结：
 creation_status = SideEffectIndeterminate
@@ -4614,7 +4614,7 @@ DDS entity pointer 保持 nullptr
 info.entity_status = Indeterminate
 parent Subscriber/Publisher graph = MayContainHiddenEntity
 把完整 backing 通过预分配 node adopt 到 OrphanedEndpointRegistry
-return DdsError。
+return DDSError。
 
 entered Fast DDS API call 后抛 C++ exception：
 catch internally
@@ -4665,7 +4665,7 @@ DMW 不再宣称该 container 的 known endpoint registry 完整。
 但 hidden entity 可能影响 DDS matching/resource usage，
 因此：
 - fixed-size diagnostic 必须可观测；
-- 后续同一 container 的 endpoint Factory 在完成正常 public/Context/parent 检查后返回 DdsError；
+- 后续同一 container 的 endpoint Factory 在完成正常 public/Context/parent 检查后返回 DDSError；
 - 不继续制造新的 Fast DDS children，避免扩大未知 graph；
 - final teardown 必须使用 container/Participant-level evidence barrier。
 
@@ -4678,7 +4678,7 @@ OperationGuard
 endpoint Alive
 
 TypeRegistration canonical binding capability == Healthy ?
-    no -> DdsError
+    no -> DDSError
 
 Fast DDS DataWriter::write()
 ReturnCode 根据[错误映射](#fastdds-lock-error-model)处理；未预期 C++ exception 按 [binding contract](#fastdds-message-binding-contract) 原样传播。
@@ -4692,7 +4692,7 @@ Fast DDS V1 实现 在调用开始、进入第一个 `take_next_sample()` 前，
 `scan_budget = DataReader::get_unread_count(false)`
 
 Fast DDS 2.6.12 baseline 必须验证该 API 返回当前 reader history 中未读 sample 数的有限 non-negative snapshot。
-checked conversion 失败/负值/invariant violation -> `DdsError`；Fast DDS C++ exception 按 ordinary exception boundary 传播。
+checked conversion 失败/负值/invariant violation -> `DDSError`；Fast DDS C++ exception 按 ordinary exception boundary 传播。
 
 本次 public call 最多成功消费/过滤 `scan_budget` 个 DDS samples。
 新并发到达的 sample 不增加本次 budget。
@@ -4700,7 +4700,7 @@ checked conversion 失败/负值/invariant violation -> `DdsError`；Fast DDS C+
 每消费一个 invalid/foreign/duplicate sample：`--remaining_scan_budget`。
 当 remaining==0 且尚未取得符合 public 条件的 sample：
 
-`return TakeStatus::NoData`
+`return success + false`
 
 这不表示 reader history 绝对为空，只表示“本次调用开始时 snapshot 所覆盖的候选已经扫描完且未得到可返回 sample”。后续 public take 可取得新 snapshot 继续处理。
 
@@ -4713,7 +4713,7 @@ remaining = begin_take_scan_budget(reader)
 while remaining > 0:
 
     TypeRegistration canonical binding capability == Healthy ?
-        no -> DdsError
+        no -> DDSError
 
     create/reset TemporarySample
 
@@ -4888,7 +4888,7 @@ from_fastdds_sequence(request sample sequence)
 
 转换算法唯一采用 4.2.2；
 unknown / conversion invariant failure：
-DdsError
+DDSError
 且不发布新的 RequestId。
 
 ### 7.6 Server Take Request
@@ -5063,7 +5063,7 @@ Ephemeral shutdown request atomic publish cancellation，并在不持 `ChildRegi
 ```text
 Loop:
     Context/ephemeral shutdown? -> ContextShutdown
-    participant capability Degraded? -> DdsError
+    participant capability Degraded? -> DDSError
     participant Removed? -> terminal no-write success
 
     lock Target mutex
@@ -5197,7 +5197,7 @@ while remaining > 0:
     new valid request:
         no Pending/Target mutex held
         obtain stable ParticipantObservationEntry handle
-            participant capability Degraded -> reservation release; DdsError
+            participant capability Degraded -> reservation release; DDSError
             allocation bad_alloc while first materializing participant entry -> reservation release; rethrow
         build RequestId/correlation + immutable `std::shared_ptr<const TargetReaderKey>`
         allocate PendingEntryHandle
@@ -5259,7 +5259,7 @@ rollback guard 在任何未完成 caller output commit 的退出路径中只 era
 ```text
 deserialize returns false:
     rollback guard erases PendingEntry
-    -> DdsError
+    -> DDSError
 
 deserialize throws std::bad_alloc:
     rollback guard erases PendingEntry
@@ -5410,7 +5410,7 @@ else:
     else:
         registry invariant diagnostic
         unlock
-        -> DdsError
+        -> DDSError
 ```
 
 两个并发 `send_response()`：
@@ -5449,7 +5449,7 @@ TargetReaderObservationRegistry only through 5.20 predicate protocol
 `PendingRegistry(rank 16)` 与 `TargetReader(rank 8)` **永不同时持有**。
 
 predicate：
-- participant authority/Target capability Degraded -> rollback -> `DdsError`；
+- participant authority/Target capability Degraded -> rollback -> `DDSError`；
 - `Matched` -> release Target mutex -> Fast DDS write；
 - exact target `Removed` -> terminal no-write success；
 - participant `Removed` -> terminal no-write success；
@@ -5974,7 +5974,7 @@ if waitable.registration still live:
 ```text
 wait_set_status != Healthy:
     unlock both
-    -> DdsError
+    -> DDSError
 
 topology_generation == UINT64_MAX:
     wait_set_status = Poisoned
@@ -6015,7 +6015,7 @@ best-effort control wake
 
 Success不要求 Fast DDS Condition 已经 attach。
 后续 Fast DDS reconciliation失败：
-`wait() -> DdsError`，registration保留并可 `remove()`。
+`wait() -> DDSError`，registration保留并可 `remove()`。
 
 #### 8.7.1 Race note
 
@@ -6025,7 +6025,7 @@ Event parent destruction与 add并发：
 - 不存在 `Poisoned` 抢先隐藏 ParentDestroyed 的路径。
 
 WaitSet Poisoned与 already-registered waitable：
-`AlreadyRegistered` 作为 waitable registration-local error先于 WaitSet local `DdsError`。
+`AlreadyRegistered` 作为 waitable registration-local error先于 WaitSet local `DDSError`。
 
 ### 8.8 Registration ID
 
@@ -6117,7 +6117,7 @@ active_wait == false
 reconciliation ownership
 完成 detach。
 不能出现：
-wait 返回 DdsError
+wait 返回 DDSError
 +
 remove 永久阻塞
 
@@ -6280,7 +6280,7 @@ retire it
 如果 wait_set_status == Healthy：
     retry
 否则：
-    return DdsError / teardown path
+    return DDSError / teardown path
 Yes：
 publish new current `WaitSetInfo`
 
@@ -6369,13 +6369,13 @@ arguments
 Context state
 之后：
 wait()
-DdsError
+DDSError
 不消费：
 Guard
 Event
 logical readiness。
 add()
-DdsError
+DDSError
 且无 logical registration。
 remove()
 仍允许：
@@ -6581,7 +6581,7 @@ Loop：
        -> ContextShutdown
 
 2. WaitSet Poisoned?
-       -> DdsError
+       -> DDSError
 
 3. reconcile topology
 
@@ -6961,7 +6961,7 @@ EventSource[type]
 Event logically ready
 
 Event::take()
-    -> DdsError
+    -> DDSError
 永久不恢复。
 
 <a id="fastdds-event-parent-destruction"></a>
@@ -7739,7 +7739,7 @@ lifetime evidence state。
 普通 public ErrorCode 与 cleanup evidence 是两个维度。
 
 例如 detach failure：
-public operation 可能返回 DdsError，
+public operation 可能返回 DDSError，
 同时 AttachmentStatus 必须为 Indeterminate，
 不能因为已经有 ErrorCode 就丢掉 lifetime evidence。
 
@@ -7748,18 +7748,18 @@ public operation 可能返回 DdsError，
 | Fast DDS result | Ordinary runtime meaning | DMW result |
 |---|---|---|
 | OK | operation success | success |
-| create returns nullptr | public factory failure; lifetime evidence API-specific | DdsError unless higher-priority/public-specific rule applies |
-| BAD_PARAMETER | public args 已由 DMW 验证，说明 implementation/Fast DDS API mismatch | DdsError |
-| NOT_ENABLED | unexpected Fast DDS state | DdsError |
-| IMMUTABLE_POLICY | operation 不允许修改 immutable policy | DdsError |
-| ILLEGAL_OPERATION | operation/Fast DDS state mismatch | DdsError |
+| create returns nullptr | public factory failure; lifetime evidence API-specific | DDSError unless higher-priority/public-specific rule applies |
+| BAD_PARAMETER | public args 已由 DMW 验证，说明 implementation/Fast DDS API mismatch | DDSError |
+| NOT_ENABLED | unexpected Fast DDS state | DDSError |
+| IMMUTABLE_POLICY | operation 不允许修改 immutable policy | DDSError |
+| ILLEGAL_OPERATION | operation/Fast DDS state mismatch | DDSError |
 | UNSUPPORTED | frozen Fast DDS capability unavailable | Unsupported |
 | INCONSISTENT_POLICY | resolved QoS Fast DDS consistency failure | IncompatibleQos |
 | OUT_OF_RESOURCES | middleware/DDS resource ceiling | ResourceExhausted |
-| NO_DATA on take | no valid sample | TakeStatus::NoData |
+| NO_DATA on take | no valid sample | success + false |
 | TIMEOUT on internal wait slice | internal retry | not public error |
 | TIMEOUT at public deadline | user-visible timeout | WaitStatus::Timeout |
-| unknown return | unspecified Fast DDS failure | DdsError |
+| unknown return | unspecified Fast DDS failure | DDSError |
 
 std::bad_alloc：
 不是 OUT_OF_RESOURCES。
@@ -7772,7 +7772,7 @@ ordinary runtime -> 先完成必要的 logical rollback / lifetime-evidence upda
 callback noexcept boundary -> catch + affected capability Degraded/NeedsRebuild + diagnostic
 destructor/retirement/rollback-cleanup noexcept boundary -> catch + conservative evidence/retention + diagnostic
 
-禁止把未预期 C++ exception 转换成普通 DMW DdsError。
+禁止把未预期 C++ exception 转换成普通 DMW DDSError。
 ReturnCode_t failure 与 C++ exception 是两个独立 error channels。
 
 #### 10.6.1 `CreationStatus` Matrix
@@ -8011,7 +8011,7 @@ Private control Guard 的 set-true failure/exception 不回滚 topology/cancella
 
 | 场景 | 结果 |
 | --- | --- |
-| Take `NO_DATA` | `TakeStatus::NoData`，不是 Error |
+| Take `NO_DATA` | `success + false`，不是 Error |
 | Internal WaitSet 100 ms slice timeout | internal retry |
 | Public finite WaitSet deadline reached | final readiness precheck 后返回 `WaitStatus::Timeout` |
 | Server response discovery 100 ms deadline | `ErrorCode::Timeout`；Pending rollback 遵循 Pending FSM |
@@ -8453,7 +8453,7 @@ TypeRegistry：
 - Retiring waiter；
 - retire success + recreate；
 - retire failure -> Orphaned；
-- Orphaned acquire -> DdsError；
+- Orphaned acquire -> DDSError；
 - Fast DDS API calls outside Registry mutex。
 
 TopicRegistry three-stage transaction：
@@ -8578,9 +8578,9 @@ detach permanently fails
 
 WaitSet -> Poisoned
 
-future wait -> DdsError
+future wait -> DDSError
 
-future add -> DdsError
+future add -> DDSError
 
 remove still completes logically
 
@@ -8604,9 +8604,9 @@ Auto-detach：
 
 `WaitSet::add()` priority：
 - cross-context + Context Shutdown -> `InvalidArgument`；
-- Event parent destroyed + WaitSet Poisoned -> `ParentDestroyed`，not DdsError；
+- Event parent destroyed + WaitSet Poisoned -> `ParentDestroyed`，not DDSError；
 - already-registered waitable + WaitSet Poisoned -> `AlreadyRegistered`；
-- clean waitable + Poisoned WaitSet -> `DdsError`；
+- clean waitable + Poisoned WaitSet -> `DDSError`；
 - `WaitableCloseReason::ParentDestroyed` is committed before parent-driven auto-detach；
 - add/parent-destroy race linearizes either successful registration followed by detach, or ParentDestroyed；never returns lower-priority Poisoned while parent destruction was already committed；
 - lock instrumentation confirms add acquires topology(rank 12) -> waitable(rank 15) only and never obtains lower-rank parent mutex while holding them；
@@ -8756,7 +8756,7 @@ rebuild heap allocation failure
     -> affected entry remains NeedsRebuild
 
 Graph corruption / impossible identity conversion：
-service availability -> DdsError
+service availability -> DDSError
 corresponding RemoteEndpointRegistry/RequestStateRegistry global capability -> Degraded
 普通 matched query可以保持独立。
 
@@ -8835,7 +8835,7 @@ duplicate-key insertion race after sample consumption
 map insertion + reservation conversion + rollback.arm()
     -> arm is noexcept before unlock; no throwing gap exists between bookkeeping commit and rollback ownership
 payload commit deserialize false
-    -> PendingEntryRollbackGuard erases pending; DdsError
+    -> PendingEntryRollbackGuard erases pending; DDSError
 payload commit bad_alloc
     -> rollback; exception propagates; no capacity leak
 payload commit non-bad exception
@@ -8854,7 +8854,7 @@ Samples arriving after call-start snapshot：
     -> do not extend current scan budget
     -> visible to later take call
 get_unread_count exception/invariant failure：
-    -> exception/DdsError according to 6.11.1
+    -> exception/DDSError according to 6.11.1
 
 ### 11.18 MessageInfo Tests
 
@@ -8912,7 +8912,7 @@ deleteData exception
     -> CanonicalTypeBinding capability -> Degraded
     -> AllocatedSample adopted by ProcessBindingQuarantine
     -> data pointer / canonical MessageType::Impl remain alive
-    -> later binding-dependent runtime operation returns DdsError after higher-priority checks
+    -> later binding-dependent runtime operation returns DDSError after higher-priority checks
 
 createData nullptr
 createData non-bad_alloc exception
@@ -8920,11 +8920,11 @@ createData non-bad_alloc exception
 createData bad_alloc
     -> propagates std::bad_alloc
 serialize false
-    -> DdsError
+    -> DDSError
 serialize non-bad_alloc exception
     -> propagates unchanged
 deserialize false
-    -> DdsError + caller valid/destructible
+    -> DDSError + caller valid/destructible
 deserialize non-bad_alloc exception
     -> exception propagates + caller valid/destructible
 deserialize bad_alloc
@@ -8932,7 +8932,7 @@ deserialize bad_alloc
 size provider non-bad_alloc exception
     -> propagates unchanged
 size provider overflow/inconsistent size
-    -> DdsError
+    -> DDSError
 
 `TypeRegistrationStatus`：
 register_type OK
@@ -8944,7 +8944,7 @@ register_type ambiguous failure
 register_type exception after entered Fast DDS API call
     -> Indeterminate + Orphaned committed before exception rethrow
 reacquire same key while Orphaned
-    -> DdsError; no second Fast DDS registration
+    -> DDSError; no second Fast DDS registration
 unregister_type exception
     -> Orphaned retention; no TypeSupport release
 Participant delete success
@@ -9050,7 +9050,7 @@ ContextOptions owns RuntimeMode; endpoint/service options contain no RuntimeMode
 same Context cannot mix RuntimeMode
 TopicRegistry primary key uses resolved DDS name only
 same resolved name + different wire type -> TypeMismatch
-same name/type + fingerprint mismatch -> registry Degraded + DdsError
+same name/type + fingerprint mismatch -> registry Degraded + DDSError
 
 ### 11.19 QoS Tests
 
@@ -9084,7 +9084,7 @@ DataSharing
 违反 dmw.md public depth contract -> InvalidArgument
 若 dmw.md 允许某个 depth 但其 > INT32_MAX / 无法转 Fast DDS int32_t -> Unsupported
 valid public QoS otherwise not representable by Fast DDS 2.6.12 -> Unsupported
-resolver internal contradiction -> DdsError + invariant diagnostic
+resolver internal contradiction -> DDSError + invariant diagnostic
 Fast DDS entity creation INCONSISTENT_POLICY -> IncompatibleQos
 
 特别验证 Lifespan：
@@ -9229,7 +9229,7 @@ Service match：
 - local endpoint Closing/Removed + late callback/rebuild -> discarded；
 - remote/service registry generation change during rebuild -> stale result discarded；
 - callback allocation failure -> affected capability Degraded, no exception escape；
-- `state_generation == UINT64_MAX` + new mutation -> global RequestStateRegistry capability Degraded；exact operation -> DdsError。
+- `state_generation == UINT64_MAX` + new mutation -> global RequestStateRegistry capability Degraded；exact operation -> DDSError。
 
 TargetReader：
 - PendingEntry strong-owns immutable `TargetReaderKey` carrying stable participant observation handle；
@@ -9407,7 +9407,7 @@ BindingCapabilityState = Healthy/Degraded，按 Context × canonical TypeEntry �
 同一 Context 内相同 wire name + BindingIdentity 只能有一个 canonical binding authority。
 TypeRegistration acquire 后 endpoint/TemporarySample/TypeSupport hook 只使用 canonical binding，caller descriptor 不再是 runtime authority。
 deleteData exception 不能逃出 noexcept destructor，并把 AllocatedSample adoption 到 ProcessBindingQuarantine。
-ordinary non-bad_alloc C++ exception 不转换为 DdsError；完成必要 lifetime evidence 后原样传播。
+ordinary non-bad_alloc C++ exception 不转换为 DDSError；完成必要 lifetime evidence 后原样传播。
 deserialize false/bad_alloc/其它 exception 所有失败出口均保证 caller object valid/destructible。
 RequestId SequenceNumber 与 MessageInfo publication sequence 使用不同 frozen helper。
 SequenceNumber/GUID/timestamp 只通过 4.2.2 frozen helper 转换。
@@ -9467,7 +9467,7 @@ attach异常按 Indeterminate处理。
 unresolved WaitSetInfo保留所有 ConditionInfo。
 unresolved WaitSetInfo使 WaitSet永久 Poisoned。
 Poisoned WaitSet不再创建 WaitSetInfo。
-Poisoned wait返回DdsError；add在返回WaitSet local DdsError前必须先完成更高优先级waitable parent/registration检查。
+Poisoned wait返回DDSError；add在返回WaitSet local DDSError前必须先完成更高优先级waitable parent/registration检查。
 Poisoned remove仍允许 logical detach。
 old WaitSetInfo使用 frozen Condition→Registration mapping。
 active_wait_count 只保证 Fast DDS Condition interpretation lifetime safety，不禁止 remove 返回后到达已形成的 stale WaitResult snapshot。
@@ -9505,7 +9505,7 @@ Event arithmetic checked。
 Exhausted Event保持 ready。
 Exhausted Event take返回 ResourceExhausted。
 Exhausted cursor不推进。
-Degraded Event take返回 DdsError。
+Degraded Event take返回 DDSError。
 ContextShutdown优先于 ParentDestroyed。
 Service
 DDS 与 ROS2 均使用本章 SampleIdentity correlation；runtime-mode-specific difference 必须显式列出。
@@ -9520,7 +9520,7 @@ Response deadline基于 steady_clock。
 CapacityReservation是 RAII。
 Server take 先 reserve capacity 再 snapshot scan budget；capacity full 优先 ResourceExhausted，且不 Fast DDS take。
 duplicate/invalid 后必须重新 reserve。
-PendingEntry 成功后用 PendingEntryRollbackGuard 覆盖 payload commit；false->DdsError，bad_alloc/其它 C++ exception 原样传播且无 pending/capacity 泄漏。
+PendingEntry 成功后用 PendingEntryRollbackGuard 覆盖 payload commit；false->DDSError，bad_alloc/其它 C++ exception 原样传播且无 pending/capacity 泄漏。
 EphemeralInterruptibleWait registration commit 与 shutdown linearization 互斥。
 capacity两个方向都修改 WaitSet topology。
 send_response先 Pending object-local lookup得到NotFound/Busy，再做preallocation；随后two-phase stable-handle revalidation claim；failure在Active registry恢复Pending，shutdown后erase/no-reinsert。
@@ -9538,7 +9538,7 @@ Service default必须显式 ros2_services_default()。
 ROS2 publication synchronous。
 ROS2 history realloc。
 ROS2 Data Sharing OFF。
-KeepLast resource limit deterministic，且 InvalidArgument/Unsupported/DdsError/IncompatibleQos 分类固定。
+KeepLast resource limit deterministic，且 InvalidArgument/Unsupported/DDSError/IncompatibleQos 分类固定。
 Reader/Writer lifespan 均映射；ROS2 endpoint lifespan 跟 Humble baseline。
 TopicQos lifespan/deadline 保持 canonical、endpoint-independent，不复制 reference first-creator-wins。
 Liveliness duration conversion checked。
@@ -9855,7 +9855,7 @@ ProcessTerminalQuarantine
 | --- | --- |
 | §2.2、§2.18–2.24 process runtime / ChildRegistry | 有 process-lifetime retention、shutdown child map 和并发 shutdown 等待；没有预分配 intrusive ChildRegistry、request-all/ack-all generation 或 executor-failure 完整协议。 |
 | §4.13–4.18 canonical TopicQos | 已映射公开 QoS 和 Humble overrides；没有 13-policy canonical `TopicQosFingerprint`。 |
-| §5 discovery/listener | 有 participant/remote/target registry 与一部分 callback gate；没有所有 listener 的双 drain、精确 rebuild 和 final teardown 证明。 |
+| §5 discovery/listener | `DiscoveryGraph` 是 participant tombstone、endpoint 和健康状态的唯一事实源；listener 只转换 Fast DDS 回调，response 等待通过 revision 订阅重检。尚未具备所有 listener 的双 drain、精确 rebuild 和 final teardown 证明。 |
 | §6.8–6.9 reader lifecycle | close 时保留不安全对象；没有 `DeleteDeferredByWaitSet` registry 和由删除证据驱动的完整 retry FSM。 |
 | §8.19–8.26 WaitSet failure model | 有 poison/repair 和 retain 路径；没有 RetiredWaitSetRegistry、historical Info ownership 与完整 attach/detach indeterminate/control guard replacement 协议。 |
 | §8.32–8.43 Guard/Event failure modes | generation/cursor 主路径存在；logical-only degradation、全耗尽和所有 degraded lifecycle 未齐全。 |

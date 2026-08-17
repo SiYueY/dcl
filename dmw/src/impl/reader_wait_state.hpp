@@ -27,9 +27,9 @@ public:
     enum class Lifecycle { Open, DeleteDeferredByWaitSet, Closed };
     ReaderWaitState(
         std::shared_ptr<fastdds::Context> context, eprosima::fastdds::dds::DataReader* value)
-    : context_state(std::move(context)), reader(value) {}
+    : context_(std::move(context)), reader(value) {}
 
-    const std::shared_ptr<fastdds::Context>& context() const noexcept { return context_state; }
+    const std::shared_ptr<fastdds::Context>& context() const noexcept { return context_; }
 
     bool is_ready() noexcept {
         std::lock_guard<std::mutex> lock(reader_mutex);
@@ -77,7 +77,7 @@ public:
             return;
         }
         try {
-            if (context_state->subscriber()->delete_datareader(reader) ==
+            if (context_->subscriber()->delete_datareader(reader) ==
                 eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
                 reader = nullptr;
                 lifecycle.store(Lifecycle::Closed, std::memory_order_release);
@@ -89,12 +89,12 @@ public:
     }
 
     /// A failed native WaitSet detach is not safe to tear down piecemeal:
-    /// Fast DDS may still retain the StatusCondition.  Keep the WaitSet state
+    /// Fast DDS may still retain the StatusCondition.  Keep the WaitSet context
     /// (and therefore this reader/context) alive as a deliberate
     /// process-lifetime cycle until a later successful detach can break it.
-    void quarantine_wait_set(std::shared_ptr<void> state) noexcept {
+    void quarantine_wait_set(std::shared_ptr<void> context) noexcept {
         std::lock_guard lock(callback_mutex);
-        quarantined_wait_set = std::move(state);
+        quarantined_wait_set = std::move(context);
     }
 
     void notify_wait_set() noexcept {
@@ -132,7 +132,7 @@ private:
     friend class WaitSetState;
     friend class ReaderWaitStateTestAccess;
 
-    std::shared_ptr<fastdds::Context> context_state;
+    std::shared_ptr<fastdds::Context> context_;
     std::atomic<bool> closing{false};
     std::atomic<std::uint64_t> wait_set_id{0};
     std::atomic<std::uint64_t> registration_id{0};

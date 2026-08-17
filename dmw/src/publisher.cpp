@@ -11,7 +11,7 @@ Publisher::Publisher(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl
 
 Publisher::~Publisher() noexcept = default;
 
-Result<void> Publisher::publish(const void* message) { return impl_->publish(message); }
+Result<void> Publisher::write(const void* message) { return impl_->write(message); }
 
 std::string_view Publisher::topic_name() const noexcept { return impl_->topic_name(); }
 

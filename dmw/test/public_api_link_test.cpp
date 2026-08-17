@@ -20,9 +20,9 @@ int main() {
     [[maybe_unused]] auto node_client = &dmw::Node::create_client;
     [[maybe_unused]] auto node_server = &dmw::Node::create_server;
 
-    [[maybe_unused]] auto publish = &dmw::Publisher::publish;
+    [[maybe_unused]] auto write = &dmw::Publisher::write;
     [[maybe_unused]] auto publisher_event = &dmw::Publisher::create_event;
-    [[maybe_unused]] auto take = &dmw::Subscriber::take;
+    [[maybe_unused]] auto read = &dmw::Subscriber::read;
     [[maybe_unused]] auto subscriber_event = &dmw::Subscriber::create_event;
     [[maybe_unused]] auto request = &dmw::Client::send_request;
     [[maybe_unused]] auto response = &dmw::Client::take_response;

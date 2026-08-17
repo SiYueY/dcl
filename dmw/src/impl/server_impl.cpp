@@ -40,7 +40,7 @@ Server::Impl::~Impl() noexcept {
         }
         if (listener_detached) {
             try {
-                state_->publisher()->delete_datawriter(response_writer_);
+                context_->publisher()->delete_datawriter(response_writer_);
             } catch (...) {
                 // The Context container remains the conservative ownership barrier.
             }
@@ -53,7 +53,7 @@ Server::Impl::~Impl() noexcept {
     if (request_reader_ != nullptr) {
         try {
             if (request_wait_state_->close()) {
-                state_->subscriber()->delete_datareader(request_reader_);
+                context_->subscriber()->delete_datareader(request_reader_);
             }
         } catch (...) {
             // The Context container remains the conservative ownership barrier.
@@ -62,36 +62,34 @@ Server::Impl::~Impl() noexcept {
     }
 }
 
-Result<TakeStatus> Server::Impl::take_request(void* request, RequestId& request_id) {
+Result<bool> Server::Impl::take_request(void* request, RequestId& request_id) {
     if (request == nullptr)
-        return Result<TakeStatus>::failure(
-            Error(ErrorCode::InvalidArgument, "Request must not be null"));
-    const auto operation = state_->try_acquire_operation();
+        return Result<bool>::failure(Error(ErrorCode::InvalidArgument, "Request must not be null"));
+    const auto operation = context_->try_acquire_operation();
     if (!operation)
-        return Result<TakeStatus>::failure(
-            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
     auto remaining = request_reader_->get_unread_count();
     while (remaining-- != 0U) {
         bool became_full = false;
         if (!reserve_request_slot(became_full))
-            return Result<TakeStatus>::failure(Error(
+            return Result<bool>::failure(Error(
                 ErrorCode::ResourceExhausted, "Server pending request capacity is exhausted"));
         if (became_full) request_wait_state_->set_blocking_enabled(false);
 
         auto sample = impl::TemporarySample::create(request_type_);
         if (!sample) {
             if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
-            return Result<TakeStatus>::failure(std::move(sample.error()));
+            return Result<bool>::failure(std::move(sample.error()));
         }
         eprosima::fastdds::dds::SampleInfo info;
         const auto result = request_reader_->take_next_sample(sample.value().data(), &info);
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_NO_DATA) {
             if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
-            return Result<TakeStatus>::success(TakeStatus::NoData);
+            return Result<bool>::success(false);
         }
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
             if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
-            return Result<TakeStatus>::failure(
+            return Result<bool>::failure(
                 impl::fastdds::to_error(result, "Fast DDS request take failed"));
         }
         if (!info.valid_data) {
@@ -102,8 +100,8 @@ Result<TakeStatus> Server::Impl::take_request(void* request, RequestId& request_
         auto id = impl::fastdds::request_id_from_identity(info.sample_identity);
         if (!id) {
             if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
-            return Result<TakeStatus>::failure(
-                Error(ErrorCode::DdsError, "Fast DDS request has an unknown sequence"));
+            return Result<bool>::failure(
+                Error(ErrorCode::DDSError, "Fast DDS request has an unknown sequence"));
         }
         auto response_identity = info.sample_identity;
         const auto& response_reader_guid = info.related_sample_identity.writer_guid();
@@ -131,23 +129,23 @@ Result<TakeStatus> Server::Impl::take_request(void* request, RequestId& request_
             auto committed = sample.value().commit_to(request);
             if (committed) {
                 request_id = *id;
-                return Result<TakeStatus>::success(TakeStatus::Taken);
+                return Result<bool>::success(true);
             }
             if (release_pending_request(*id)) request_wait_state_->set_blocking_enabled(true);
-            return Result<TakeStatus>::failure(std::move(committed.error()));
+            return Result<bool>::failure(std::move(committed.error()));
         } catch (...) {
             if (release_pending_request(*id)) request_wait_state_->set_blocking_enabled(true);
             throw;
         }
     }
-    return Result<TakeStatus>::success(TakeStatus::NoData);
+    return Result<bool>::success(false);
 }
 
 Result<void> Server::Impl::send_response(const RequestId& request_id, const void* response) {
     if (response == nullptr)
         return Result<void>::failure(
             Error(ErrorCode::InvalidArgument, "Response must not be null"));
-    const auto operation = state_->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation)
         return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
     eprosima::fastrtps::rtps::SampleIdentity sample_identity;
@@ -189,7 +187,7 @@ Result<void> Server::Impl::send_response(const RequestId& request_id, const void
             if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
             if (target == impl::ResponseState::TargetStatus::Unavailable) {
                 return Result<void>::failure(
-                    Error(ErrorCode::DdsError, "Response reader discovery state is unavailable"));
+                    Error(ErrorCode::DDSError, "Response reader discovery context is unavailable"));
             }
             return Result<void>::failure(
                 Error(ErrorCode::Timeout, "Response reader did not match before the deadline"));
@@ -199,7 +197,7 @@ Result<void> Server::Impl::send_response(const RequestId& request_id, const void
     // Commit-point recheck: an operation guard only prevents destruction, not
     // transition to Context shutdown or a terminal discovery update while the
     // response target wait was in progress.
-    if (state_->is_shutdown()) {
+    if (context_->is_shutdown()) {
         std::lock_guard lock(pending_mutex_);
         const auto pending = pending_.find(request_id);
         if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
@@ -232,7 +230,7 @@ Result<void> Server::Impl::send_response(const RequestId& request_id, const void
             if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
             if (final_target == impl::ResponseState::TargetStatus::Unavailable) {
                 return Result<void>::failure(
-                    Error(ErrorCode::DdsError, "Response reader discovery state is unavailable"));
+                    Error(ErrorCode::DDSError, "Response reader discovery context is unavailable"));
             }
             return Result<void>::failure(
                 Error(ErrorCode::Timeout, "Response reader is unavailable before write"));
@@ -250,7 +248,7 @@ Result<void> Server::Impl::send_response(const RequestId& request_id, const void
         std::lock_guard lock(pending_mutex_);
         const auto pending = pending_.find(request_id);
         if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
-        return Result<void>::failure(Error(ErrorCode::DdsError, "Fast DDS response write failed"));
+        return Result<void>::failure(Error(ErrorCode::DDSError, "Fast DDS response write failed"));
     } catch (...) {
         std::lock_guard lock(pending_mutex_);
         const auto pending = pending_.find(request_id);

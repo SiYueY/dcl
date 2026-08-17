@@ -30,7 +30,7 @@ Client::Impl::~Impl() noexcept {
         const bool reader_closed = response_wait_state_->close();
         if (listener_detached && reader_closed) {
             try {
-                state_->subscriber()->delete_datareader(response_reader_);
+                context_->subscriber()->delete_datareader(response_reader_);
             } catch (...) {
                 // The Context container remains the conservative ownership barrier.
             }
@@ -48,7 +48,7 @@ Client::Impl::~Impl() noexcept {
                                 eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
             if (listener_detached) {
                 request_listener_->close_and_drain();
-                state_->publisher()->delete_datawriter(request_writer_);
+                context_->publisher()->delete_datawriter(request_writer_);
             }
         } catch (...) {
             listener_detached = false;
@@ -65,7 +65,7 @@ Result<RequestId> Client::Impl::send_request(const void* request) {
     if (request == nullptr)
         return Result<RequestId>::failure(
             Error(ErrorCode::InvalidArgument, "Request must not be null"));
-    const auto operation = state_->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation)
         return Result<RequestId>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
@@ -76,36 +76,35 @@ Result<RequestId> Client::Impl::send_request(const void* request) {
     params.related_sample_identity().writer_guid() = response_reader_->guid();
     if (!request_writer_->write(const_cast<void*>(request), params))
         return Result<RequestId>::failure(
-            Error(ErrorCode::DdsError, "Fast DDS request write failed"));
+            Error(ErrorCode::DDSError, "Fast DDS request write failed"));
     auto request_id = impl::fastdds::request_id_from_identity(params.sample_identity());
     if (!request_id) {
         return Result<RequestId>::failure(
-            Error(ErrorCode::DdsError, "Fast DDS request write returned an unknown sequence"));
+            Error(ErrorCode::DDSError, "Fast DDS request write returned an unknown sequence"));
     }
     request_id->client_gid = impl::fastdds::to_gid(response_reader_->guid());
     return Result<RequestId>::success(*request_id);
 }
 
-Result<TakeStatus> Client::Impl::take_response(void* response, RequestId& request_id) {
+Result<bool> Client::Impl::take_response(void* response, RequestId& request_id) {
     if (response == nullptr)
-        return Result<TakeStatus>::failure(
+        return Result<bool>::failure(
             Error(ErrorCode::InvalidArgument, "Response must not be null"));
-    const auto operation = state_->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation)
-        return Result<TakeStatus>::failure(
-            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
     auto remaining = response_reader_->get_unread_count();
     while (remaining-- != 0U) {
         auto sample = impl::TemporarySample::create(response_type_);
         if (!sample) {
-            return Result<TakeStatus>::failure(std::move(sample.error()));
+            return Result<bool>::failure(std::move(sample.error()));
         }
         eprosima::fastdds::dds::SampleInfo info;
         const auto result = response_reader_->take_next_sample(sample.value().data(), &info);
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_NO_DATA)
-            return Result<TakeStatus>::success(TakeStatus::NoData);
+            return Result<bool>::success(false);
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
-            return Result<TakeStatus>::failure(
+            return Result<bool>::failure(
                 impl::fastdds::to_error(result, "Fast DDS response take failed"));
         if (!info.valid_data) continue;
         const auto& related_guid = info.related_sample_identity.writer_guid();
@@ -117,27 +116,27 @@ Result<TakeStatus> Client::Impl::take_response(void* response, RequestId& reques
         if (!response_id) continue;
         auto committed = sample.value().commit_to(response);
         if (!committed) {
-            return Result<TakeStatus>::failure(std::move(committed.error()));
+            return Result<bool>::failure(std::move(committed.error()));
         }
         request_id = *response_id;
-        return Result<TakeStatus>::success(TakeStatus::Taken);
+        return Result<bool>::success(true);
     }
-    return Result<TakeStatus>::success(TakeStatus::NoData);
+    return Result<bool>::success(false);
 }
 
 Result<bool> Client::Impl::service_is_available() const {
-    const auto operation = state_->try_acquire_operation();
+    const auto operation = context_->try_acquire_operation();
     if (!operation)
         return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
 
     if (request_state_->is_degraded()) {
         return Result<bool>::failure(
-            Error(ErrorCode::DdsError, "Service discovery state is unavailable"));
+            Error(ErrorCode::DDSError, "Service discovery context is unavailable"));
     }
     try {
         return Result<bool>::success(request_state_->is_available());
     } catch (const std::bad_alloc&) {
-        // The service state is snapshotted before lower-ranked discovery
+        // The service context is snapshotted before lower-ranked discovery
         // registries are inspected.  Keep allocation failure inside Result.
         return Result<bool>::failure(
             Error(ErrorCode::ResourceExhausted, "Service availability snapshot allocation failed"));

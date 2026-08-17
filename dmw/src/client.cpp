@@ -14,7 +14,7 @@ std::string_view Client::service_name() const noexcept { return impl_->service_n
 
 Result<RequestId> Client::send_request(const void* request) { return impl_->send_request(request); }
 
-Result<TakeStatus> Client::take_response(void* response, RequestId& request_id) {
+Result<bool> Client::take_response(void* response, RequestId& request_id) {
     return impl_->take_response(response, request_id);
 }
 
