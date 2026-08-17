@@ -155,7 +155,7 @@ V1 支持：
 V1 支持：
 
 - `WaitSet`
-- `WaitToken`
+- `WaitableRegistration`
 - `WaitResult`
 - poll
 - finite timeout
@@ -405,18 +405,18 @@ Result<bool> Subscriber::read(
 Service：
 
 ```cpp
-Result<RequestId> Client::send_request(
+Result<RequestId> Client::write_request(
     const void* request);
 
-Result<bool> Client::take_response(
+Result<bool> Client::read_response(
     void* response,
     RequestId& request_id);
 
-Result<bool> Server::take_request(
+Result<bool> Server::read_request(
     void* request,
     RequestId& request_id);
 
-Result<void> Server::send_response(
+Result<void> Server::write_response(
     const RequestId& request_id,
     const void* response);
 ```
@@ -432,13 +432,13 @@ Publisher::write(message)
 
 Subscriber::read(message, ...)
 
-Client::send_request(request)
+Client::write_request(request)
 
-Client::take_response(response, ...)
+Client::read_response(response, ...)
 
-Server::take_request(request, ...)
+Server::read_request(request, ...)
 
-Server::send_response(..., response)
+Server::write_response(..., response)
 ```
 
 如果指针为 `nullptr`：
@@ -559,7 +559,7 @@ error after Fast DDS status consumption
 
 #### 3.5.6 Service take 输出与有限扫描
 
-`Client::take_response()` 与 `Server::take_request()` 对 payload、`RequestId` 和其它 public
+`Client::read_response()` 与 `Server::read_request()` 对 payload、`RequestId` 和其它 public
 metadata 使用同一事务边界：`false` 或 middleware sample consumption 前的任何失败保持
 全部 caller output 不变；sample 已消费后的 metadata conversion、correlation、payload
 commit、Error 或允许传播的 C++ exception，只保证全部 output 仍 valid/destructible，字段
@@ -622,7 +622,7 @@ EventType
 EventInfo
 
 WaitTimeout
-WaitToken
+WaitableRegistration
 WaitResult
 
 Error
@@ -1561,7 +1561,7 @@ DomainParticipant destroyed
 ```cpp
 struct NodeOptions
 {
-    std::string name;
+    std::string node_name;
     std::string node_namespace{"/"};
 };
 ```
@@ -2657,11 +2657,11 @@ public:
     Client& operator=(Client&&) = delete;
 
     Result<RequestId>
-    send_request(
+    write_request(
         const void* request);
 
     Result<bool>
-    take_response(
+    read_response(
         void* response,
         RequestId& request_id);
 
@@ -2698,12 +2698,12 @@ public:
     Server& operator=(Server&&) = delete;
 
     Result<bool>
-    take_request(
+    read_request(
         void* request,
         RequestId& request_id);
 
     Result<void>
-    send_response(
+    write_response(
         const RequestId& request_id,
         const void* response);
 
@@ -2727,7 +2727,7 @@ private:
 当：
 
 ```cpp
-take_request(...)
+read_request(...)
 ```
 
 成功返回：
@@ -2743,7 +2743,7 @@ take_request(...)
 因此：
 
 ```cpp
-server.send_response(id, response);
+server.write_response(id, response);
 ```
 
 只允许对：
@@ -2776,10 +2776,10 @@ DMW V1 不额外保留无限期 responded tombstone。
 
 > 已成功响应过的 RequestId 再次使用，与任意 unknown RequestId 一样返回 `NotFound`。
 
-这里的“再次使用”指应用再次调用 `send_response()`；它不表示 DMW 永久保存该
+这里的“再次使用”指应用再次调用 `write_response()`；它不表示 DMW 永久保存该
 RequestId 的 transport-level 去重记录。
 
-### 9.8 Concurrent send_response
+### 9.8 Concurrent write_response
 
 Server 内部 request state：
 
@@ -2797,7 +2797,7 @@ removed
 
 `Responding RequestId`
 
-调用 `send_response()`：
+调用 `write_response()`：
 
 `Busy`
 
@@ -2839,7 +2839,7 @@ transport-level duplicate handling，DMW 不维护无界 tombstone 数据库。
 
 `ServerOptions::max_pending_requests`
 
-则 `take_request()` 直接返回：
+则 `read_request()` 直接返回：
 
 `ErrorCode::ResourceExhausted`
 
@@ -2848,10 +2848,10 @@ transport-level duplicate handling，DMW 不维护无界 tombstone 数据库。
 
 Fast DDS take 返回 `NoData` 或 Error 时必须释放预留 slot；取得 duplicate sample
 并抑制后也释放该 slot再继续查找；取得新 request 时才把 reservation 转换为
-Pending entry。由此多个并发 `take_request()` 也不得使容量超过配置上限。
+Pending entry。由此多个并发 `read_request()` 也不得使容量超过配置上限。
 
 Server 析构时清空全部 pending state。Context 进入 `ShuttingDown` 后，pending
-request 不再可响应，`send_response()` 按全局错误优先级返回
+request 不再可响应，`write_response()` 按全局错误优先级返回
 `ContextShutdown`；最终资源销毁时清空这些 entry。
 
 ### 9.11 Client Response Filtering
@@ -2868,7 +2868,7 @@ DMW Client 必须过滤：
 
 因此：
 
-`take_response()`
+`read_response()`
 
 只保证：
 
@@ -3095,23 +3095,23 @@ public:
     WaitSet(WaitSet&&) = delete;
     WaitSet& operator=(WaitSet&&) = delete;
 
-    Result<WaitToken>
+    Result<WaitableRegistration>
     add(Subscriber&);
 
-    Result<WaitToken>
+    Result<WaitableRegistration>
     add(Client&);
 
-    Result<WaitToken>
+    Result<WaitableRegistration>
     add(Server&);
 
-    Result<WaitToken>
+    Result<WaitableRegistration>
     add(Event&);
 
-    Result<WaitToken>
+    Result<WaitableRegistration>
     add(GuardCondition&);
 
     Result<void>
-    remove(WaitToken token);
+    remove(WaitableRegistration registration);
 
     Result<WaitResult>
     wait(WaitTimeout timeout);
@@ -3199,7 +3199,7 @@ Humble RMW 也明确建议 wait timeout 基于 monotonic clock；这里将该建
 
 采用 saturating arithmetic，不允许整数 overflow。
 
-### 10.8 WaitToken
+### 10.8 WaitableRegistration
 
 ```cpp
 enum class WaitableKind
@@ -3211,18 +3211,18 @@ enum class WaitableKind
     GuardCondition
 };
 
-class WaitToken
+class WaitableRegistration
 {
 public:
-    WaitToken() noexcept = default;
+    WaitableRegistration() noexcept = default;
 
     bool valid() const noexcept;
 
     WaitableKind kind() const noexcept;
 
     friend bool operator==(
-        const WaitToken&,
-        const WaitToken&) noexcept;
+        const WaitableRegistration&,
+        const WaitableRegistration&) noexcept;
 
 private:
     friend class WaitSet;
@@ -3248,9 +3248,9 @@ registration_id == 0
 
 `WaitSet::add()` 永不返回 invalid token。
 
-### 10.10 WaitToken Scope
+### 10.10 WaitableRegistration Scope
 
-WaitToken 只对创建它的 WaitSet 有效。
+WaitableRegistration 只对创建它的 WaitSet 有效。
 
 例如：
 
@@ -3327,7 +3327,7 @@ class WaitResult
 public:
     WaitStatus status() const noexcept;
 
-    const std::vector<WaitToken>&
+    const std::vector<WaitableRegistration>&
     ready() const noexcept;
 
 private:
@@ -3336,10 +3336,10 @@ private:
     static WaitResult timeout();
 
     static WaitResult ready(
-        std::vector<WaitToken> tokens);
+        std::vector<WaitableRegistration> registrations);
 
     WaitStatus status_{WaitStatus::Timeout};
-    std::vector<WaitToken> ready_;
+    std::vector<WaitableRegistration> ready_;
 };
 ```
 
@@ -3368,21 +3368,21 @@ WaitResult 表示：
 
 不保证：
 
-`registration 在调用者读取 token 时仍然存在`
+`registration 在调用者读取它时仍然存在`
 
 。
 
-DMW 不允许通过 WaitToken 解引用 public entity。
+DMW 不允许通过 WaitableRegistration 解引用 public entity。
 
-允许 `wait()` 已形成 Ready snapshot 后，并发 `remove(token)` 成功返回，再由 wait 把旧 token
+允许 `wait()` 已形成 Ready snapshot 后，并发 `remove(registration)` 成功返回，再由 wait 把旧 registration
 交给 caller。`remove()` 返回后必须保证实现层不会因该旧 snapshot 访问已释放的
 Registration/Waitable/DDS entity Info；它不撤回已经形成的 value snapshot。
 
 dclcpp Executor 必须维护自己的：
 
-`WaitToken -> weak/high-level registration`
+`WaitableRegistration -> weak/high-level registration`
 
-映射，并处理 stale token。
+映射，并处理 stale registration。
 
 ### 10.14 一个 Waitable 一个 WaitSet
 
@@ -4128,15 +4128,15 @@ Publisher::matched_subscriber_count()
 
 Subscriber::matched_publisher_count()
 
-Client::send_request()
+Client::write_request()
 
-Client::take_response()
+Client::read_response()
 
 Client::service_is_available()
 
-Server::take_request()
+Server::read_request()
 
-Server::send_response()
+Server::write_response()
     — 不同 RequestId
 
 GuardCondition::trigger()
@@ -4146,7 +4146,7 @@ Event::take()
 
 。
 
-同一 `RequestId` 的两个 `send_response()` 按 [Client/Server contract](#dmw-service) 返回 `Busy`。
+同一 `RequestId` 的两个 `write_response()` 按 [Client/Server contract](#dmw-service) 返回 `Busy`。
 
 ### 12.4 Object Destruction
 
@@ -4536,7 +4536,7 @@ request sequence
 
 Humble `rmw_fastrtps` 正是把 response reader GUID 放进 request 的 `related_sample_identity.writer_guid`，并从 write 后的 sample identity 得到 sequence number。
 
-### 13.13 DMW `send_request()` 返回值
+### 13.13 DMW `write_request()` 返回值
 
 DMW 对外标准化：
 
@@ -4642,7 +4642,7 @@ default。V1 Qos 尚未公开 reliability max blocking time，因此这里不从
 - 使用 monotonic `steady_clock`；
 - discovery/control wake 不重置原始 deadline；
 - Context 进入 `ShuttingDown` 必须立即中断并返回 `ContextShutdown`；
-- 同一 Server facade 的析构与 `send_response()` 不得并发；
+- 同一 Server facade 的析构与 `write_response()` 不得并发；
 - 如果等待期间 discovery registry 已确认目标 Client response reader 消失，则按
   Humble workaround 语义视为 response 已不再需要发送并返回 success；
 - 否则 deadline 到期且目标仍未匹配时返回 `Timeout`。
@@ -4792,7 +4792,7 @@ dmw/
 │       ├── request_id.hpp
 │       ├── wait_set.hpp
 │       ├── wait_timeout.hpp
-│       ├── wait_token.hpp
+│       ├── waitable_registration.hpp
 │       ├── wait_result.hpp
 │       ├── guard_condition.hpp
 │       │
@@ -5037,8 +5037,8 @@ no blocked infinite WaitSet remains
 ```text
 publish(nullptr)
 take(nullptr)
-send_request(nullptr)
-send_response(nullptr)
+write_request(nullptr)
+write_response(nullptr)
 ```
 
 ：
@@ -5182,7 +5182,7 @@ max_pending_requests == 0
     -> create_server InvalidArgument
 
 pending count reaches limit
-    -> take_request ResourceExhausted
+    -> read_request ResourceExhausted
     -> DDS sample remains in DDS history
 
 duplicate DDS sample while Pending
@@ -5288,7 +5288,7 @@ topology wake at 60ms
 
 。
 
-#### 14.5.11 WaitToken Tests
+#### 14.5.11 WaitableRegistration Tests
 
 覆盖：
 
@@ -5685,11 +5685,11 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 100. negative finite timeout 非法。
 101. finite wait 使用 steady_clock。
 102. topology wake 不重置原始 timeout。
-103. WaitToken 绑定创建它的 WaitSet。
-104. token 0 值 invalid。
-105. token 在进程生命周期不复用。
-106. stale token 返回 NotRegistered。
-107. wrong WaitSet token 返回 InvalidArgument。
+103. WaitableRegistration 绑定创建它的 WaitSet。
+104. registration 0 值 invalid。
+105. registration 在进程生命周期不复用。
+106. stale registration 返回 NotRegistered。
+107. wrong WaitSet registration 返回 InvalidArgument。
 108. WaitResult 是不可非法构造的 readiness snapshot：Ready 非空、Timeout 为空；remove 不撤回已形成的 stale value snapshot。
 109. 一个 waitable 同时只能加入一个 WaitSet。
 110. 同一 WaitSet 同时一个 active wait。

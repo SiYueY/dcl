@@ -21,7 +21,7 @@ namespace dmw {
 class Context;
 
 struct NodeOptions {
-    std::string name;
+    std::string node_name;
     std::string node_namespace{"/"};
 };
 

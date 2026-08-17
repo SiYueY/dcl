@@ -1,5 +1,5 @@
-#ifndef DMW_WAIT_TOKEN_HPP_
-#define DMW_WAIT_TOKEN_HPP_
+#ifndef DMW_WAITABLE_REGISTRATION_HPP_
+#define DMW_WAITABLE_REGISTRATION_HPP_
 
 #include <cstdint>
 
@@ -10,27 +10,30 @@ class WaitSet;
 enum class WaitableKind { Subscriber, Client, Server, Event, GuardCondition };
 
 /// Opaque identity of a registration in one WaitSet.
-class WaitToken {
+class WaitableRegistration {
 public:
-    WaitToken() noexcept = default;
+    WaitableRegistration() noexcept = default;
 
     bool valid() const noexcept { return wait_set_id_ != 0 && registration_id_ != 0; }
 
     WaitableKind kind() const noexcept { return kind_; }
 
-    friend bool operator==(const WaitToken& lhs, const WaitToken& rhs) noexcept {
+    friend bool operator==(
+        const WaitableRegistration& lhs, const WaitableRegistration& rhs) noexcept {
         return lhs.wait_set_id_ == rhs.wait_set_id_ &&
                lhs.registration_id_ == rhs.registration_id_ && lhs.kind_ == rhs.kind_;
     }
 
-    friend bool operator!=(const WaitToken& lhs, const WaitToken& rhs) noexcept {
+    friend bool operator!=(
+        const WaitableRegistration& lhs, const WaitableRegistration& rhs) noexcept {
         return !(lhs == rhs);
     }
 
 private:
     friend class WaitSet;
 
-    WaitToken(std::uint64_t wait_set_id, std::uint64_t registration_id, WaitableKind kind) noexcept
+    WaitableRegistration(
+        std::uint64_t wait_set_id, std::uint64_t registration_id, WaitableKind kind) noexcept
     : wait_set_id_(wait_set_id), registration_id_(registration_id), kind_(kind) {}
 
     std::uint64_t wait_set_id_{0};
@@ -40,4 +43,4 @@ private:
 
 }  // namespace dmw
 
-#endif  // DMW_WAIT_TOKEN_HPP_
+#endif  // DMW_WAITABLE_REGISTRATION_HPP_

@@ -27,10 +27,10 @@ public:
     Client& operator=(Client&&) = delete;
 
     /// Send a non-null request object matching the Client's request MessageType.
-    Result<RequestId> send_request(const void* request);
+    Result<RequestId> write_request(const void* request);
 
     /// Take a response addressed to this Client; false leaves both outputs unchanged.
-    Result<bool> take_response(void* response, RequestId& request_id);
+    Result<bool> read_response(void* response, RequestId& request_id);
 
     /// Return a snapshot without combining endpoints from different participants.
     Result<bool> service_is_available() const;

@@ -30,10 +30,10 @@ public:
     Server& operator=(Server&&) = delete;
 
     /// Take a request and register its RequestId as pending.
-    Result<bool> take_request(void* request, RequestId& request_id);
+    Result<bool> read_request(void* request, RequestId& request_id);
 
     /// Respond only to a RequestId currently pending on this Server.
-    Result<void> send_response(const RequestId& request_id, const void* response);
+    Result<void> write_response(const RequestId& request_id, const void* response);
 
     std::string_view service_name() const noexcept;
 

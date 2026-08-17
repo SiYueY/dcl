@@ -661,9 +661,9 @@ public:
     : context_(std::move(context)) {}
 
     ~Impl() noexcept { context_->close(); }
-    Result<WaitToken> add(const std::shared_ptr<GuardConditionState>&, WaitableKind);
-    Result<WaitToken> add(const std::shared_ptr<impl::ReaderWaitState>&, WaitableKind);
-    Result<void> remove(WaitToken);
+    Result<WaitableRegistration> add(const std::shared_ptr<GuardConditionState>&, WaitableKind);
+    Result<WaitableRegistration> add(const std::shared_ptr<impl::ReaderWaitState>&, WaitableKind);
+    Result<void> remove(WaitableRegistration registration);
     Result<WaitResult> wait(WaitTimeout);
 
 private:

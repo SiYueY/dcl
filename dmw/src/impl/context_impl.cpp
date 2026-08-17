@@ -615,8 +615,8 @@ Result<void> Context::Impl::shutdown() {
 }
 
 Result<std::unique_ptr<Node>> Context::Impl::create_node(const NodeOptions& options) {
-    if (options.name.empty() || impl::has_invalid_name_syntax(options.name) ||
-        options.name.find('/') != std::string::npos) {
+    if (options.node_name.empty() || impl::has_invalid_name_syntax(options.node_name) ||
+        options.node_name.find('/') != std::string::npos) {
         return Result<std::unique_ptr<Node>>::failure(
             Error(ErrorCode::InvalidName, "Node name contains unsupported syntax"));
     }
@@ -630,8 +630,8 @@ Result<std::unique_ptr<Node>> Context::Impl::create_node(const NodeOptions& opti
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
 
-    auto node_impl =
-        std::make_unique<Node::Impl>(context_, options.name, std::move(node_namespace.value()));
+    auto node_impl = std::make_unique<Node::Impl>(
+        context_, options.node_name, std::move(node_namespace.value()));
     return Result<std::unique_ptr<Node>>::success(
         std::unique_ptr<Node>(new Node(std::move(node_impl))));
 }

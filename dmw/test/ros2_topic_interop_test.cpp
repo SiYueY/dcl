@@ -119,7 +119,7 @@ int main() {
         assert(context);
 
         dmw::NodeOptions node_options;
-        node_options.name = "dmw_ros2_topic_node";
+        node_options.node_name = "dmw_ros2_topic_node";
         auto node = context.value()->create_node(node_options);
         assert(node);
         auto publisher =

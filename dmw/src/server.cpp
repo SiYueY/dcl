@@ -12,12 +12,12 @@ Server::~Server() noexcept = default;
 
 std::string_view Server::service_name() const noexcept { return impl_->service_name(); }
 
-Result<bool> Server::take_request(void* request, RequestId& request_id) {
-    return impl_->take_request(request, request_id);
+Result<bool> Server::read_request(void* request, RequestId& request_id) {
+    return impl_->read_request(request, request_id);
 }
 
-Result<void> Server::send_response(const RequestId& request_id, const void* response) {
-    return impl_->send_response(request_id, response);
+Result<void> Server::write_response(const RequestId& request_id, const void* response) {
+    return impl_->write_response(request_id, response);
 }
 
 }  // namespace dmw

@@ -24,27 +24,28 @@ int main() {
     [[maybe_unused]] auto publisher_event = &dmw::Publisher::create_event;
     [[maybe_unused]] auto read = &dmw::Subscriber::read;
     [[maybe_unused]] auto subscriber_event = &dmw::Subscriber::create_event;
-    [[maybe_unused]] auto request = &dmw::Client::send_request;
-    [[maybe_unused]] auto response = &dmw::Client::take_response;
+    [[maybe_unused]] auto request = &dmw::Client::write_request;
+    [[maybe_unused]] auto response = &dmw::Client::read_response;
     [[maybe_unused]] auto availability = &dmw::Client::service_is_available;
-    [[maybe_unused]] auto server_take = &dmw::Server::take_request;
-    [[maybe_unused]] auto server_response = &dmw::Server::send_response;
+    [[maybe_unused]] auto server_take = &dmw::Server::read_request;
+    [[maybe_unused]] auto server_response = &dmw::Server::write_response;
 
     [[maybe_unused]] auto guard_trigger = &dmw::GuardCondition::trigger;
     [[maybe_unused]] auto event_take = &dmw::Event::take;
     [[maybe_unused]] auto wait_subscriber =
-        static_cast<dmw::Result<dmw::WaitToken> (dmw::WaitSet::*)(dmw::Subscriber&)>(
+        static_cast<dmw::Result<dmw::WaitableRegistration> (dmw::WaitSet::*)(dmw::Subscriber&)>(
             &dmw::WaitSet::add);
     [[maybe_unused]] auto wait_client =
-        static_cast<dmw::Result<dmw::WaitToken> (dmw::WaitSet::*)(dmw::Client&)>(
+        static_cast<dmw::Result<dmw::WaitableRegistration> (dmw::WaitSet::*)(dmw::Client&)>(
             &dmw::WaitSet::add);
     [[maybe_unused]] auto wait_server =
-        static_cast<dmw::Result<dmw::WaitToken> (dmw::WaitSet::*)(dmw::Server&)>(
+        static_cast<dmw::Result<dmw::WaitableRegistration> (dmw::WaitSet::*)(dmw::Server&)>(
             &dmw::WaitSet::add);
     [[maybe_unused]] auto wait_event =
-        static_cast<dmw::Result<dmw::WaitToken> (dmw::WaitSet::*)(dmw::Event&)>(&dmw::WaitSet::add);
+        static_cast<dmw::Result<dmw::WaitableRegistration> (dmw::WaitSet::*)(dmw::Event&)>(
+            &dmw::WaitSet::add);
     [[maybe_unused]] auto wait_guard =
-        static_cast<dmw::Result<dmw::WaitToken> (dmw::WaitSet::*)(dmw::GuardCondition&)>(
+        static_cast<dmw::Result<dmw::WaitableRegistration> (dmw::WaitSet::*)(dmw::GuardCondition&)>(
             &dmw::WaitSet::add);
     [[maybe_unused]] auto wait_remove = &dmw::WaitSet::remove;
     [[maybe_unused]] auto wait = &dmw::WaitSet::wait;

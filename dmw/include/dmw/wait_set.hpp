@@ -8,7 +8,7 @@
 #include "dmw/visibility_control.hpp"
 #include "dmw/wait_result.hpp"
 #include "dmw/wait_timeout.hpp"
-#include "dmw/wait_token.hpp"
+#include "dmw/waitable_registration.hpp"
 
 namespace dmw {
 
@@ -34,14 +34,14 @@ public:
     WaitSet& operator=(WaitSet&&) = delete;
 
     /// Register a non-owned waitable; it may belong to at most one WaitSet.
-    Result<WaitToken> add(Subscriber& subscriber);
-    Result<WaitToken> add(Client& client);
-    Result<WaitToken> add(Server& server);
-    Result<WaitToken> add(Event& event);
-    Result<WaitToken> add(GuardCondition& guard_condition);
+    Result<WaitableRegistration> add(Subscriber& subscriber);
+    Result<WaitableRegistration> add(Client& client);
+    Result<WaitableRegistration> add(Server& server);
+    Result<WaitableRegistration> add(Event& event);
+    Result<WaitableRegistration> add(GuardCondition& guard_condition);
 
-    /// Remove a token created by this WaitSet.
-    Result<void> remove(WaitToken token);
+    /// Remove a registration created by this WaitSet.
+    Result<void> remove(WaitableRegistration registration);
 
     /// Wait for a non-empty readiness snapshot or a non-error timeout result.
     Result<WaitResult> wait(WaitTimeout timeout);

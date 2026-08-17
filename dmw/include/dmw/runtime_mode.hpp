@@ -4,7 +4,10 @@
 namespace dmw {
 
 /// Selects native DDS behavior or the validated ROS 2 Humble/Fast DDS wire mode.
-enum class RuntimeMode { DDS, ROS2 };
+enum class RuntimeMode {
+    DDS,  // DDS
+    ROS2  // ROS 2
+};
 
 }  // namespace dmw
 

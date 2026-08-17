@@ -34,7 +34,7 @@ Fast DDS 2.6.12
 本文不得自行修改以下公共契约：
 
 - public class 与 Factory API；
-- `ErrorCode`、`EventType`、`RequestId`、`WaitToken` 和 `WaitResult`；
+- `ErrorCode`、`EventType`、`RequestId`、`WaitableRegistration` 和 `WaitResult`；
 - public error priority 与 output guarantee。
 
 若本文与 `dmw.md` 冲突，必须修改本文的实现规则以满足 `dmw.md`，不得用实现细节扩大、收窄或改写公共运行时契约。
@@ -1296,7 +1296,7 @@ Context 生命周期只有一次 shutdown execution。V1 使用：
 **Phase A — Mark dependent runtime state**
 - `PendingRequestRegistry.begin_shutdown()`；
 - mark discovery/runtime cancellation；
-- 影响 `send_response()` predicate 的 shutdown state 通过 [target dependency protocol](#fastdds-target-dependency) 的 `signal_target_dependency_change()` 发布，不使用裸 atomic store + notify。
+- 影响 `write_response()` predicate 的 shutdown state 通过 [target dependency protocol](#fastdds-target-dependency) 的 `signal_target_dependency_change()` 发布，不使用裸 atomic store + notify。
 
 **Phase B — Request All Children**
 
@@ -2005,17 +2005,17 @@ RequestId unknown sequence：
 或等价 baseline helper 明确检测，
 不能把 unknown sentinel 当成普通 RequestId sequence。
 
-send_request()：
+write_request()：
 Fast DDS write 成功但返回 unknown request sample sequence
     -> DDSError
     -> 不发布新的 public RequestId
 
-Server::take_request()：
+Server::read_request()：
 已经消费的 sample identity sequence unknown
     -> DDSError
     -> public output 按 post-consumption error guarantee 处理
 
-Client::take_response()：
+Client::read_response()：
 related sequence unknown
     -> 该 response 不可关联
     -> consume/filter
@@ -2507,7 +2507,7 @@ Topic creation transaction ID：
 - 分配 `UINT64_MAX` 后设置 exhausted；
 - exhausted 只阻止新的 Absent Topic transaction，已有 Active Topic reuse仍可工作；
 - absent acquire 需要新 token但 allocator exhausted -> `ResourceExhausted`，不伪造 registry corruption；
-- transaction ID 是 implementation-internal evidence token，不是 public WaitToken；若 ID 已分配而随后 Creating map-node insertion 抛 `std::bad_alloc`，允许留下 ID gap，但不得留下 placeholder/Fast DDS side effect。
+- transaction ID 是 implementation-internal evidence token，不是 public WaitableRegistration；若 ID 已分配而随后 Creating map-node insertion 抛 `std::bad_alloc`，允许留下 ID gap，但不得留下 placeholder/Fast DDS side effect。
 
 `TopicRegistryCapability::Degraded` 表示 name-exclusive registry invariant 已无法可信维护；之后依赖 TopicRegistry 的新 Factory 在完成更高优先级 public/Context/parent/local 检查后返回 `DDSError`。已有 TopicEntry 和 endpoint Info 仍按 conservative teardown 保活/清理。
 
@@ -3986,7 +3986,7 @@ Service availability pairing：RemoteEndpointRegistry 按 remote Participant Gui
 
 ### 5.18 TargetReaderObservationRegistry 与共享 Participant Authority
 
-`TargetReaderObservationRegistry` 是 `Server::send_response()` 的 target-specific live observation authority；Participant terminal lifecycle不在这里复制，而通过 `TargetReaderKey`/entry strong-own 的 shared `ParticipantObservationEntry` 读取。
+`TargetReaderObservationRegistry` 是 `Server::write_response()` 的 target-specific live observation authority；Participant terminal lifecycle不在这里复制，而通过 `TargetReaderKey`/entry strong-own 的 shared `ParticipantObservationEntry` 读取。
 
 目标状态：
 
@@ -4196,7 +4196,7 @@ Remote endpoint lifecycle update 与 matched update可以不同顺序到达；ta
 
 ### 5.20 Target Predicate Wait、Ownership 与 Lost-wake-free Lookup
 
-`PendingEntry` strong-own `std::shared_ptr<const TargetReaderKey>`。该 immutable key在 `take_request()` 中、零 Pending/Target mutex状态下取得 stable ParticipantObservationEntry并完成所有字符串/key allocation，然后才插入 Pending map；`send_response()` 只做 noexcept shared_ptr copy。
+`PendingEntry` strong-own `std::shared_ptr<const TargetReaderKey>`。该 immutable key在 `read_request()` 中、零 Pending/Target mutex状态下取得 stable ParticipantObservationEntry并完成所有字符串/key allocation，然后才插入 Pending map；`write_response()` 只做 noexcept shared_ptr copy。
 
 predicate不获取 ParticipantObservationRegistry mutex。为了同时避免 lock inversion 与 lost wake，participant atomic authority必须在取得 Target mutex后再做一次最终recheck：
 
@@ -4231,7 +4231,7 @@ Lost-wake evidence：
 - external participant/shutdown commit先发生 -> notifier随后取得 Target mutex推进 dependency_generation；waiter之后取得mutex时mandatory recheck直接看到新authority；
 - waiter先取得 Target mutex -> notifier不能越过；`cv.wait_until`原子释放mutex并进入wait后，notifier推进generation+notify；
 - target-local update在Target mutex下提交state/generation后unlock+notify；
-- signal helper catastrophic failure时，send_response固定100ms absolute deadline保证最终重读authority，不能无界阻塞。
+- signal helper catastrophic failure时，write_response固定100ms absolute deadline保证最终重读authority，不能无界阻塞。
 
 Exact：participant Removed或exact Removed -> terminal no-write success；Matched -> write；NeverObserved/KnownUnmatched -> wait。
 Fallback：participant Removed -> terminal no-write success；matched set非空 -> write；其它 -> wait。
@@ -4784,7 +4784,7 @@ unknown sentinel：
 
 ## 7. Client / Server 与 Service Runtime
 
-本章按照 endpoint composition、request/reply identity、Pending capacity、target discovery 和 `send_response()` transaction 的顺序定义 Service runtime。Client 和 Server 的两个 DDS endpoint 始终作为一个 aggregate resource 创建、回滚和销毁。
+本章按照 endpoint composition、request/reply identity、Pending capacity、target discovery 和 `write_response()` transaction 的顺序定义 Service runtime。Client 和 Server 的两个 DDS endpoint 始终作为一个 aggregate resource 创建、回滚和销毁。
 
 ### 7.1 RuntimeMode 与 Service Wire Contract
 
@@ -4961,16 +4961,16 @@ using PendingEntryHandle =
 `PendingRequestRegistry` map value 必须是 `PendingEntryHandle`（或具有相同 stable-identity/noexcept-copy 语义的 handle），而不是会在 map erase 后立即失效的裸 value reference。
 
 原因：
-`send_response()` 在第一阶段 public object-local lookup 后需要 unlock并执行可能分配的 preallocation；stable handle用于第二阶段无 ABA revalidation。
+`write_response()` 在第一阶段 public object-local lookup 后需要 unlock并执行可能分配的 preallocation；stable handle用于第二阶段无 ABA revalidation。
 
 创建 PendingEntry：
-- `take_request()` 在 sample 已消费后、不持 Pending mutex时完成 correlation/ParticipantObservation handle/TargetReaderKey 的所有 allocation；
+- `read_request()` 在 sample 已消费后、不持 Pending mutex时完成 correlation/ParticipantObservation handle/TargetReaderKey 的所有 allocation；
 - allocate `PendingEntryHandle` control block；
 - lock Pending registry；
 - 插入 map并把 `CapacityReservation` 原子转换为 Pending capacity；
 - insertion/allocation failure 按 [Pending commit/output rollback](#fastdds-pending-output-rollback) 处理。
 
-map erase 不立即销毁仍被并发 `send_response()` precheck snapshot strong-own 的 PendingEntry；这种 snapshot只用于 revalidation/Busy classification，不能在 map外修改 `state`。
+map erase 不立即销毁仍被并发 `write_response()` precheck snapshot strong-own 的 PendingEntry；这种 snapshot只用于 revalidation/Busy classification，不能在 map外修改 `state`。
 
 ### 7.9 Server Response Wire Identity
 
@@ -5003,7 +5003,7 @@ build immutable TargetReaderKey {
 PendingEntry.target_key = shared_ptr<const TargetReaderKey>
 ```
 
-`send_response()` 不读取 `PendingEntry` 中的旧 observation；按 [target predicate](#fastdds-target-predicate) 以 key 查询 live exact entry：
+`write_response()` 不读取 `PendingEntry` 中的旧 observation；按 [target predicate](#fastdds-target-predicate) 以 key 查询 live exact entry：
 
 ```text
 Matched
@@ -5144,7 +5144,7 @@ reservation
 PendingEntry
 不使用容易下溢的手工 ++/--。
 
-### 7.15 Server take_request()：Capacity-before-scan Transaction
+### 7.15 Server read_request()：Capacity-before-scan Transaction
 
 Server capacity 是 object-local resource state，且 contract 规定 capacity full 时不得执行 Fast DDS request take。因此固定错误/操作顺序为：
 
@@ -5210,7 +5210,7 @@ Duplicate/invalid 后必须重新 reserve；不能让一次 reservation 覆盖�
 
 <a id="fastdds-pending-output-rollback"></a>
 
-### 7.16 Server take_request() Pending Commit / Output Rollback
+### 7.16 Server read_request() Pending Commit / Output Rollback
 
 在 caller output commit 前必须先成功建立 PendingEntry；否则无法保证 request 已消费后 response correlation/capacity bookkeeping 不丢失。
 
@@ -5277,7 +5277,7 @@ payload commit success:
 
 post-consumption failure 时 sample 可以已从 DDS history 消失；caller object 按 public basic guarantee保持 valid/destructible，字段可 unspecified。exception channel 与 output guarantee 是独立 contract。
 
-### 7.17 Client take_response()
+### 7.17 Client read_response()
 
 remaining = begin_take_scan_budget(response_reader)
 while remaining > 0:
@@ -5320,9 +5320,9 @@ consume/filter response
 continue scanning
 不得返回伪造 RequestId。
 
-### 7.19 Server `send_response()` Full Transaction 与 ResponseRollbackGuard
+### 7.19 Server `write_response()` Full Transaction 与 ResponseRollbackGuard
 
-本节是 `send_response()` 的唯一 implementation order。
+本节是 `write_response()` 的唯一 implementation order。
 7.10～7.12 定义 target semantics；本节定义 public error priority、two-phase claim、locks、rollback 与 exception ordering。
 
 #### 7.19.1 Phase A：object-local lookup 必须先于后续 allocation
@@ -5413,7 +5413,7 @@ else:
         -> DDSError
 ```
 
-两个并发 `send_response()`：
+两个并发 `write_response()`：
 - 两者第一阶段都可能 snapshot同一个 Pending handle；
 - 只有一个 Phase C 可以 `Pending -> Responding`；
 - 另一个看到 same handle `Responding` 或 terminally erased-but-still-Responding snapshot -> `Busy`。
@@ -5855,7 +5855,7 @@ struct RegistrationState
     // backing for no-allocation logical table insertion after registration_id commit.
     IntrusiveRegistrationNode topology_node;
 
-    WaitToken token;
+    WaitableRegistration registration;
 
     std::weak_ptr<WaitableState>
         waitable;
@@ -7622,7 +7622,7 @@ adoption path 必须 no-allocation。
   mutation与 affected local service entries 的 `NeedsRebuild` publication放在同一 commit
   boundary；除此之外 discovery registry之间均先 unlock 再 handoff；
 - Target predicate绝不从 rank 8 反向进入 Participant(rank 5) 或 Remote(rank 6)；participant lifecycle/capability通过 stable entry atomic snapshot读取；
-- Pending(rank 16) 与 Target(rank 8) 在 `send_response()` 中永不同时持有；
+- Pending(rank 16) 与 Target(rank 8) 在 `write_response()` 中永不同时持有；
 - Topic(rank 4) 永不调用 TypeRegistration acquire/release，因此不存在 Topic -> Type(rank 3)。
 
 ### 10.2 Same-rank Rule
@@ -8493,7 +8493,7 @@ Target dependency wake：
 - participant Removed commits between precheck and Target mutex -> under-mutex recheck sees Removed, no sleep；
 - waiter holds Target mutex first -> notifier advances dependency_generation only after cv releases mutex, then notify；
 - shutdown uses same bridge；
-- signal-helper failure cannot extend send_response beyond absolute100ms；
+- signal-helper failure cannot extend write_response beyond absolute100ms；
 - no Target(8)->Participant(5)/Remote(6)/Service(7) lock edge。
 
 ### 11.6 TemporarySample Tests
@@ -8805,7 +8805,7 @@ ParticipantRemoved
 
 ### 11.17 Pending Capacity
 
-many concurrent take_request()
+many concurrent read_request()
 
 capacity exact maximum
 
@@ -9242,7 +9242,7 @@ TargetReader：
 - late matched/discovery callback after participant tombstone -> no resurrection；
 - GuidPrefix reuse remains documented V1 deployment constraint, not claimed as test-proven vendor guarantee。
 
-#### 11.21.4 Server send_response Transaction / Error-priority Tests
+#### 11.21.4 Server write_response Transaction / Error-priority Tests
 
 Phase A priority：
 - unknown RequestId + injected EphemeralWait preallocation OOM -> `NotFound`；
@@ -9523,7 +9523,7 @@ duplicate/invalid 后必须重新 reserve。
 PendingEntry 成功后用 PendingEntryRollbackGuard 覆盖 payload commit；false->DDSError，bad_alloc/其它 C++ exception 原样传播且无 pending/capacity 泄漏。
 EphemeralInterruptibleWait registration commit 与 shutdown linearization 互斥。
 capacity两个方向都修改 WaitSet topology。
-send_response先 Pending object-local lookup得到NotFound/Busy，再做preallocation；随后two-phase stable-handle revalidation claim；failure在Active registry恢复Pending，shutdown后erase/no-reinsert。
+write_response先 Pending object-local lookup得到NotFound/Busy，再做preallocation；随后two-phase stable-handle revalidation claim；failure在Active registry恢复Pending，shutdown后erase/no-reinsert。
 Context shutdown后 rollback不重新插入 Pending。
 Client response canonicalizes public RequestId。
 QoS
@@ -9621,9 +9621,9 @@ cleanup diagnostic不能改变 primary public result。
 | TAKE-001 | filter loop 受 call-start unread snapshot budget 限制，单次 take 不活锁 |
 | SVC-001 | same-Participant service pairing + SampleIdentity correlation |
 | SVC-002 | Server capacity reservation precedes unread scan；full -> ResourceExhausted before Fast DDS take |
-| SVC-003 | take_request PendingEntryRollbackGuard preserves exception channel and capacity bookkeeping |
-| SVC-004 | send_response先lookup NotFound/Busy，再preallocate，再stable-handle revalidate claim；Pending/Target locks不重叠 |
-| SVC-005 | send_response terminal write/no-write共用erase commit；failure/exception先rollback bookkeeping；shutdown后不reinsert |
+| SVC-003 | read_request PendingEntryRollbackGuard preserves exception channel and capacity bookkeeping |
+| SVC-004 | write_response先lookup NotFound/Busy，再preallocate，再stable-handle revalidate claim；Pending/Target locks不重叠 |
+| SVC-005 | write_response terminal write/no-write共用erase commit；failure/exception先rollback bookkeeping；shutdown后不reinsert |
 | RET-001 | delete/create public result 与 creation/entity status 是两个独立维度 |
 | RET-002 | participant contained-graph barrier 覆盖 hidden create、partial container cleanup 和 Indeterminate child status |
 | RET-003 | Participant barrier success invalidates/nuls every prior child raw pointer and suppresses later individual delete |
@@ -9825,7 +9825,7 @@ ProcessTerminalQuarantine
 - RuntimeMode 唯一解析 Fast DDS topic/service name，且 allocating resolver 不得抢占 `ContextShutdown`；
 - Context facade 析构先提交 implicit shutdown，surviving child 不得继续观察 Active；
 - service-specific target entry 不存在时，Participant remove 通过 canonical ParticipantObservationRegistry 保留 terminal state；
-- `send_response` 的 Pending -> Responding / child registration / target wait / write / rollback 完整 transaction；
+- `write_response` 的 Pending -> Responding / child registration / target wait / write / rollback 完整 transaction；
 - 单次 take/filter 的 bounded progress；
 - Discovery registry 的 per-entry rebuild/generation/late-callback FSM；
 - Context final teardown 的 exactly-once executor；

@@ -95,7 +95,7 @@ int main() {
     assert(context.value()->domain_id() == 0);
 
     dmw::NodeOptions node_options;
-    node_options.name = "message_type_test";
+    node_options.node_name = "message_type_test";
     node_options.node_namespace = "/dmw";
     auto node = context.value()->create_node(node_options);
     assert(node);
@@ -229,12 +229,12 @@ int main() {
 
         int cross_context_request = 31;
         auto cross_context_request_id =
-            cross_context_client.value()->send_request(&cross_context_request);
+            cross_context_client.value()->write_request(&cross_context_request);
         assert(cross_context_request_id);
         dmw::RequestId received_cross_context_request_id;
         bool cross_context_request_received = false;
         for (int attempt = 0; attempt < 30 && !cross_context_request_received; ++attempt) {
-            auto take = cross_context_server.value()->take_request(
+            auto take = cross_context_server.value()->read_request(
                 &cross_context_request, received_cross_context_request_id);
             assert(take);
             cross_context_request_received = take.value();
@@ -246,12 +246,12 @@ int main() {
         assert(received_cross_context_request_id == cross_context_request_id.value());
 
         int cross_context_response = 32;
-        assert(cross_context_server.value()->send_response(
+        assert(cross_context_server.value()->write_response(
             received_cross_context_request_id, &cross_context_response));
         dmw::RequestId received_cross_context_response_id;
         bool cross_context_response_received = false;
         for (int attempt = 0; attempt < 30 && !cross_context_response_received; ++attempt) {
-            auto take = cross_context_client.value()->take_response(
+            auto take = cross_context_client.value()->read_response(
                 &cross_context_response, received_cross_context_response_id);
             assert(take);
             cross_context_response_received = take.value();
@@ -362,12 +362,12 @@ int main() {
         }
         assert(ros_service_available);
         int ros_request = 6;
-        auto ros_request_id = ros_client.value()->send_request(&ros_request);
+        auto ros_request_id = ros_client.value()->write_request(&ros_request);
         assert(ros_request_id);
         dmw::RequestId ros_server_request_id;
         bool ros_request_received = false;
         for (int attempt = 0; attempt < 30 && !ros_request_received; ++attempt) {
-            auto take = ros_server.value()->take_request(&ros_request, ros_server_request_id);
+            auto take = ros_server.value()->read_request(&ros_request, ros_server_request_id);
             assert(take);
             ros_request_received = take.value();
             if (!ros_request_received) {
@@ -376,11 +376,11 @@ int main() {
         }
         assert(ros_request_received);
         int ros_response = 7;
-        assert(ros_server.value()->send_response(ros_server_request_id, &ros_response));
+        assert(ros_server.value()->write_response(ros_server_request_id, &ros_response));
         dmw::RequestId ros_response_id;
         bool ros_response_received = false;
         for (int attempt = 0; attempt < 30 && !ros_response_received; ++attempt) {
-            auto take = ros_client.value()->take_response(&ros_response, ros_response_id);
+            auto take = ros_client.value()->read_response(&ros_response, ros_response_id);
             assert(take);
             ros_response_received = take.value();
             if (!ros_response_received) {
@@ -439,7 +439,7 @@ int main() {
     assert(subscriber.value()->topic_name() == "/dmw/messages");
 
     dmw::NodeOptions transient_node_options;
-    transient_node_options.name = "transient_node";
+    transient_node_options.node_name = "transient_node";
     transient_node_options.node_namespace = "/dmw";
     auto transient_node = context.value()->create_node(transient_node_options);
     assert(transient_node);
@@ -614,7 +614,7 @@ int main() {
     std::thread server_wait_thread([&] {
         server_wait_result.emplace(server_wait_set.value()->wait(service_wait_timeout.value()));
     });
-    auto sent_request = client.value()->send_request(&request);
+    auto sent_request = client.value()->write_request(&request);
     assert(sent_request);
     server_wait_thread.join();
     assert(server_wait_result && *server_wait_result);
@@ -626,7 +626,7 @@ int main() {
     dmw::RequestId request_id;
     bool request_received = false;
     for (int attempt = 0; attempt < 30 && !request_received; ++attempt) {
-        auto take = server.value()->take_request(&request, request_id);
+        auto take = server.value()->read_request(&request, request_id);
         assert(take);
         request_received = take.value();
         if (!request_received) std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -643,7 +643,7 @@ int main() {
     std::thread client_wait_thread([&] {
         client_wait_result.emplace(client_wait_set.value()->wait(service_wait_timeout.value()));
     });
-    assert(server.value()->send_response(request_id, &response));
+    assert(server.value()->write_response(request_id, &response));
     client_wait_thread.join();
     assert(client_wait_result && *client_wait_result);
     assert(client_wait_result->value().status() == dmw::WaitStatus::Ready);
@@ -654,7 +654,7 @@ int main() {
     dmw::RequestId response_id;
     bool response_received = false;
     for (int attempt = 0; attempt < 30 && !response_received; ++attempt) {
-        auto take = client.value()->take_response(&response, response_id);
+        auto take = client.value()->read_response(&response, response_id);
         assert(take);
         response_received = take.value();
         if (!response_received) std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -663,13 +663,13 @@ int main() {
     assert(response_id == sent_request.value());
 
     int second_request = 84;
-    auto second_sent_request = late_client.value()->send_request(&second_request);
+    auto second_sent_request = late_client.value()->write_request(&second_request);
     assert(second_sent_request);
 
     dmw::RequestId second_request_id;
     bool second_request_received = false;
     for (int attempt = 0; attempt < 30 && !second_request_received; ++attempt) {
-        auto take = server.value()->take_request(&second_request, second_request_id);
+        auto take = server.value()->read_request(&second_request, second_request_id);
         assert(take);
         second_request_received = take.value();
         if (!second_request_received) std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -678,17 +678,17 @@ int main() {
     assert(second_request_id == second_sent_request.value());
 
     int second_response = 9;
-    assert(server.value()->send_response(second_request_id, &second_response));
+    assert(server.value()->write_response(second_request_id, &second_response));
 
     dmw::RequestId unexpected_response_id;
-    auto unexpected_response = client.value()->take_response(&response, unexpected_response_id);
+    auto unexpected_response = client.value()->read_response(&response, unexpected_response_id);
     assert(unexpected_response);
     assert(!unexpected_response.value());
 
     dmw::RequestId second_response_id;
     bool second_response_received = false;
     for (int attempt = 0; attempt < 30 && !second_response_received; ++attempt) {
-        auto take = late_client.value()->take_response(&second_response, second_response_id);
+        auto take = late_client.value()->read_response(&second_response, second_response_id);
         assert(take);
         second_response_received = take.value();
         if (!second_response_received) std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -719,13 +719,13 @@ int main() {
     assert(capacity_service_available);
 
     int capacity_request = 101;
-    auto first_capacity_request = capacity_client.value()->send_request(&capacity_request);
+    auto first_capacity_request = capacity_client.value()->write_request(&capacity_request);
     assert(first_capacity_request);
     dmw::RequestId first_capacity_request_id;
     bool first_capacity_taken = false;
     for (int attempt = 0; attempt < 30 && !first_capacity_taken; ++attempt) {
         auto take =
-            capacity_server.value()->take_request(&capacity_request, first_capacity_request_id);
+            capacity_server.value()->read_request(&capacity_request, first_capacity_request_id);
         assert(take);
         first_capacity_taken = take.value();
         if (!first_capacity_taken) std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -734,12 +734,12 @@ int main() {
     assert(first_capacity_request_id == first_capacity_request.value());
 
     int next_capacity_request = 102;
-    auto second_capacity_request = capacity_client.value()->send_request(&next_capacity_request);
+    auto second_capacity_request = capacity_client.value()->write_request(&next_capacity_request);
     assert(second_capacity_request);
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     dmw::RequestId next_capacity_request_id;
     auto capacity_exhausted =
-        capacity_server.value()->take_request(&next_capacity_request, next_capacity_request_id);
+        capacity_server.value()->read_request(&next_capacity_request, next_capacity_request_id);
     assert(!capacity_exhausted);
     assert(capacity_exhausted.error().code() == dmw::ErrorCode::ResourceExhausted);
     // The second request remains unread in Fast DDS history, but a full
@@ -749,14 +749,14 @@ int main() {
     assert(full_wait.value().status() == dmw::WaitStatus::Timeout);
 
     int capacity_response = 201;
-    assert(capacity_server.value()->send_response(first_capacity_request_id, &capacity_response));
+    assert(capacity_server.value()->write_response(first_capacity_request_id, &capacity_response));
     auto available_wait = capacity_wait_set.value()->wait(dmw::WaitTimeout::poll());
     assert(available_wait);
     assert(available_wait.value().status() == dmw::WaitStatus::Ready);
     bool second_capacity_taken = false;
     for (int attempt = 0; attempt < 30 && !second_capacity_taken; ++attempt) {
         auto take =
-            capacity_server.value()->take_request(&next_capacity_request, next_capacity_request_id);
+            capacity_server.value()->read_request(&next_capacity_request, next_capacity_request_id);
         assert(take);
         second_capacity_taken = take.value();
         if (!second_capacity_taken) std::this_thread::sleep_for(std::chrono::milliseconds(20));

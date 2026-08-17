@@ -228,9 +228,10 @@ Result<std::unique_ptr<Client>> Node::Impl::create_client(
     std::unique_ptr<Client::Impl> client_impl;
     try {
         client_impl = std::unique_ptr<Client::Impl>(new Client::Impl(
-            impl_->context_, writer, reader, std::move(logical_name.value()), type.response_type(),
-            std::move(request_state), std::move(request_listener), std::move(response_listener),
-            std::move(request_topic.value()), std::move(response_topic.value())));
+            impl_->context_, std::move(logical_name.value()), type.response_type(),
+            std::move(request_state), std::move(request_topic.value()), writer,
+            std::move(request_listener), std::move(response_topic.value()), reader,
+            std::move(response_listener)));
     } catch (...) {
         delete_reader_listener_noexcept(*impl_->context_, reader, response_listener);
         delete_writer_listener_noexcept(*impl_->context_, writer, request_listener);

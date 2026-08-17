@@ -61,7 +61,7 @@ Server::Impl::~Impl() noexcept {
     }
 }
 
-Result<bool> Server::Impl::take_request(void* request, RequestId& request_id) {
+Result<bool> Server::Impl::read_request(void* request, RequestId& request_id) {
     if (request == nullptr)
         return Result<bool>::failure(Error(ErrorCode::InvalidArgument, "Request must not be null"));
     const auto operation = context_->try_acquire_operation();
@@ -139,7 +139,7 @@ Result<bool> Server::Impl::take_request(void* request, RequestId& request_id) {
     return Result<bool>::success(false);
 }
 
-Result<void> Server::Impl::send_response(const RequestId& request_id, const void* response) {
+Result<void> Server::Impl::write_response(const RequestId& request_id, const void* response) {
     if (response == nullptr)
         return Result<void>::failure(
             Error(ErrorCode::InvalidArgument, "Response must not be null"));

@@ -23,34 +23,37 @@ Result<std::unique_ptr<WaitSet>> Context::Impl::create_wait_set(const WaitSetOpt
         std::unique_ptr<WaitSet>(new WaitSet(std::make_unique<WaitSet::Impl>(context))));
 }
 
-Result<WaitToken> WaitSet::Impl::add(
+Result<WaitableRegistration> WaitSet::Impl::add(
     const std::shared_ptr<GuardConditionState>& guard_condition, WaitableKind kind) {
     auto registration = impl::add_guard(context_, guard_condition, kind);
-    if (!registration) return Result<WaitToken>::failure(std::move(registration.error()));
-    return Result<WaitToken>::success(
-        WaitToken(context_->wait_set_id_, registration.value(), kind));
+    if (!registration)
+        return Result<WaitableRegistration>::failure(std::move(registration.error()));
+    return Result<WaitableRegistration>::success(
+        WaitableRegistration(context_->wait_set_id_, registration.value(), kind));
 }
 
-Result<WaitToken> WaitSet::Impl::add(
+Result<WaitableRegistration> WaitSet::Impl::add(
     const std::shared_ptr<impl::ReaderWaitState>& reader, WaitableKind kind) {
     auto registration = impl::add_reader(context_, reader, kind);
-    if (!registration) return Result<WaitToken>::failure(std::move(registration.error()));
-    return Result<WaitToken>::success(
-        WaitToken(context_->wait_set_id_, registration.value(), kind));
+    if (!registration)
+        return Result<WaitableRegistration>::failure(std::move(registration.error()));
+    return Result<WaitableRegistration>::success(
+        WaitableRegistration(context_->wait_set_id_, registration.value(), kind));
 }
 
-Result<void> WaitSet::Impl::remove(WaitToken token) {
+Result<void> WaitSet::Impl::remove(WaitableRegistration registration) {
     const auto context = context_;
-    if (!token.valid() || token.wait_set_id_ != context->wait_set_id_) {
+    if (!registration.valid() || registration.wait_set_id_ != context->wait_set_id_) {
         return Result<void>::failure(
-            Error(ErrorCode::InvalidArgument, "Token belongs to another WaitSet"));
+            Error(ErrorCode::InvalidArgument, "Registration belongs to another WaitSet"));
     }
     const auto operation = context->context_->try_acquire_operation();
     if (!operation) {
         return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
-    if (!context->remove(token.registration_id_, token.kind_)) {
-        return Result<void>::failure(Error(ErrorCode::NotRegistered, "WaitSet token is stale"));
+    if (!context->remove(registration.registration_id_, registration.kind_)) {
+        return Result<void>::failure(
+            Error(ErrorCode::NotRegistered, "WaitSet registration is stale"));
     }
     return Result<void>::success();
 }
@@ -82,22 +85,23 @@ Result<WaitResult> WaitSet::Impl::wait(WaitTimeout timeout) {
         }
 
         const auto observed_topology = context->topology_generation();
-        std::vector<WaitToken> tokens;
+        std::vector<WaitableRegistration> registrations;
         for (const auto& registration : context->snapshot()) {
             if (registration->is_closing()) {
                 context->detach(registration);
                 continue;
             }
             if (registration->ready()) {
-                const WaitToken token(context->wait_set_id_, registration->id, registration->kind);
-                tokens.push_back(token);
+                const WaitableRegistration ready_registration(
+                    context->wait_set_id_, registration->id, registration->kind);
+                registrations.push_back(ready_registration);
             }
         }
         // Do not expose a readiness set assembled across a topology change
         // (notably Server available↔full reader detach/reattach).
         if (context->topology_generation() != observed_topology) continue;
-        if (!tokens.empty()) {
-            return Result<WaitResult>::success(WaitResult::ready(std::move(tokens)));
+        if (!registrations.empty()) {
+            return Result<WaitResult>::success(WaitResult::ready(std::move(registrations)));
         }
         if (timeout.kind() == WaitTimeout::Kind::Poll) {
             return Result<WaitResult>::success(WaitResult::timeout());

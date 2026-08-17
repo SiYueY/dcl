@@ -59,7 +59,7 @@ Client::Impl::~Impl() noexcept {
     }
 }
 
-Result<RequestId> Client::Impl::send_request(const void* request) {
+Result<RequestId> Client::Impl::write_request(const void* request) {
     if (request == nullptr)
         return Result<RequestId>::failure(
             Error(ErrorCode::InvalidArgument, "Request must not be null"));
@@ -84,7 +84,7 @@ Result<RequestId> Client::Impl::send_request(const void* request) {
     return Result<RequestId>::success(*request_id);
 }
 
-Result<bool> Client::Impl::take_response(void* response, RequestId& request_id) {
+Result<bool> Client::Impl::read_response(void* response, RequestId& request_id) {
     if (response == nullptr)
         return Result<bool>::failure(
             Error(ErrorCode::InvalidArgument, "Response must not be null"));

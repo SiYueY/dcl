@@ -41,8 +41,8 @@ public:
     ~Impl() noexcept;
 
     std::string_view service_name() const noexcept { return service_name_; }
-    Result<bool> take_request(void* request, RequestId& request_id);
-    Result<void> send_response(const RequestId& request_id, const void* response);
+    Result<bool> read_request(void* request, RequestId& request_id);
+    Result<void> write_response(const RequestId& request_id, const void* response);
     const std::shared_ptr<impl::ReaderWaitState>& wait_state() const noexcept {
         return request_wait_state_;
     }

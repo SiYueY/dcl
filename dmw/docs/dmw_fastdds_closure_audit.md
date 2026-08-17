@@ -76,7 +76,7 @@
   data sharing 以及 Reliable writer 100 ms blocking timeout；`DDS` 不施加这些覆盖。
 - Server capacity 满时 request reader 从 blocking WaitSet topology 移除，释放 slot 后重新加入，
   消除了 unread request + full capacity 的 readiness 自旋。
-- response 目标的 exact reader 或其 participant 被确认 Removed 时，`send_response()` 返回
+- response 目标的 exact reader 或其 participant 被确认 Removed 时，`write_response()` 返回
   no-write success；未移除且未匹配时采用一次计算的 100 ms absolute deadline。
 - participant tombstone/GuidPrefix reuse degradation、Guard 合并 generation、Event 独立 cursor
   和 Event registration exhaustion、WaitSet add 的 allocation rollback 均已在当前实现中可定位。

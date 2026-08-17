@@ -15,27 +15,29 @@ Result<std::unique_ptr<WaitSet>> Context::create_wait_set(const WaitSetOptions& 
     return impl_->create_wait_set(options);
 }
 
-Result<WaitToken> WaitSet::add(GuardCondition& value) {
+Result<WaitableRegistration> WaitSet::add(GuardCondition& value) {
     return impl_->add(value.impl_->wait_state(), WaitableKind::GuardCondition);
 }
 
-Result<WaitToken> WaitSet::add(Subscriber& value) {
+Result<WaitableRegistration> WaitSet::add(Subscriber& value) {
     return impl_->add(value.impl_->wait_state(), WaitableKind::Subscriber);
 }
 
-Result<WaitToken> WaitSet::add(Client& value) {
+Result<WaitableRegistration> WaitSet::add(Client& value) {
     return impl_->add(value.impl_->wait_state(), WaitableKind::Client);
 }
 
-Result<WaitToken> WaitSet::add(Server& value) {
+Result<WaitableRegistration> WaitSet::add(Server& value) {
     return impl_->add(value.impl_->wait_state(), WaitableKind::Server);
 }
 
-Result<WaitToken> WaitSet::add(Event& value) {
+Result<WaitableRegistration> WaitSet::add(Event& value) {
     return impl_->add(value.impl_->wait_state(), WaitableKind::Event);
 }
 
-Result<void> WaitSet::remove(WaitToken token) { return impl_->remove(token); }
+Result<void> WaitSet::remove(WaitableRegistration registration) {
+    return impl_->remove(registration);
+}
 
 Result<WaitResult> WaitSet::wait(WaitTimeout timeout) { return impl_->wait(timeout); }
 
