@@ -203,6 +203,7 @@ if(BUILD_TESTING)
 
         find_package(rclcpp QUIET)
         find_package(std_msgs QUIET)
+        find_package(example_interfaces QUIET)
         if(rclcpp_FOUND AND std_msgs_FOUND)
             add_executable(dmw_ros2_topic_interop_test test/ros2_topic_interop_test.cpp)
             target_link_libraries(
@@ -222,6 +223,26 @@ if(BUILD_TESTING)
             )
         else()
             message(STATUS "ROS 2 Fast DDS dependencies not found; skipping ROS 2 interop test")
+        endif()
+        if(rclcpp_FOUND AND example_interfaces_FOUND)
+            add_executable(dmw_ros2_service_interop_test test/ros2_service_interop_test.cpp)
+            target_link_libraries(
+                dmw_ros2_service_interop_test
+                PRIVATE
+                    dmw::fastdds_binding
+                    rclcpp::rclcpp
+                    example_interfaces::example_interfaces__rosidl_typesupport_cpp
+                    example_interfaces::example_interfaces__rosidl_typesupport_fastrtps_cpp
+            )
+            add_test(NAME dmw.ros2_service_interop COMMAND dmw_ros2_service_interop_test)
+            set_tests_properties(
+                dmw.ros2_service_interop
+                PROPERTIES
+                    LABELS "integration;ros2"
+                    TIMEOUT 30
+            )
+        else()
+            message(STATUS "ROS 2 Service dependencies not found; skipping Service interop test")
         endif()
     endif()
 
