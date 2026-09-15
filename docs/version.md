@@ -10,7 +10,8 @@
 - DDS-PIM、RTPS、传输、发现、QoS、类型系统和序列化相关的重要变化；
 - Fast CDR 与 Fast DDS-Gen 的版本迁移影响；
 - ROS 2 Humble / Jazzy 所使用 Fast DDS 基线之间的关键差异；
-- 哪些差异可能要求 DCL 修改源码，哪些只需要通过构建和互操作测试验证。
+- 哪些差异可能要求 DCL 修改源码，哪些只需要通过构建和互操作测试验证；
+- DCL 在设计 DMW common runtime 时分别如何使用 Fast DDS、`rmw_fastrtps`、`rcl`、`rcl_action`、`rclcpp` 和 `rclpy` 作为参考。
 
 ## 2. 版本号说明
 
@@ -37,9 +38,9 @@
 | ROS 2 | Ubuntu Tier 1 | Fast DDS 基线 |
 | --- | --- | --- |
 | Humble Hawksbill | Ubuntu 22.04 Jammy | 2.6.x |
-| Jazzy Jalisco | Ubuntu 24.04 Noble | 2.14.0 |
+| Jazzy Jalisco | Ubuntu 24.04 Noble | 2.14.x |
 
-REP-2000 中的版本是 ROS 2 发行时的低水位基线，发行周期内补丁版本可能继续更新。
+REP-2000 中的版本是 ROS 2 发行时的低水位基线，发行周期内补丁版本可能继续更新。DCL 的具体验证结果以 Docker/CI 实际解析的软件包版本和测试 manifest 为准，而不是只看发行时最低版本。
 
 ## 3. 1.6 到 2.6 的主要演进
 
@@ -195,7 +196,9 @@ Fast DDS callback / status
         ↓
 Condition / WaitSet
         ↓
-DCL Executor
+DMW readiness
+        ↓
+DCL Client Library Executor
         ↓
 user callback
 ```
@@ -379,7 +382,7 @@ DCL 当前如果目标是兼容 Humble 2.6.x，应避免默认启用只有新版
 
 这些变化对 DCL 当前核心 DDS-PIM API 的影响相对有限。
 
-Fast DDS 2.14 是 Fast DDS 2.x 的最后一个 minor 版本线。
+Fast DDS 2.14 是 Fast DDS 2.x 的最后一个 minor 版本线，也是 DCL 新增 DMW 能力时优先研究和采用的实现基线。
 
 ## 5. 2.6 与 2.14 的差异总结
 
@@ -388,7 +391,7 @@ Fast DDS 2.14 是 Fast DDS 2.x 的最后一个 minor 版本线。
 | DDS-PIM 基础 API | 已较完整 | 继续扩展 | 应优先使用稳定公共 DDS API |
 | ABI | minor 间已有 break | 2.7～2.14 多次继续 break | 不提供跨 minor 单一二进制 |
 | RTPS internal API | 可用但变化较大 | 多次重构 / private 化 | DCL core 应避免依赖 |
-| WaitSet / Condition | 已支持 | 持续支持 | 可作为 Executor 基础 |
+| WaitSet / Condition | 已支持 | 持续支持 | DMW WaitSet/Graph/Action readiness 的基础 |
 | SHM | 默认 transport 之一 | 持续增强 | 跨版本测试建议显式 UDPv4 |
 | Data Sharing | 已存在 | 持续演进 | ROS compatibility mode 可显式关闭 |
 | History memory 默认值 | 2.6 时代默认值与后续不同 | 2.9 后默认 PREALLOCATED_WITH_REALLOC | 关键 QoS 应显式设置 |
@@ -398,7 +401,7 @@ Fast DDS 2.14 是 Fast DDS 2.x 的最后一个 minor 版本线。
 | Fast DDS-Gen | 旧生成代码体系 | 推荐 Gen v3 | generated type 必须双环境验证 |
 | Type system | XTypes 能力已存在 | TypeLookup / TypeObject 持续增强 | ROSIDL / TypeObject interop 需重点测试 |
 | Transport config | 基础 UDP/TCP/SHM | interface / allowlist / builtin transport 配置显著增强 | DCL 默认 UDPv4 可减少差异 |
-| Discovery | Discovery Server 已成熟 | secure / monitor /配置继续增强 | Simple discovery 基本兼容 |
+| Discovery | Discovery Server 已成熟 | secure / monitor /配置继续增强 | DMW Graph 只依赖稳定 discovery/public listener 能力 |
 | Security | 已支持 | 持续增强 | 当前非 DCL V1 核心 |
 
 ## 6. 对 DCL 的直接结论
@@ -525,7 +528,7 @@ Fast CDR 不应泄漏到 dmw 公共 API。
 
 官方版本记录说明默认 XCDRv1 被保留以维持旧版本互操作，但这不能代替 DCL 的实际验证。
 
-至少需要测试：
+至少需要持续测试：
 
 ```text
 Humble DCL Publisher
@@ -562,9 +565,9 @@ FASTDDS_BUILTIN_TRANSPORTS=UDPv4
 
 这样测试的是 UDP / DDSI-RTPS wire path，而不是同机 SHM。
 
-### 6.7 Service 兼容风险高于 Topic
+### 6.7 Service 与 Action 兼容风险高于 Topic
 
-Topic 互操作通过后，还不能直接认为 ROS 2 service 一定兼容。
+Topic 互操作通过后，还不能直接认为 ROS 2 Service/Action 一定兼容。
 
 Service 额外涉及：
 
@@ -575,27 +578,64 @@ Service 额外涉及：
 - sequence number；
 - ROS 2 `rmw_fastrtps_cpp` request/reply mapping。
 
-因此后续需要单独验证：
+Action 在 Service 基础上还增加：
+
+- 3 Service + 2 Topic endpoint composition；
+- GoalId；
+- Goal FSM；
+- cancel matching；
+- status/feedback；
+- result lifecycle；
+- Action server availability。
+
+因此需要分别验证：
 
 ```text
-DCL Client → Humble/Jazzy ROS 2 Service
-ROS 2 Client → Humble/Jazzy DCL Server
+DCL Client/ActionClient → Humble/Jazzy ROS 2 Server/ActionServer
+ROS 2 Client/ActionClient → Humble/Jazzy DCL Server/ActionServer
 ```
 
-以及必要的 Humble ↔ Jazzy 交叉组合。
+以及 Humble ↔ Jazzy 交叉组合。
+
+### 6.8 上游项目的职责分工
+
+后续 DMW 设计不只参考一个 ROS 2 repository，而是按职责使用不同上游：
+
+| 上游 | DCL 中的参考用途 |
+| --- | --- |
+| Fast DDS `2.14.x` | **DMW 新功能的主要实现基础**：DDS entity、QoS、WaitSet、Condition、Discovery、lifecycle、Fast DDS public API |
+| `rmw_fastrtps` Jazzy | ROS 2 Fast DDS mapping：naming、QoS、Service identity、MessageInfo/GID、discovery/wait 工程行为 |
+| `rcl` Jazzy | language-neutral Context/Node/Timer/WaitSet/GuardCondition/Graph 职责边界 |
+| `rcl_action` Jazzy | Action 3 Service + 2 Topic 聚合、Goal FSM、Goal registry/cancel/result/status common state、Action WaitSet readiness |
+| `rclcpp` Jazzy | C++ typed wrapper、callback、Future/Promise、Executor、exception presentation 的上层边界 |
+| `rclpy` Jazzy | Python Future/callback/Executor/asyncio/GIL 等上层边界 |
+
+DCL 不复制这些 package，而把适合跨语言共享的 `rcl`/`rcl_action` 语义直接实现到 `dmw`；语言运行时能力继续留在 `dclcpp` / `dclpy`。
+
+### 6.9 Common runtime 不依赖 Fast DDS 原生同名能力
+
+Timer、Action、Graph 是 DMW common runtime primitive，不表示 Fast DDS 必须提供原生 Timer/Action/ROS Graph entity：
+
+- Timer 使用 DMW monotonic scheduling state，并通过 DMW WaitSet 唤醒；
+- Action 使用 DMW 已有 Topic/Service/WaitSet/Discovery 组合；
+- Graph 使用 Fast DDS discovery information 形成 DMW 的统一 snapshot/revision/change authority。
+
+因此这些能力的公共 API 不应出现 Fast DDS minor-specific 类型，也不应因为 Fast DDS 2.6/2.14 的内部实现不同而分叉为两套 DCL API。
 
 ## 7. 当前兼容性验证重点
 
-按照风险从高到低，建议后续重点检查：
+按照风险从高到低，后续重点检查：
 
 1. Fast DDS-Gen / Fast CDR 1.x 与 2.x 的 generated type API；
 2. ROSIDL Fast RTPS typesupport；
 3. `TopicDataType` 在 2.6 与 2.14 的 source compatibility；
 4. TypeObject / TypeInformation 注册行为；
 5. explicit QoS 与两个版本默认值之间的差异；
-6. ROS 2 request/reply identity；
-7. WaitSet / Condition；
-8. transport 和 discovery 的默认行为。
+6. ROS 2 Service request/reply identity；
+7. ROS 2 Action 3 Service + 2 Topic mapping 与 Goal/result/cancel semantics；
+8. WaitSet / Condition 与 Timer/Action/Graph aggregate readiness；
+9. discovery/Graph update ordering；
+10. transport 和 discovery 的默认行为。
 
 如果 DCL 只依赖稳定 DDS-PIM API，并显式设置关键 QoS，大部分 2.6 → 2.14 的 Fast DDS 内部 ABI 变化都不应该传播到 DCL 公共接口。
 
@@ -615,24 +655,28 @@ ROS 2 Client → Humble/Jazzy DCL Server
 4. ROS REP-2000 — ROS 2 Releases and Target Platforms  
    https://www.ros.org/reps/rep-2000.html
 
-## 9. 后续工作
+5. ROS 2 Jazzy `rmw_fastrtps` / `rcl` / `rcl_action` / `rclcpp` / `rclpy` source trees。
 
-本文是版本差异的资料基线，不代表 DCL 已完成兼容性验证。
+## 9. 当前状态与后续工作
 
-下一步应基于 DCL 实际使用的 Fast DDS API 建立一份更具体的 compatibility audit：
+DCL 当前同一份 DMW 源码已经可以在 Humble/Fast DDS 2.6.x 和 Jazzy/Fast DDS 2.14.x 两个环境编译，Topic/Service 互操作与 Humble ↔ Jazzy cross-version probe 已建立基础。
+
+因此下一步不再是“把 DMW 迁移到 Jazzy 才能编译”，而是：
 
 ```text
-DCL Fast DDS API usage
+现有 DMW Foundation
         ↓
-Fast DDS 2.6 header/API
+补齐 language-neutral common runtime
+        ├── common QoS profiles
+        ├── Timer
+        ├── Graph snapshot/change
+        └── Action common runtime
         ↓
-Fast DDS 2.14 header/API
+Humble/Jazzy build + runtime regression
         ↓
-source compatibility
+ROS 2 Topic/Service/Action interoperability
         ↓
-Humble/Jazzy build
-        ↓
-wire interoperability tests
+稳定后供 dclcpp / dclpy 直接复用
 ```
 
-只有实际代码审查、双版本构建和双向通信测试全部通过后，才能确认 DCL 对 Humble / Jazzy 的兼容边界。
+任何新能力都必须保持“同一份源码、两个验证环境”的原则。
