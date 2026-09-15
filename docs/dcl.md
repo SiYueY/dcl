@@ -1,6 +1,6 @@
 # DCL 系统架构设计
 
-> 文档状态：Draft V0.1  
+> 文档状态：Draft V0.2  
 > 项目名称：DCL — DDS Client Libraries  
 > 适用范围：`dmw`、`dclcpp`、`dclpy` 统一架构  
 > 主要目标平台：Linux / Ubuntu 22.04、Ubuntu 24.04  
@@ -74,9 +74,9 @@ DCL V1 明确不承担以下职责：
 5. 不以 C ABI 作为核心接口；
 6. 不重新实现完整 IDL 编译器和 CDR 代码生成器；
 7. 不要求系统安装 ROS 2 才能运行；
-8. 不以 ROS Node/Graph 为 DCL Core 的基础语义；
+8. 不以 ROS Node/Graph 为 DCL Core 的基础语义，但 DMW 可以提供只读 Graph snapshot/change 作为共享 discovery 视图；
 9. 不把用户 callback、Future、Executor 调度策略、Python asyncio/GIL 等语言运行时职责下沉到 `dmw`；
-10. V1 不承诺完整 ROS Graph 工具兼容。
+10. V1 不承诺完整 ROS Graph 工具兼容或所有 ROS Graph metadata。
 
 ---
 
@@ -133,7 +133,7 @@ dclpy → dclcpp → dmw
 - 不暴露 Fast DDS public types；
 - 不依赖 `dclcpp`；
 - 不依赖 `dclpy`；
-- 可以提供 Topic、Service、Timer 和 Action common runtime primitive；
+- 提供 Topic、Service、Timer、Action、Graph change 等 language-neutral runtime primitive；
 - 不提供用户 callback、Future 或高层 Executor。
 
 ### 3.4 Fast DDS 是唯一 backend
@@ -171,7 +171,7 @@ Action 也遵循相同原则：`dclcpp::ActionType<ActionT>` / Python runtime ty
 DCL 默认采用：
 
 ```text
-Fast DDS
+Fast DDS / DMW runtime
    │
    ▼
 WaitSet / Conditions
@@ -183,7 +183,7 @@ dclcpp Executor / dclpy Executor
 User callback
 ```
 
-Fast DDS Listener 可用于内部 wakeup/discovery 等轻量通知，但不得把任意用户业务 callback 直接放入 DDS 内部线程执行。
+Fast DDS Listener 可用于内部 wakeup/discovery 等轻量通知，但不得把任意用户业务 callback 直接放入 DDS 内部线程执行。DMW Timer、Action、Graph notification 同样只产生 readiness/state，不执行用户 callback。
 
 ### 3.7 Language-neutral Runtime 下沉原则
 
@@ -196,6 +196,8 @@ identity / correlation
 readiness / wait semantics
 Timer scheduling state
 Action Goal state / protocol state
+Graph snapshot / graph revision / graph change readiness
+common QoS profile values
 ROS 2 wire compatibility behavior
 ```
 
@@ -205,12 +207,39 @@ ROS 2 wire compatibility behavior
 C++ templates / Python runtime type
 std::function / Python callable
 std::future / Python Future / asyncio Future
+Pending Future registry
 Executor callback scheduling policy
+ThreadPool / CallbackGroup
 C++ exception presentation
 Python exception / GIL / asyncio integration
 ```
 
 该原则的目标不是消除所有重复代码，而是避免同一个通信协议或运行时状态机在 C++ 与 Python 中出现两个 authority。
+
+### 3.8 与 ROS 2 分层的对应关系
+
+DCL 不复制 ROS 2 package 层级，但明确参考其职责边界：
+
+| 能力 | ROS 2 主要位置 | DCL V1 authority |
+| --- | --- | --- |
+| Context / Node | `rcl` | `dmw` |
+| Pub/Sub / Service primitive | `rcl` + RMW | `dmw` |
+| QoS mapping / common profiles | RMW + `rcl`/Client Library | `dmw` |
+| WaitSet | `rcl` | `dmw` |
+| GuardCondition / Event | `rcl` | `dmw` |
+| Service availability wait | `rclcpp` / `rclpy` | `dmw` |
+| Timer state/readiness | `rcl` | `dmw` |
+| Action endpoint composition | `rcl_action` | `dmw` |
+| Goal FSM / common Action state | `rcl_action` | `dmw` |
+| Graph snapshot/change | `rcl` | `dmw` |
+| Future / Promise | `rclcpp` / `rclpy` | `dclcpp` / `dclpy` |
+| Pending Future registry | `rclcpp` / `rclpy` | `dclcpp` / `dclpy` |
+| Callback | `rclcpp` / `rclpy` | `dclcpp` / `dclpy` |
+| Executor callback dispatch | `rclcpp` / `rclpy` | `dclcpp` / `dclpy` |
+| ThreadPool / CallbackGroup | `rclcpp` / `rclpy` | Client Library；V1 不做复杂模型 |
+| C++ typed template API | `rclcpp` | `dclcpp` |
+| Python GIL / asyncio | `rclpy` | `dclpy` |
+| Exception presentation | Client Library | `dclcpp` / `dclpy` |
 
 ---
 
@@ -224,15 +253,17 @@ Python exception / GIL / asyncio integration
 - Participant 生命周期；
 - Publisher / Subscription；
 - Client / Service；
+- Service availability 与 blocking wait；
 - Timer runtime；
 - Action common runtime；
 - MessageType / ServiceType / ActionType；
 - Goal identity / GoalState / Goal FSM；
 - Action endpoint composition；
-- goal/result/cancel correlation；
-- Action availability、status bookkeeping 与 result cache protocol state；
-- QoS；
+- goal/result/cancel transport correlation；
+- Action availability、Goal registry、cancel matching、status snapshot 与 result lifecycle protocol state；
+- QoS mapping 与 common QoS profiles；
 - WaitSet / GuardCondition / Event；
+- GraphSnapshot / GraphEvent / graph revision；
 - MessageInfo / RequestId；
 - Topic/Service/Action DDS naming；
 - request/response identity correlation；
@@ -245,34 +276,39 @@ Python exception / GIL / asyncio integration
 
 - C++ 模板 API；
 - 用户 callback；
-- C++ future；
+- C++ future/promise；
 - Python Future / asyncio；
+- Pending Future registry；
 - Python GIL；
-- 高层 Executor 策略。
+- 高层 Executor callback scheduling；
+- ThreadPool / CallbackGroup policy。
 
 ## 4.2 `dclcpp`
 
 负责：
 
 - C++17 typed API；
-- `Context` / `Node`；
+- `Context` / `Node` wrapper；
 - `MsgType<MsgT>`；
 - `Publisher<MsgT>` / `Subscription<MsgT>`；
 - `Client<ServiceT>` / `Service<ServiceT>`；
 - `Timer` 的 C++ callback wrapper；
 - `ActionType<ActionT>` / `ActionClient<ActionT>` / `ActionServer<ActionT>`；
 - typed GoalHandle；
-- typed QoS；
+- QoS fluent wrapper 与 profile aliases；
+- Graph value 的 C++ 容器 wrapper；
 - WaitSet wrapper；
 - Executor；
 - callback / future；
+- Pending Future registry；
+- C++ exception mapping；
 - Fast DDS-Gen `Msg + MsgPubSubType` 的一次性类型绑定。
 
-不在 DCLCPP 重复实现 DMW 已经维护的 Goal FSM、Action endpoint composition、result cache protocol state 或 transport correlation。
+不在 DCLCPP 重复实现 DMW 已经维护的 Timer scheduling、Graph cache、Goal FSM、Action endpoint composition、cancel matching、Action availability 或 transport correlation。
 
 ## 4.3 `dclpy`
 
-V1 仅做整体架构设计，后续实现。
+V1 以与 DCLCPP 平级的结构实现。
 
 负责：
 
@@ -280,12 +316,14 @@ V1 仅做整体架构设计，后续实现。
 - Python typed/runtime wrappers；
 - Python GoalHandle wrapper；
 - Python callback/future；
+- Pending Python Future registry；
 - Python Executor 与 asyncio 适配；
 - 通过 `_dclpy` native extension 直接调用 `dmw`；
 - Python message wrapper 与 native C++ message 的绑定；
+- Graph snapshot 的 Python value/container 映射；
 - GIL boundary 与 Python exception mapping。
 
-不在 DCLPY 重复实现 DMW 已经提供的 Timer 状态、Goal FSM、Action endpoint composition 和 transport correlation。
+不在 DCLPY 重复实现 DMW 已经提供的 Timer state、Graph cache、Goal FSM、Action endpoint composition、cancel matching、Action availability 和 transport correlation。
 
 ---
 
@@ -297,17 +335,17 @@ V1 仅做整体架构设计，后续实现。
 DCL Runtime
 │
 ├── dmw::Context
-│    └── Fast DDS DomainParticipant
+│    ├── Fast DDS DomainParticipant
+│    ├── WaitSet / GuardCondition / Timer
+│    └── Graph authority / GraphEvent
 │
 ├── dmw::Node A
 │    ├── Publisher
-│    ├── Subscription
+│    ├── Subscriber
 │    ├── Client
-│    ├── Service
+│    ├── Server
 │    ├── ActionClient / ActionServer
 │    └── ...
-│
-├── dmw::Timer
 │
 └── dmw::Node B
      └── ...
@@ -322,9 +360,10 @@ DCL Runtime
 - shutdown；
 - type registry；
 - topic registry；
-- shared discovery resources；
+- shared discovery/graph authority；
 - wait/wakeup infrastructure；
-- language-neutral Timer/Action runtime 所需的 shared state。
+- language-neutral Timer runtime；
+- language-neutral Action shared state 所需的 Context 级协调。
 
 V1 默认推荐：同一 `Context` 共享一个 `DomainParticipant`。
 
@@ -344,7 +383,7 @@ Context / DomainParticipant
 
 - 降低 Participant 数量；
 - 统一发现资源；
-- 后续实现 ROS 2 Graph logical node metadata；
+- 形成统一 Graph snapshot；
 - 允许多个 Node 共享底层 participant。
 
 ---
@@ -462,6 +501,8 @@ dmw::ActionType
 
 `dmw::ActionType` 是 type-erased runtime descriptor；`dclcpp` / `dclpy` 各自保留语言层的强类型或 runtime type 表达。
 
+Action-specific typed request/response/feedback/status message 的字段访问仍由 Client Library/type adapter 完成；DMW 通过 `GoalId`、`GoalInfo`、`GoalState`、`CancelGoalCriteria` 等语言无关值类型管理公共协议状态，不依赖 C++ template 或 Python object layout。
+
 ---
 
 ## 7. Topic 架构
@@ -485,10 +526,10 @@ Fast DDS DataReader
 dmw::Subscriber
         │
         ▼
-dclcpp Executor
+dclcpp Executor / dclpy Executor
         │
         ▼
-Subscription<Msg> callback
+User callback
 ```
 
 Topic primitive 在 `dmw` 中为一级能力。
@@ -504,7 +545,7 @@ Client
 ├── Request DataWriter
 └── Response DataReader
 
-Service
+Server
 ├── Request DataReader
 └── Response DataWriter
 ```
@@ -513,7 +554,7 @@ Service
 
 - request identity；
 - sequence number；
-- writer GUID；
+- writer/reader GID；
 - SampleIdentity；
 - related_sample_identity；
 - multiple-client response correlation；
@@ -527,13 +568,14 @@ Service
 
 - typed request/response 或 Python request/response wrapper；
 - language-specific Future / callback；
+- Pending Future registry；
 - 对 DMW wait API 的语言友好 wrapper。
 
 ---
 
 ## 9. Action 架构
 
-Action 的 wire protocol 仍然建立在：
+Action 的 wire protocol 建立在：
 
 ```text
 Action
@@ -544,7 +586,7 @@ Action
 └── Status Topic
 ```
 
-之上，但 3 Service + 2 Topic 的组合和公共协议状态不再由 `dclcpp` / `dclpy` 分别实现。
+之上，但 3 Service + 2 Topic 的组合和公共协议状态不由 `dclcpp` / `dclpy` 分别实现。
 
 ```text
              dclcpp Action                 dclpy Action
@@ -562,25 +604,28 @@ Action
 
 - `ActionType` runtime descriptor；
 - ActionClient / ActionServer common runtime；
-- Goal identity；
-- Goal state machine；
-- goal/result/cancel correlation；
-- Action availability；
-- status bookkeeping；
-- result cache protocol state；
-- WaitSet readiness；
+- 3 Service + 2 Topic 的生命周期、命名、QoS 和整体 rollback；
+- `GoalId` / `GoalInfo` / `GoalState` / `GoalEvent`；
+- Goal registry 与合法状态转换；
+- goal/result/cancel transport correlation；
+- cancel criteria matching 与可取消 Goal selection；
+- Action availability / blocking wait；
+- Goal status snapshot；
+- terminal goal/result retention 与 expiry 的协议状态；
+- ActionClient/ActionServer 的聚合 WaitSet readiness；
 - ROS 2 Action endpoint naming 和 wire-level compatibility semantics。
 
 Client Library 负责：
 
+- typed/Python Action message 字段访问与 type adapter；
 - typed/Python Action API；
 - GoalHandle 的语言层 wrapper；
-- Future；
-- callback；
+- Future / Pending Future registry；
+- feedback/status callback；
 - Executor dispatch；
 - Python asyncio/GIL integration。
 
-因此 Action protocol bug、Goal FSM bug 或 cancel/result correlation bug 只需要在 DMW 修复一次，而不是在 C++ 与 Python 各维护一套 authority。
+DMW 不为了“完全隐藏 Action message layout”而引入反射系统或新的 codegen。Client Library 从 typed wire message 提取 `GoalId`、timestamp 等协议元数据，再以 DMW 的语言无关值类型提交给 Action runtime；DMW 返回 Goal/status/cancel selection 等语言无关结果，由 Client Library 写回 typed response/status message。
 
 ---
 
@@ -590,11 +635,13 @@ Client Library 负责：
 
 ```text
 dmw::WaitSet
-├── Subscription readiness
+├── Subscriber readiness
 ├── Client response readiness
-├── Service request readiness
+├── Server request readiness
 ├── Timer readiness
-├── Action runtime readiness
+├── ActionClient aggregate readiness
+├── ActionServer aggregate readiness
+├── GraphEvent readiness
 ├── Events
 └── GuardCondition
 ```
@@ -606,7 +653,7 @@ dclcpp::SingleThreadedExecutor
 future: MultiThreadedExecutor
 ```
 
-`dclpy` 后续可独立实现：
+`dclpy` 独立实现：
 
 ```text
 dclpy.Executor
@@ -626,7 +673,35 @@ dmw::Timer
     └── dclpy.Timer + Python callable
 ```
 
-DMW Timer 不执行 user callback。用户 callback 仍由相应 Client Library Executor 调度。
+DMW Timer 不执行 user callback。V1 Timer 使用 monotonic/steady clock，ready 后由 Executor 调用 `Timer::take()` 消费本次触发；Timer 在严重延迟时跳过已经错过的中间周期，把下一 deadline 对齐到第一个晚于当前时刻的周期边界，避免 callback 执行延迟不断累积进周期。
+
+### 10.2 Graph snapshot / change
+
+DMW 的 discovery state 是唯一 Graph authority：
+
+```text
+Fast DDS discovery
+        ↓
+DMW DiscoveryGraph
+        ├── GraphSnapshot
+        └── GraphEvent / revision
+              ↓
+         DMW WaitSet
+        /           \
+    dclcpp         dclpy
+```
+
+V1 共享 Graph 能力至少包括：
+
+- monotonic graph revision；
+- self-consistent immutable snapshot；
+- node name/namespace（可可靠获得时）；
+- topic names/types；
+- service names/types；
+- publisher/subscriber/client/server counts；
+- graph-change waitable notification。
+
+DMW 不要求两个 Client Library 各维护一份 cache。完整 ROS endpoint info、security enclave、所有 ROS graph tooling metadata 可以后续扩展，但扩展仍必须从同一 DMW graph authority 导出。
 
 ---
 
@@ -646,13 +721,39 @@ Fast DDS QoS
 
 `dmw::Qos` 提供 DCL 需要的公共 DDS QoS 表达，不直接暴露 Fast DDS `DataWriterQos` / `DataReaderQos`。
 
+### 11.1 Common QoS profiles
+
+会被 C++ 与 Python 同时使用的 preset 数值只有一个 authority：`dmw::Qos`。
+
+DMW 至少提供并冻结：
+
+```text
+system_default
+ros2_default
+ros2_sensor_data
+ros2_services_default
+ros2_parameters
+ros2_parameter_events
+ros2_action_status_default
+```
+
+其中 ROS 2 Action status profile 按 Jazzy `rcl_action` reference 采用：
+
+```text
+KeepLast(1)
+Reliable
+TransientLocal
+```
+
+`dclcpp::SensorDataQoS`、`dclpy.qos_profile_sensor_data` 等只包装/复制 DMW profile，不再各自硬编码一套数值。
+
 对于 Fast DDS 特定高级能力，可后续提供隔离的 extension options，但不得污染标准 API。
 
 ---
 
 ## 12. ROS 2 互操作架构
 
-### 12.1 基线
+### 12.1 基线与参考关系
 
 DCL 当前保持同一份 DMW 源码支持两个主要验证环境：
 
@@ -676,50 +777,57 @@ rmw_fastrtps_cpp Jazzy
 
 当前日常开发环境可以继续以 Humble 为主，但后续 DMW 设计与实现以 Fast DDS 2.14.x 的现代能力为主要实现基础，并以 `rmw_fastrtps` Jazzy 作为 ROS 2 Fast DDS 工程行为参考，同时持续验证 Humble/Fast DDS 2.6.x 兼容性。
 
-对于 language-neutral runtime 的职责划分，可以参考 ROS 2 Jazzy 的 `rcl` / `rcl_action`；对于 C++ 与 Python 客户端职责边界，可以参考 `rclcpp` / `rclpy`。这些参考不意味着 DCL 复制对应包层级。
+对于 language-neutral runtime 的职责划分，参考 ROS 2 Jazzy 的 `rcl` / `rcl_action`；对于 C++ 与 Python 客户端职责边界，参考 `rclcpp` / `rclpy`。这些参考不意味着 DCL 复制对应包层级或依赖 ROS 2 runtime。
 
 ### 12.2 Wire compatibility 与 Graph compatibility 分离
 
-第一阶段：
+DMW 的验证分两类：
 
 ```text
-Topic wire interoperability
-Service wire interoperability
-Action interoperability
+Wire / protocol interoperability
+├── Topic
+├── Service
+└── Action
 ```
 
-后续：
+以及：
 
 ```text
-ros2 node list
-ros2 node info
-rqt_graph
-full graph metadata
+Graph interoperability
+├── graph snapshot/change
+├── topic/service names and types
+├── node metadata
+└── 后续 full endpoint/ROS tooling metadata
 ```
+
+Graph public API 可以先于完整 `ros2 node list` / `rqt_graph` 工具兼容存在。DMW Graph API 的首要目标是给 dclcpp/dclpy 提供统一 discovery view，而不是在 V1 一次复制所有 ROS Graph 工具能力。
 
 ### 12.3 `dmw` 负责的 ROS 2 compatibility
 
 - DDS topic naming；
 - DDS service request/reply naming；
 - DDS type naming；
-- QoS mapping；
+- QoS mapping 与 common profiles；
 - request/response correlation；
 - Action endpoint naming；
 - Action Goal/result/cancel wire semantics；
 - Action status/feedback wire semantics；
 - discovery details；
-- Graph metadata（后续）。
+- graph snapshot/change；
+- 后续扩展的 Graph metadata。
 
 ### 12.4 `dclcpp` / `dclpy` 负责的 ROS 2-facing Action API
 
 - typed/Python ActionType；
 - typed/Python GoalHandle；
+- typed Action message 字段读写；
 - Future / callback；
+- Pending Future registry；
 - Executor dispatch；
 - Python asyncio/GIL integration；
 - 将 DMW Action runtime 的结果映射为对应语言 API。
 
-Action endpoint composition、Goal FSM、cancel/result correlation 和协议级状态由 DMW 统一实现。
+Action endpoint composition、Goal FSM、cancel matching、availability 和协议级状态由 DMW 统一实现。
 
 ---
 
@@ -727,7 +835,7 @@ Action endpoint composition、Goal FSM、cancel/result correlation 和协议级�
 
 ### 13.1 `dmw`
 
-推荐采用明确的 C++ result/error 模型，不让异常穿越 runtime boundary 作为常规控制流。
+采用明确的 C++ result/error 模型，不让异常穿越 runtime boundary 作为常规控制流。
 
 例如：
 
@@ -737,14 +845,13 @@ class Error;
 template<typename T> class Result;
 ```
 
-或使用简单 `Status + output` 组合。
-
 设计目标：
 
 - Fast DDS ReturnCode 转换为 DCL error；
 - `dmw` 错误不携带 Fast DDS public type；
-- `dclcpp` 可选择抛异常或返回状态；
-- `dclpy` 可映射为 Python exception。
+- Timer/Graph/Action expected failure 也使用同一 `Result<T>`；
+- `dclcpp` 可映射为 C++ exception 或状态；
+- `dclpy` 映射为 Python exception。
 
 具体形态由 `dmw` 设计文档冻结。
 
@@ -755,11 +862,11 @@ template<typename T> class Result;
 基本规则：
 
 1. 所有资源 RAII；
-2. `Context` 生命周期长于 Node；
-3. Node 生命周期长于 endpoint；
+2. `Context` 是 runtime root；
+3. Node 和 endpoint 引用 Context runtime state；
 4. MessageType/ServiceType/ActionType 可共享；
 5. Fast DDS type registration 由 `Context` 管理；
-6. Endpoint/Timer/Action runtime 析构必须先停止 wait/callback 可见性，再释放底层资源；
+6. Endpoint/Timer/Action/GraphEvent 析构必须先停止 WaitSet 可见性，再释放底层资源；
 7. shutdown 必须可重复调用且有明确定义；
 8. 禁止 dangling raw DDS pointer 逃逸到 public API。
 
@@ -768,14 +875,17 @@ template<typename T> class Result;
 ```text
 Context
   owns Participant
-  owns registries
+  owns registries / graph authority
   owns common runtime coordination
 
 Node
   references Context
 
-Publisher/Subscription/Client/Service/Timer/Action runtime
+Publisher/Subscriber/Client/Server/Action runtime
   reference Node/Context runtime state
+
+Timer/GraphEvent
+  reference Context runtime state
 ```
 
 ---
@@ -787,7 +897,7 @@ V1 要求明确区分：
 - construction/destruction thread safety；
 - publish/take thread safety；
 - wait set mutation thread safety；
-- timer/action runtime state thread safety；
+- timer/action/graph runtime state thread safety；
 - executor callback serialization；
 - shutdown 与 active wait 的并发行为。
 
@@ -795,8 +905,8 @@ V1 要求明确区分：
 
 - `Publisher::publish()` 可并发调用，前提为 Fast DDS/内部实现允许；
 - endpoint create/destroy 与 executor mutation 需要受控；
-- `WaitSet` 不允许无限制并发修改；
-- Timer/Action 的公共状态转换必须由 DMW 定义清晰的并发语义；
+- `WaitSet` 的并发 add/remove/wait 由 DMW contract 明确定义；
+- Timer/Action/Graph 的公共状态转换必须由 DMW 定义线性化点；
 - shutdown 必须唤醒所有等待线程；
 - callback 生命周期由 Client Library 层控制。
 
@@ -839,6 +949,8 @@ dcl/
 ├── tools/
 └── docs/
 ```
+
+Timer、Action、Graph 继续属于现有 `dmw` target/source tree；不因为参考 `rcl` / `rcl_action` 就新增独立顶层 package。
 
 ---
 
@@ -960,7 +1072,7 @@ tests/
 | dclpy | ROS 2 Humble/Jazzy | 后续 |
 | ROS 2 Humble/Jazzy | dclpy | 后续 |
 
-DMW 还必须独立验证 Humble/Fast DDS 2.6.x 与 Jazzy/Fast DDS 2.14.x 的跨版本 Topic/Service/Action common runtime 行为，Client Library 测试不替代 DMW protocol/runtime 验证。
+DMW 必须独立验证 Humble/Fast DDS 2.6.x 与 Jazzy/Fast DDS 2.14.x 的 Topic/Service/Action wire behavior，以及 Timer/Graph/Action common runtime correctness。Client Library 测试不替代 DMW protocol/runtime 验证。
 
 ---
 
@@ -970,8 +1082,8 @@ DMW 还必须独立验证 Humble/Fast DDS 2.6.x 与 Jazzy/Fast DDS 2.14.x 的跨
 
 - Context / Node；
 - MessageType / ServiceType；
-- Publisher / Subscription；
-- Client / Service；
+- Publisher / Subscriber；
+- Client / Server；
 - QoS；
 - WaitSet / GuardCondition / Event；
 - discovery；
@@ -979,14 +1091,17 @@ DMW 还必须独立验证 Humble/Fast DDS 2.6.x 与 Jazzy/Fast DDS 2.14.x 的跨
 - Humble/Jazzy 双环境 build/test/interoperability；
 - correctness、lifecycle 与 performance closure。
 
-### Phase 2 — `dmw` Shared Runtime 补齐
+### Phase 2 — `dmw` Common Runtime 补齐
 
+- common QoS profiles；
 - Timer runtime；
+- GraphSnapshot / GraphEvent / graph revision；
 - ActionType；
-- ActionClient / ActionServer common runtime；
-- Goal identity / Goal FSM；
+- ActionClient / ActionServer aggregate runtime；
+- GoalId / GoalInfo / Goal FSM / Goal registry；
 - Action availability；
-- result/cancel/status common state；
+- cancel matching；
+- result/status common protocol state；
 - WaitSet integration；
 - ROS 2 Action wire compatibility。
 
@@ -997,6 +1112,7 @@ DMW 还必须独立验证 Humble/Fast DDS 2.6.x 与 Jazzy/Fast DDS 2.14.x 的跨
 - Timer wrapper；
 - Client / Service；
 - ActionClient / ActionServer / GoalHandle；
+- Graph/QoS wrapper；
 - Future / callback；
 - SingleThreadedExecutor；
 - C++ interoperability tests。
@@ -1006,16 +1122,16 @@ DMW 还必须独立验证 Humble/Fast DDS 2.6.x 与 Jazzy/Fast DDS 2.14.x 的跨
 - `_dclpy`；
 - Python API；
 - Python message binding；
-- Timer/Action native wrapper；
+- Timer/Action/Graph native wrapper；
 - Python Future / callback；
 - Executor / asyncio；
 - C++ ↔ Python interoperability。
 
-### Phase 5 — Graph / advanced features
+### Phase 5 — Advanced capabilities
 
-- ROS Graph；
+- richer ROS Graph endpoint metadata/tool compatibility；
 - advanced events；
-- multi-thread executor；
+- multi-thread executor / CallbackGroup；
 - loaned messages/zero-copy；
 - performance tuning；
 - additional ROS 2 compatibility expansion。
@@ -1024,7 +1140,7 @@ DMW 还必须独立验证 Humble/Fast DDS 2.6.x 与 Jazzy/Fast DDS 2.14.x 的跨
 
 ## 22. 架构冻结项
 
-V1 建议冻结以下规则：
+V1 冻结以下规则：
 
 1. `dclcpp`、`dclpy` 平级；
 2. 两者都直接依赖 `dmw`；
@@ -1036,16 +1152,20 @@ V1 建议冻结以下规则：
 8. IDL/C++/PubSubType 使用 Fast DDS-Gen；
 9. C++ 使用 `create_msg_type<Msg, MsgPubSubType>()` 做一次绑定；
 10. `dmw::MessageType` 是统一 runtime type descriptor；
-11. Service 是 `dmw` primitive；
-12. Timer 是 `dmw` language-neutral runtime primitive；
-13. Action common runtime 是 `dmw` primitive，底层仍由 3 Service + 2 Topic 组成；
-14. Goal FSM、Action correlation、协议级 result/status state 由 DMW 统一维护；
-15. callback / Future / Executor / asyncio 不下沉到 DMW；
-16. callback 不直接运行在 Fast DDS 内部线程；
-17. WaitSet 在 `dmw`，Executor 在 Client Library；
-18. ROS 2 wire compatibility 与 Graph compatibility 分阶段实现；
-19. DMW 同一份源码持续验证 Humble/Fast DDS 2.6.x 与 Jazzy/Fast DDS 2.14.x；
-20. 后续 DMW 实现以 Fast DDS 2.14.x 为主要实现基础，以 `rmw_fastrtps` Jazzy 为 ROS 2 工程参考，同时保持 Humble 兼容验证。
+11. Service 是 `dmw` primitive，availability/wait 也由 DMW 提供；
+12. common QoS profile 数值只有 DMW 一个 authority；
+13. Timer 是 `dmw` language-neutral runtime primitive；
+14. Graph snapshot/revision/change notification 来自 DMW 单一 discovery authority；
+15. Action common runtime 是 `dmw` primitive，底层由 3 Service + 2 Topic 组成；
+16. Goal FSM、Goal registry、cancel matching、Action availability 和协议级 result/status state 由 DMW 统一维护；
+17. typed Action message 字段访问仍属于 Client Library/type adapter，不为此在 DMW 引入反射/codegen；
+18. Future / Pending Future registry / callback / Executor / asyncio 不下沉到 DMW；
+19. callback 不直接运行在 Fast DDS 或 DMW internal thread；
+20. WaitSet 在 `dmw`，Executor 在 Client Library；
+21. ThreadPool / CallbackGroup 属于 Client Library，V1 不做复杂模型；
+22. C++ exception / Python exception 是语言层 presentation；
+23. DMW 同一份源码持续验证 Humble/Fast DDS 2.6.x 与 Jazzy/Fast DDS 2.14.x；
+24. 后续 DMW 实现以 Fast DDS 2.14.x 为主要实现基础，以 `rmw_fastrtps` Jazzy 为 ROS 2 工程参考，并以 `rcl`/`rcl_action`/`rclcpp`/`rclpy` Jazzy 作为职责边界参考，同时保持 Humble 兼容验证。
 
 ---
 
@@ -1070,4 +1190,4 @@ Fast DDS
       dclcpp       dclpy
 ```
 
-`dmw` 负责稳定、非模板、type-erased 的 middleware/runtime core，包括 Topic、Service、Timer、Action common runtime 和等待语义；`dclcpp` 提供现代 C++ 强类型 API、callback/Future/Executor；`dclpy` 提供 Python API、Future/asyncio/GIL/Executor。所有 DDS-specific 细节以及跨语言必须一致的协议状态均收敛到 `dmw`，同时通过 Humble/Jazzy 双环境 ROS 2 compatibility 验证实现直接通信。
+`dmw` 负责稳定、非模板、type-erased 的 middleware/runtime core，包括 Topic、Service、Timer、Graph、Action common runtime、QoS profiles 和等待语义；`dclcpp` 提供现代 C++ 强类型 API、callback/Future/Executor；`dclpy` 提供 Python API、Future/asyncio/GIL/Executor。所有 DDS-specific 细节以及跨语言必须一致的协议状态均收敛到 `dmw`，同时通过 Humble/Jazzy 双环境 ROS 2 compatibility 验证实现直接通信。
