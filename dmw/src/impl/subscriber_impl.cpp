@@ -8,7 +8,6 @@
 
 #include "dmw/error.hpp"
 #include "impl/event_impl.hpp"
-#include "impl/subscriber_impl.hpp"
 #include "impl/identity.hpp"
 #include "impl/process_lifetime.hpp"
 #include "impl/return_code.hpp"

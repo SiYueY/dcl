@@ -193,6 +193,7 @@ if(BUILD_TESTING)
         target_link_libraries(dmw_interop_peer PRIVATE dmw::fastdds_binding)
 
         add_executable(dmw_benchmark test/benchmark.cpp)
+        target_include_directories(dmw_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
         target_link_libraries(dmw_benchmark PRIVATE dmw::fastdds_binding)
 
         set_tests_properties(

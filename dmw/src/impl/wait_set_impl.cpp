@@ -1,7 +1,5 @@
 #include "impl/wait_set_impl.hpp"
 
-#include "impl/wait_set_impl.hpp"
-
 namespace dmw {
 
 Result<std::unique_ptr<WaitSet>> Context::Impl::create_wait_set(const WaitSetOptions&) {
@@ -85,6 +83,11 @@ Result<WaitResult> WaitSet::Impl::wait(WaitTimeout timeout) {
         }
 
         const auto observed_topology = context->topology_generation();
+        // A notification that arrives after this observation must not be
+        // cleared before native wait starts.  This closes the final lost-wake
+        // window for logical GuardConditions, which have no native condition.
+        const auto observed_wake_generation =
+            context->wake_->generation.load(std::memory_order_acquire);
         std::vector<WaitableRegistration> registrations;
         for (const auto& registration : context->snapshot()) {
             if (registration->is_closing()) {
@@ -119,9 +122,10 @@ Result<WaitResult> WaitSet::Impl::wait(WaitTimeout timeout) {
                 return Result<WaitResult>::success(WaitResult::timeout());
             }
             wake = context->wait_for_notification(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(remaining));
+                std::chrono::duration_cast<std::chrono::nanoseconds>(remaining),
+                observed_wake_generation);
         } else {
-            wake = context->wait_for_notification();
+            wake = context->wait_for_notification(observed_wake_generation);
         }
         if (!wake) {
             return Result<WaitResult>::failure(wake.error());

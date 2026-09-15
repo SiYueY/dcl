@@ -14,7 +14,6 @@
 #include "impl/qos.hpp"
 #include "impl/process_lifetime.hpp"
 #include "impl/name.hpp"
-#include "impl/node_impl.hpp"
 #include "impl/client_impl.hpp"
 #include "impl/server_impl.hpp"
 #include "impl/response.hpp"

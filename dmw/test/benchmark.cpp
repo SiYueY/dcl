@@ -16,6 +16,7 @@
 #include "dmw/publisher.hpp"
 #include "dmw/subscriber.hpp"
 #include "dmw/wait_set.hpp"
+#include "impl/temporary_sample.hpp"
 
 namespace {
 
@@ -79,7 +80,7 @@ double mean_nanoseconds(std::size_t iterations, Operation&& operation) {
 }  // namespace
 
 int main() {
-    auto type = dmw::fastdds::create_message_type<IntTopicDataType>();
+    auto type = dmw::fastdds::create_message_type<IntTopicDataType, std::int32_t>();
     assert(type);
     dmw::ContextOptions context_options;
     context_options.participant_name = "dmw-foundation-benchmark";
@@ -97,27 +98,50 @@ int main() {
         const auto count = publisher.value()->matched_subscriber_count();
         return count && count.value() != 0;
     }));
+    auto wait_set = context.value()->create_wait_set();
+    assert(wait_set);
+    assert(wait_set.value()->add(*subscriber.value()));
+
+    // Prime endpoint-local scratch.  The measured loop deliberately excludes
+    // this first createData()/SerializedPayload allocation.
+    const std::int32_t warmup_value = -1;
+    assert(publisher.value()->write(&warmup_value));
+    const auto warmup_timeout = dmw::WaitTimeout::finite(std::chrono::seconds(1));
+    assert(warmup_timeout);
+    assert(wait_set.value()->wait(warmup_timeout.value()));
+    std::int32_t warmup_received = 0;
+    dmw::MessageInfo warmup_info;
+    const auto warmup_read = subscriber.value()->read(&warmup_received, warmup_info);
+    assert(warmup_read && warmup_read.value() && warmup_received == warmup_value);
+    const auto allocations_before = dmw::impl::TemporarySample::allocation_counters();
 
     std::vector<double> latencies_us;
     latencies_us.reserve(kSamples);
     for (std::int32_t value = 0; value < static_cast<std::int32_t>(kSamples); ++value) {
         const auto start = std::chrono::steady_clock::now();
         assert(publisher.value()->write(&value));
+        const auto timeout = dmw::WaitTimeout::finite(std::chrono::seconds(1));
+        assert(timeout);
+        const auto ready = wait_set.value()->wait(timeout.value());
+        assert(ready && ready.value().status() == dmw::WaitStatus::Ready);
         std::int32_t received = -1;
         dmw::MessageInfo info;
-        assert(wait_until([&] {
-            const auto read = subscriber.value()->read(&received, info);
-            return read && read.value() && received == value;
-        }));
+        const auto read = subscriber.value()->read(&received, info);
+        assert(read && read.value() && received == value);
         const auto elapsed = std::chrono::steady_clock::now() - start;
         latencies_us.push_back(
             static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()) /
             1000.0);
     }
+    const auto allocations_after = dmw::impl::TemporarySample::allocation_counters();
+    const auto steady_sample_allocations =
+        allocations_after.sample_creations - allocations_before.sample_creations;
+    const auto steady_payload_allocations =
+        allocations_after.payload_allocations - allocations_before.payload_allocations;
+    assert(steady_sample_allocations == 0);
+    assert(steady_payload_allocations == 0);
 
-    auto wait_set = context.value()->create_wait_set();
     auto guard = context.value()->create_guard_condition();
-    assert(wait_set);
     assert(guard);
     assert(wait_set.value()->add(*guard.value()));
     const auto idle_poll_ns = mean_nanoseconds(kWaitIterations, [&] {
@@ -131,10 +155,11 @@ int main() {
     });
 
     std::cout << "dmw_benchmark pub_sub_latency_us p50=" << percentile(latencies_us, 0.50)
-              << " p95=" << percentile(latencies_us, 0.95)
-              << " samples=" << kSamples << '\n'
+              << " p95=" << percentile(latencies_us, 0.95) << " samples=" << kSamples << '\n'
+              << "dmw_benchmark receive_scratch_allocations sample=" << steady_sample_allocations
+              << " payload=" << steady_payload_allocations << '\n'
               << "dmw_benchmark wait_set_ns idle_poll_mean=" << idle_poll_ns
-              << " ready_guard_mean=" << ready_guard_ns
-              << " iterations=" << kWaitIterations << '\n';
+              << " ready_guard_mean=" << ready_guard_ns << " iterations=" << kWaitIterations
+              << '\n';
     return 0;
 }

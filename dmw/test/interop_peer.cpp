@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
     const std::string role(argv[1]);
     if (role != "pub" && role != "sub" && role != "client" && role != "server") return 2;
     const std::string expected(argv[2]);
-    auto type = dmw::fastdds::create_message_type<StringType>();
+    auto type = dmw::fastdds::create_message_type<StringType, std::string>();
     if (!type) return 3;
     dmw::ContextOptions options;
     options.domain_id = domain_id();

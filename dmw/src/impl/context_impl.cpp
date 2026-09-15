@@ -12,7 +12,6 @@
 #include <fastdds/dds/topic/TypeSupport.hpp>
 
 #include "dmw/error.hpp"
-#include "impl/context_impl.hpp"
 #include "dmw/fastdds/message_type.hpp"
 #include "impl/context.hpp"
 #include "impl/process_lifetime.hpp"
@@ -125,6 +124,7 @@ Result<void> Context::install_discovery_listener() noexcept {
     std::unique_ptr<DiscoveryListener> listener;
     try {
         listener = std::make_unique<DiscoveryListener>(discovery_graph_);
+        listener->activate();
         const auto result = participant_->set_listener(listener.get());
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
             ProcessLifetime::instance().retain_participant_listener(std::move(listener));

@@ -2,7 +2,6 @@
 
 #include "dmw/error.hpp"
 #include "impl/event_impl.hpp"
-#include "impl/publisher_impl.hpp"
 #include "impl/process_lifetime.hpp"
 #include "impl/return_code.hpp"
 

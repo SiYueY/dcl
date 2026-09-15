@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -44,6 +45,7 @@ inline std::atomic<std::uint64_t> next_wait_set_id{1};
 
 struct WaitSetWake {
     void notify() noexcept {
+        generation.fetch_add(1, std::memory_order_acq_rel);
         std::lock_guard<std::mutex> lock(mutex);
         try {
             if (control_condition->set_trigger_value(true) !=
@@ -55,8 +57,9 @@ struct WaitSetWake {
         }
     }
 
-    bool clear() noexcept {
+    bool clear_if_unchanged(std::uint64_t observed_generation) noexcept {
         std::lock_guard<std::mutex> lock(mutex);
+        if (generation.load(std::memory_order_acquire) != observed_generation) return false;
         try {
             if (control_condition->set_trigger_value(false) ==
                 eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
@@ -96,6 +99,7 @@ struct WaitSetWake {
     }
 
     std::mutex mutex;
+    std::atomic<std::uint64_t> generation{0};
     std::atomic<bool> broken{false};
     std::shared_ptr<eprosima::fastdds::dds::GuardCondition> control_condition{
         std::make_shared<eprosima::fastdds::dds::GuardCondition>()};
@@ -289,10 +293,11 @@ public:
         registration->guard = std::move(guard);
         registration->reader = std::move(reader);
 
-        // A native wait holds native_mutex_ until the control guard wakes it.
-        // Wake before a topology mutation that may need that mutex, otherwise
-        // an infinite wait and a concurrent attach can deadlock each other.
-        wake_->notify();
+        // Publish a mutation before waking a native wait.  wait_for_notification()
+        // will not clear the control condition and re-enter an infinite wait
+        // until this mutation has finished reconciling the native WaitSet.
+        // This is the handoff that closes the notify/clear/reattach race.
+        const TopologyMutationGuard topology_mutation(*this);
 
         const std::weak_ptr<WaitSetState> weak_state = weak_from_this();
         const std::weak_ptr<Registration> weak_registration = registration;
@@ -349,8 +354,6 @@ public:
             throw;
         }
         ++next_registration_id_;
-        note_topology_mutation();
-        wake_->notify();
         return Result<std::uint64_t>::success(id);
     }
 
@@ -372,9 +375,9 @@ public:
             return false;
         }
 
-        // See add(): release() may need native_mutex_, so wake a blocking
-        // native wait before attempting the detach.
-        wake_->notify();
+        // See add(): the mutation guard wakes a blocking native wait before
+        // attempting the detach and prevents it from re-entering early.
+        const TopologyMutationGuard topology_mutation(*this);
 
         if (!registration->release(
                 wait_set_id_, [this](eprosima::fastdds::dds::Condition& condition) {
@@ -388,7 +391,6 @@ public:
                 std::lock_guard lock(mutex_);
                 poisoned_ = true;
             }
-            wake_->notify();
             return false;
         }
         {
@@ -399,8 +401,6 @@ public:
             }
         }
         registration->phase.store(RegistrationPhase::Detached, std::memory_order_release);
-        note_topology_mutation();
-        wake_->notify();
         return true;
     }
 
@@ -413,8 +413,9 @@ public:
             registration.reader->reader == nullptr)
             return;
         // Attaching or detaching a reader StatusCondition reconciles the
-        // native WaitSet and therefore must first release an infinite wait.
-        wake_->notify();
+        // native WaitSet.  The guard supplies a strict handoff with an
+        // infinite native wait.
+        const TopologyMutationGuard topology_mutation(*this);
         if (!enabled) {
             if (registration.reader_condition != nullptr &&
                 !detach_native_condition(*registration.reader_condition)) {
@@ -430,8 +431,6 @@ public:
                 return;
             }
         }
-        note_topology_mutation();
-        wake_->notify();
     }
 
     void close() noexcept {
@@ -497,14 +496,25 @@ public:
         return topology_generation_.load(std::memory_order_acquire);
     }
 
-    Result<void> wait_for_notification(const eprosima::fastrtps::Duration_t& timeout) {
+    Result<void> wait_for_notification(
+        const eprosima::fastrtps::Duration_t& timeout, std::uint64_t observed_wake_generation) {
         eprosima::fastdds::dds::ConditionSeq active_conditions;
         eprosima::fastrtps::types::ReturnCode_t result;
         {
+            // Clearing an already-observed control wake and entering the next
+            // native wait must be ordered with topology mutation publication.
+            // Otherwise a mutator can notify, block on native_mutex_, and have
+            // its wake cleared before it reconciles the native WaitSet.
+            std::unique_lock topology_lock(topology_handoff_mutex_);
+            topology_handoff_cv_.wait(
+                topology_lock, [this] { return active_topology_mutations_ == 0; });
             std::lock_guard lock(native_mutex_);
+            if (!wake_->clear_if_unchanged(observed_wake_generation)) {
+                return Result<void>::success();
+            }
+            topology_lock.unlock();
             result = native_wait_set_.wait(active_conditions, timeout);
         }
-        (void)wake_->clear();
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK ||
             result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_TIMEOUT) {
             return Result<void>::success();
@@ -512,18 +522,19 @@ public:
         return Result<void>::failure(impl::to_error(result, "Fast DDS WaitSet wait failed"));
     }
 
-    Result<void> wait_for_notification(std::chrono::nanoseconds timeout) {
+    Result<void> wait_for_notification(
+        std::chrono::nanoseconds timeout, std::uint64_t observed_wake_generation) {
         constexpr auto kNanosecondsPerSecond = std::chrono::nanoseconds::period::den;
         const auto count = timeout.count();
         const auto seconds = count / kNanosecondsPerSecond;
         const auto nanoseconds = count % kNanosecondsPerSecond;
         const eprosima::fastrtps::Duration_t duration(
             static_cast<std::int32_t>(seconds), static_cast<std::uint32_t>(nanoseconds));
-        return wait_for_notification(duration);
+        return wait_for_notification(duration, observed_wake_generation);
     }
 
-    Result<void> wait_for_notification() {
-        return wait_for_notification(eprosima::fastrtps::c_TimeInfinite);
+    Result<void> wait_for_notification(std::uint64_t observed_wake_generation) {
+        return wait_for_notification(eprosima::fastrtps::c_TimeInfinite, observed_wake_generation);
     }
 
     Result<void> repair_control_guard_if_needed() noexcept {
@@ -540,6 +551,35 @@ public:
     }
 
 private:
+    class TopologyMutationGuard {
+    public:
+        explicit TopologyMutationGuard(WaitSetState& state) noexcept : state_(state) {
+            {
+                std::lock_guard lock(state_.topology_handoff_mutex_);
+                ++state_.active_topology_mutations_;
+            }
+            // This notification is intentionally after publication.  A
+            // waiter that consumes it must observe the in-flight mutation.
+            state_.wake_->notify();
+        }
+
+        ~TopologyMutationGuard() noexcept {
+            state_.note_topology_mutation();
+            {
+                std::lock_guard lock(state_.topology_handoff_mutex_);
+                --state_.active_topology_mutations_;
+            }
+            state_.topology_handoff_cv_.notify_all();
+            state_.wake_->notify();
+        }
+
+        TopologyMutationGuard(const TopologyMutationGuard&) = delete;
+        TopologyMutationGuard& operator=(const TopologyMutationGuard&) = delete;
+
+    private:
+        WaitSetState& state_;
+    };
+
     void note_topology_mutation() noexcept {
         auto generation = topology_generation_.load(std::memory_order_acquire);
         while (true) {
@@ -624,6 +664,9 @@ public:
     bool waiting_{false};
     std::atomic<bool> poisoned_{false};
     std::atomic<std::uint64_t> topology_generation_{1};
+    std::mutex topology_handoff_mutex_;
+    std::condition_variable topology_handoff_cv_;
+    std::size_t active_topology_mutations_{0};
     std::unordered_map<std::uint64_t, std::shared_ptr<Registration>> registrations_;
 };
 

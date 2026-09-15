@@ -11,7 +11,6 @@
 #include "impl/identity.hpp"
 #include "impl/process_lifetime.hpp"
 #include "impl/return_code.hpp"
-#include "impl/client_impl.hpp"
 #include "impl/temporary_sample.hpp"
 
 namespace dmw {

@@ -5,7 +5,8 @@
 namespace dmw {
 
 Result<MessageType> MessageType::Impl::create(
-    eprosima::fastdds::dds::TypeSupport type_support, std::type_index pubsub_type) {
+    eprosima::fastdds::dds::TypeSupport type_support, std::type_index pubsub_type,
+    fastdds::MessageTypeAdapter::ReceiveCommit receive_commit) {
     if (!type_support) {
         return Result<MessageType>::failure(
             Error(ErrorCode::InvalidArgument, "Fast DDS type support must not be null"));
@@ -18,15 +19,16 @@ Result<MessageType> MessageType::Impl::create(
     }
 
     auto impl = std::make_shared<MessageType::Impl>(
-        std::move(type_support), std::move(wire_type_name), pubsub_type);
+        std::move(type_support), std::move(wire_type_name), pubsub_type, receive_commit);
     return Result<MessageType>::success(MessageType(std::move(impl)));
 }
 
 namespace fastdds {
 
 Result<MessageType> MessageTypeAdapter::create(
-    eprosima::fastdds::dds::TypeSupport support, std::type_index type) {
-    return MessageType::Impl::create(std::move(support), type);
+    eprosima::fastdds::dds::TypeSupport support, std::type_index type,
+    ReceiveCommit receive_commit) {
+    return MessageType::Impl::create(std::move(support), type, receive_commit);
 }
 
 const eprosima::fastdds::dds::TypeSupport& MessageTypeAdapter::type_support(
@@ -36,6 +38,11 @@ const eprosima::fastdds::dds::TypeSupport& MessageTypeAdapter::type_support(
 
 std::type_index MessageTypeAdapter::pubsub_type(const MessageType& type) noexcept {
     return type.impl_->pubsub_type();
+}
+
+MessageTypeAdapter::ReceiveCommit MessageTypeAdapter::receive_commit(
+    const MessageType& type) noexcept {
+    return type.impl_->receive_commit();
 }
 
 }  // namespace fastdds

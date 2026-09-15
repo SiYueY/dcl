@@ -297,7 +297,12 @@ class DiscoveryListener final : public eprosima::fastdds::dds::DomainParticipant
 public:
     explicit DiscoveryListener(std::weak_ptr<DiscoveryGraph> graph) noexcept
     : graph_(std::move(graph)) {}
+    // Publish construction before giving this pointer to Fast DDS, whose
+    // listener callback thread is outside DMW's mutex/condition-variable
+    // synchronization domain.
+    void activate() noexcept { active_.store(true, std::memory_order_release); }
     void close_and_drain() noexcept {
+        active_.store(false, std::memory_order_release);
         std::unique_lock lock(mutex_);
         accepting_ = false;
         cv_.wait(lock, [&] { return in_flight_ == 0; });
@@ -336,6 +341,7 @@ public:
 private:
     template <class F>
     void guard(F&& callback) noexcept {
+        if (!active_.load(std::memory_order_acquire)) return;
         {
             std::lock_guard lock(mutex_);
             if (!accepting_) return;
@@ -357,6 +363,7 @@ private:
         });
     }
     std::weak_ptr<DiscoveryGraph> graph_;
+    std::atomic<bool> active_{false};
     RankedMutex<LockRank::ListenerState> mutex_;
     std::condition_variable_any cv_;
     bool accepting_{true};

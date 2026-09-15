@@ -4,7 +4,6 @@
 #include <utility>
 
 #include "dmw/error.hpp"
-#include "impl/event_impl.hpp"
 
 namespace dmw {
 

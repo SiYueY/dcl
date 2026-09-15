@@ -82,7 +82,7 @@ int main() {
     dmw::ContextOptions default_context_options;
     assert(default_context_options.runtime_mode == dmw::RuntimeMode::DDS);
 
-    auto binding_smoke = dmw::fastdds::create_message_type<NamedTopicDataType>();
+    auto binding_smoke = dmw::fastdds::create_message_type<NamedTopicDataType, int>();
     assert(binding_smoke);
     assert(binding_smoke.value().type_name() == "dmw.test.NamedTopicDataType");
 
@@ -155,7 +155,7 @@ int main() {
     type_support->setName("dmw.test.Mutated");
     assert(result.value().type_name() == "dmw.test.Initial");
 
-    auto generated = dmw::fastdds::create_message_type<NamedTopicDataType>();
+    auto generated = dmw::fastdds::create_message_type<NamedTopicDataType, int>();
     assert(generated);
     assert(generated.value().type_name() == "dmw.test.NamedTopicDataType");
 
@@ -480,7 +480,7 @@ int main() {
     }
     assert(node_surviving_received);
 
-    auto colliding_type = dmw::fastdds::create_message_type<CollidingTopicDataType>();
+    auto colliding_type = dmw::fastdds::create_message_type<CollidingTopicDataType, int>();
     assert(colliding_type);
     auto colliding_publisher =
         node.value()->create_publisher(colliding_type.value(), "messages", dmw::Qos{});
@@ -766,10 +766,20 @@ int main() {
     assert(full_wait.value().status() == dmw::WaitStatus::Timeout);
 
     int capacity_response = 201;
+    // The reattach must hand off an already-blocked infinite native wait;
+    // merely polling after the response would not cover that race.
+    std::optional<dmw::Result<dmw::WaitResult>> capacity_reattach_wait_result;
+    std::thread capacity_reattach_wait_thread([&] {
+        capacity_reattach_wait_result.emplace(
+            capacity_wait_set.value()->wait(dmw::WaitTimeout::infinite()));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
     assert(capacity_server.value()->write_response(first_capacity_request_id, &capacity_response));
-    auto available_wait = capacity_wait_set.value()->wait(dmw::WaitTimeout::poll());
-    assert(available_wait);
-    assert(available_wait.value().status() == dmw::WaitStatus::Ready);
+    capacity_reattach_wait_thread.join();
+    assert(capacity_reattach_wait_result && *capacity_reattach_wait_result);
+    assert(capacity_reattach_wait_result->value().status() == dmw::WaitStatus::Ready);
+    assert(capacity_reattach_wait_result->value().ready().size() == 1);
+    assert(capacity_reattach_wait_result->value().ready().front() == capacity_wait_token.value());
     bool second_capacity_taken = false;
     for (int attempt = 0; attempt < 30 && !second_capacity_taken; ++attempt) {
         auto take =
@@ -835,7 +845,7 @@ int main() {
     assert(!null_result);
     assert(null_result.error().code() == dmw::ErrorCode::InvalidArgument);
 
-    auto empty_result = dmw::fastdds::create_message_type<EmptyNameTopicDataType>();
+    auto empty_result = dmw::fastdds::create_message_type<EmptyNameTopicDataType, int>();
     assert(!empty_result);
     assert(empty_result.error().code() == dmw::ErrorCode::InvalidArgument);
 
