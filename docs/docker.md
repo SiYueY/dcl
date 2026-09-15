@@ -31,6 +31,7 @@ DCL/
 │   ├── Dockerfile
 │   ├── docker.sh
 │   ├── entrypoint.sh
+│   ├── cross-integration-test.sh
 │   ├── humble.sh
 │   └── jazzy.sh
 └── docs/
@@ -44,6 +45,7 @@ DCL/
 | `docker/Dockerfile` | 定义 Humble/Jazzy 共用的开发镜像内容 |
 | `docker/docker.sh` | Docker 公共实现，负责镜像、容器、构建和测试 |
 | `docker/entrypoint.sh` | 在容器内映射宿主 UID/GID，随后降权执行请求命令 |
+| `docker/cross-integration-test.sh` | 构建两个发行版的 peer，并验证 Humble/Jazzy 的 DDS wire 互操作 |
 | `docker/humble.sh` | Humble / Ubuntu 22.04 公开入口 |
 | `docker/jazzy.sh` | Jazzy / Ubuntu 24.04 公开入口 |
 | `docs/docker.md` | Docker 环境设计与使用说明 |
@@ -275,6 +277,26 @@ ROS 2 Jazzy Client     → DCL Humble Server
 
 跨 Humble/Jazzy 测试用于评估 Fast DDS 2.6 与 2.14 的实际 wire interoperability。除非项目后续明确冻结并持续验证该矩阵，否则它应视为兼容性验证结果，而不是对 ROS 2 跨发行版兼容性的无条件承诺。
 
+仓库提供可重复执行的 DMW wire-level 验证：
+
+```bash
+./docker/cross-integration-test.sh
+```
+
+脚本先分别运行 Humble 与 Jazzy 的完整 DMW 集成测试，然后在 host network、同一
+`ROS_DOMAIN_ID` 和 `FASTDDS_BUILTIN_TRANSPORTS=UDPv4` 条件下运行四个独立进程对：
+
+```text
+Humble Publisher → Jazzy Subscriber
+Jazzy Publisher  → Humble Subscriber
+Humble Client    → Jazzy Server
+Jazzy Client     → Humble Server
+```
+
+Topic peer 验证可靠写入和接收；Service peer 验证服务发现、request/reply wire mapping 与
+request identity correlation。它们使用两个发行版各自编译的 DMW 二进制，因此覆盖 Fast DDS
+2.6.x 与 2.14.x 之间的实际网络路径，而不是同一进程内的模拟。
+
 ## 7. 镜像内容与运行时职责
 
 `Dockerfile` 只定义稳定的软件环境，不保存项目源码，也不编码宿主机特定状态。
@@ -318,6 +340,49 @@ host network
 ## 8. 测试范围与维护约束
 
 当前 `test` 命令执行 DMW 配置、编译和 CTest。是否执行需要 Fast DDS transport 或 ROS 2 的集成测试，仍由 DMW 自身的 CMake 测试选项决定；Docker launcher 不应隐式改变 DMW 的测试语义。
+
+`integration-test` 执行需要 DDS transport 的测试，当前覆盖：Topic QoS endpoint reuse、
+event-driven WaitSet（Guard、动态注册、并发 Busy、shutdown）、生命周期反复创建/销毁、
+以及 DMW ↔ rclcpp 的双向 Topic 和 AddTwoInts Service 互操作。应在两个发行版中执行：
+
+```bash
+./docker/humble.sh integration-test
+./docker/jazzy.sh integration-test
+./docker/cross-integration-test.sh
+```
+
+### Sanitizer 验证
+
+AddressSanitizer/UndefinedBehaviorSanitizer 与 ThreadSanitizer 使用独立 build tree，不能与普通
+构建目录混用。已验证的 Jazzy ASan/UBSan 配置为：
+
+```bash
+cmake -S dmw -B build/docker/jazzy/dmw-asan -G Ninja \
+  -DBUILD_TESTING=ON -DDMW_ENABLE_DDS_INTEGRATION_TESTS=ON \
+  -DDMW_ENABLE_SANITIZERS=ON
+cmake --build build/docker/jazzy/dmw-asan
+DMW_ENABLE_DDS_INTEGRATION=1 ctest --test-dir build/docker/jazzy/dmw-asan \
+  --output-on-failure --label-regex integration
+```
+
+TSan 使用 `-fno-pie/-no-pie`。在 Docker 的 GCC TSan 环境中，进程启动前还需要关闭 ASLR；
+标准容器的 seccomp profile 会拒绝该 personality 调用。因此 TSan 必须在专用、显式的验证容器中
+以 `--security-opt seccomp=unconfined` 和 `setarch x86_64 -R` 运行。不要把这两个选项加入日常
+开发容器的默认配置。专用容器内的配置与执行为：
+
+```bash
+cmake -S dmw -B build/docker/jazzy/dmw-tsan -G Ninja \
+  -DBUILD_TESTING=ON -DDMW_ENABLE_DDS_INTEGRATION_TESTS=ON \
+  -DDMW_ENABLE_TSAN=ON
+cmake --build build/docker/jazzy/dmw-tsan
+DMW_ENABLE_DDS_INTEGRATION=1 setarch x86_64 -R \
+  ctest --test-dir build/docker/jazzy/dmw-tsan --output-on-failure \
+  --label-regex integration
+```
+
+上述命令已在 Jazzy 中通过全部 5 个集成测试。基础性能基线应以同一硬件、同一 Domain、UDPv4
+transport 下的 publish→receive 延迟、接收路径分配数、以及 WaitSet idle/ready 两种负载分别记录；
+它们用于检测回归，不应跨不同机器比较绝对数值。
 
 维护 Docker 环境时遵循以下约束：
 

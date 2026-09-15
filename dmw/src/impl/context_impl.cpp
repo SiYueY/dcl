@@ -46,7 +46,7 @@ public:
                 deleted = false;
             }
             if (!deleted) {
-                impl::ProcessLifetime::instance().retain_participant(factory_, participant_);
+                impl::ProcessLifetime::instance().retain_participant(participant_);
             }
         }
     }
@@ -94,7 +94,7 @@ Context::~Context() noexcept {
             // listener.  Do not attempt contained-entity or participant
             // deletion in that context: retain both at the process barrier.
             ProcessLifetime::instance().retain_participant(
-                factory_, participant_, std::move(participant_listener_));
+                participant_, std::move(participant_listener_));
             participant_ = nullptr;
             publisher_ = nullptr;
             subscriber_ = nullptr;
@@ -111,7 +111,7 @@ Context::~Context() noexcept {
         }
         if (!deleted) {
             ProcessLifetime::instance().retain_participant(
-                factory_, participant_, std::move(participant_listener_));
+                participant_, std::move(participant_listener_));
         } else {
             participant_listener_.reset();
         }

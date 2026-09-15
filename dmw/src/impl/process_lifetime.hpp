@@ -6,7 +6,6 @@
 #include <vector>
 
 #include <fastdds/dds/domain/DomainParticipant.hpp>
-#include <fastdds/dds/domain/DomainParticipantFactory.hpp>
 #include <fastdds/dds/domain/DomainParticipantListener.hpp>
 #include <fastdds/dds/publisher/DataWriterListener.hpp>
 #include <fastdds/dds/subscriber/DataReaderListener.hpp>
@@ -32,19 +31,16 @@ public:
     }
 
     void retain_participant(
-        eprosima::fastdds::dds::DomainParticipantFactory* factory,
         eprosima::fastdds::dds::DomainParticipant* participant,
         std::unique_ptr<DiscoveryListener> listener = {}) noexcept {
         if (participant == nullptr) return;
         try {
             std::lock_guard<std::mutex> lock(mutex_);
-            participants_.push_back(
-                QuarantinedParticipant{factory, participant, std::move(listener)});
+            participants_.push_back(QuarantinedParticipant{participant, std::move(listener)});
         } catch (...) {
             // The terminal fallback deliberately leaks all three objects.
             // This preserves callback and DDS binding validity even if the
             // quarantine bookkeeping itself cannot allocate.
-            (void)factory;
             (void)participant;
             (void)listener.release();
         }
@@ -90,7 +86,6 @@ public:
 
 private:
     struct QuarantinedParticipant {
-        eprosima::fastdds::dds::DomainParticipantFactory* factory;
         eprosima::fastdds::dds::DomainParticipant* participant;
         std::unique_ptr<DiscoveryListener> listener;
     };

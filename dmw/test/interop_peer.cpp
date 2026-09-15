@@ -11,13 +11,16 @@
 #include "fastdds/dds/topic/TopicDataType.hpp"
 
 #include "dmw/context.hpp"
+#include "dmw/client.hpp"
 #include "dmw/fastdds/message_type.hpp"
 #include "dmw/publisher.hpp"
+#include "dmw/server.hpp"
 #include "dmw/subscriber.hpp"
 
 namespace {
 
 constexpr char kTopic[] = "/dmw_fastdds_cross_version_interop";
+constexpr char kService[] = "/dmw_fastdds_cross_version_interop";
 constexpr char kType[] = "std_msgs::msg::dds_::String_";
 
 #if FASTCDR_VERSION_MAJOR >= 2
@@ -85,8 +88,9 @@ bool wait_until(Predicate predicate) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 3 || (std::string(argv[1]) != "pub" && std::string(argv[1]) != "sub")) return 2;
+    if (argc != 3) return 2;
     const std::string role(argv[1]);
+    if (role != "pub" && role != "sub" && role != "client" && role != "server") return 2;
     const std::string expected(argv[2]);
     auto type = dmw::fastdds::create_message_type<StringType>();
     if (!type) return 3;
@@ -108,12 +112,42 @@ int main(int argc, char** argv) {
         // participant is destroyed; this is essential for process-per-role
         // interoperability probes.
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    } else {
+    } else if (role == "sub") {
         auto subscriber = node.value()->create_subscriber(type.value(), kTopic, dmw::Qos{});
         if (!subscriber || !wait_until([&] { auto count = subscriber.value()->matched_publisher_count(); return count && count.value() != 0; })) return 8;
         std::string received;
         dmw::MessageInfo info;
         if (!wait_until([&] { auto read = subscriber.value()->read(&received, info); return read && read.value() && received == expected; })) return 9;
+    } else {
+        const dmw::ServiceType service_type(type.value(), type.value());
+        if (role == "server") {
+            auto server = node.value()->create_server(service_type, kService, dmw::Qos{});
+            if (!server) return 10;
+            std::string request;
+            dmw::RequestId request_id;
+            if (!wait_until([&] {
+                    auto read = server.value()->read_request(&request, request_id);
+                    return read && read.value() && request == expected;
+                }))
+                return 11;
+            if (!server.value()->write_response(request_id, &request)) return 12;
+        } else {
+            auto client = node.value()->create_client(service_type, kService, dmw::Qos{});
+            if (!client) return 13;
+            const auto timeout = dmw::WaitTimeout::finite(std::chrono::seconds(10));
+            if (!timeout) return 14;
+            const auto available = client.value()->wait_for_service(timeout.value());
+            if (!available || !available.value()) return 15;
+            const auto request_id = client.value()->write_request(&expected);
+            if (!request_id) return 16;
+            std::string response;
+            dmw::RequestId response_id;
+            if (!wait_until([&] {
+                    auto read = client.value()->read_response(&response, response_id);
+                    return read && read.value() && response == expected && response_id == request_id.value();
+                }))
+                return 17;
+        }
     }
     return 0;
 }
