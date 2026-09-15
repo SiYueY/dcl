@@ -201,6 +201,17 @@ if(BUILD_TESTING)
                 TIMEOUT 30
         )
 
+        add_executable(dmw_lifecycle_stress_test test/lifecycle_stress_test.cpp)
+        target_link_libraries(dmw_lifecycle_stress_test PRIVATE dmw::fastdds_binding)
+        add_test(NAME dmw.lifecycle_stress COMMAND dmw_lifecycle_stress_test)
+        set_tests_properties(
+            dmw.lifecycle_stress
+            PROPERTIES
+                ENVIRONMENT "DMW_ENABLE_DDS_INTEGRATION=1"
+                LABELS "integration;stress"
+                TIMEOUT 30
+        )
+
         find_package(rclcpp QUIET)
         find_package(std_msgs QUIET)
         find_package(example_interfaces QUIET)
