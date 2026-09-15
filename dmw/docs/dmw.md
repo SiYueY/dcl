@@ -244,7 +244,7 @@ GraphEventOptions
 MessageType / ServiceType / ActionType
 Qos / QosDuration
 Gid / RequestId / MessageInfo
-GoalId / GoalInfo / GoalState / GoalEvent
+GoalId / GoalInfo / GoalState / GoalEvent / GoalAcceptMode
 GoalStatusInfo / CancelGoalCriteria
 ActionClientReadySet / ActionServerReadySet
 GraphRevision / GraphSnapshot / GraphChangeInfo
@@ -1081,7 +1081,7 @@ struct GoalInfo
 
 该时间与 Timer 的 steady-clock deadline 完全分离。
 
-### 11.5 GoalState / GoalEvent
+### 11.5 GoalState / GoalEvent / GoalAcceptMode
 
 ```cpp
 enum class GoalState
@@ -1102,6 +1102,12 @@ enum class GoalEvent
     Succeed,
     Abort,
     Canceled
+};
+
+enum class GoalAcceptMode
+{
+    Defer,
+    Execute
 };
 ```
 
@@ -1132,6 +1138,8 @@ Succeeded
 Canceled
 Aborted
 ```
+
+`GoalAcceptMode::Defer` 表示 accepted 后保持 `Accepted`；`GoalAcceptMode::Execute` 表示 accepted transaction commit 后立即执行 `Accepted -> Executing`。
 
 ### 11.6 Goal registry authority
 
@@ -1267,9 +1275,13 @@ public:
     ~ActionServer() noexcept;
 
     Result<bool> read_goal_request(void* request, RequestId& request_id);
+
+    // Raw response path is for rejected goals only. Accepted responses must
+    // use accept_goal() so the transport response and Goal registry commit
+    // form one DMW transaction.
     Result<void> write_goal_response(
         const RequestId& request_id,
-        const void* response);
+        const void* rejected_response);
 
     Result<bool> read_cancel_request(void* request, RequestId& request_id);
     Result<void> write_cancel_response(
@@ -1288,8 +1300,12 @@ public:
 
     std::string_view action_name() const noexcept;
 
-    // common-state API
-    Result<void> accept_goal(const GoalInfo& goal_info);
+    Result<GoalTransition> accept_goal(
+        const RequestId& request_id,
+        const GoalInfo& goal_info,
+        const void* accepted_response,
+        GoalAcceptMode mode);
+
     Result<GoalState> goal_state(const GoalId& goal_id) const;
     Result<GoalTransition> update_goal_state(
         const GoalId& goal_id,
@@ -1316,6 +1332,8 @@ public:
 
 传输 message 与 Goal common metadata 分离是刻意设计：DMW 不解析任意 action-specific C++ object layout。
 
+`write_goal_response()` 的 `rejected_response` 必须表示 rejected/non-accepted SendGoal response。由于 DMW 不解析 action-specific typed response layout，这一点是 Client Library/type-adapter 的 programming contract。任何 accepted response 都必须走 `accept_goal()`。
+
 ### 11.13 Goal accept transaction boundary
 
 标准 server flow：
@@ -1323,24 +1341,52 @@ public:
 ```text
 read_goal_request(raw request, RequestId)
         ↓
-Client Library 从 typed request 提取 GoalId
+Client Library 从 typed request 提取 GoalInfo
         ↓
 user goal callback
-        ├── reject -> write_goal_response()
-        └── accept ->
-                write accepted response
-                + accept_goal(GoalInfo)
-                + optional Execute transition
+        ├── reject
+        │     ↓
+        │  write_goal_response(request_id, rejected_response)
+        │
+        └── accept/defer-or-execute
+              ↓
+          accept_goal(
+              request_id,
+              goal_info,
+              accepted_response,
+              GoalAcceptMode)
 ```
 
-为避免“client 已收到 accepted，但 DMW 未注册 goal”，Client Library 实现必须按以下顺序：
+`accept_goal()` 是 **DMW public transaction boundary**，不得由 dclcpp/dclpy 拆成“先写 accepted response，再调用另一个 Goal registry API”。事务语义固定为：
 
-1. 完成 `accept_goal()` 的预验证；
-2. 构造 accepted response；
-3. write response；
-4. commit accepted Goal state；
+1. 参数、Context、ActionServer 和 `RequestId` state 校验；
+2. 验证 GoalId 尚未存在；
+3. 在 ActionServer state 同步域内预留 GoalId，并预先分配/准备 GoalRecord、status/expiry bookkeeping 等成功写响应后 commit 所需的全部本地资源；
+4. 写 accepted SendGoal response；
+5. response write 失败：撤销 Goal reservation，不产生 public GoalRecord，不改变 Goal FSM；底层 SendGoal request 的 retryability 按 Service response failure contract 处理；
+6. response write 成功：以 **no-fail / no-allocation local commit** 把预留 GoalRecord 发布为 `Accepted`；
+7. `GoalAcceptMode::Execute` 在同一 Action state transaction 中继续执行 `Accepted -> Executing`；`Defer` 保持 `Accepted`；
+8. 返回最终 `GoalTransition`。
 
-DMW 实现应提供内部 transaction helper，使 `dclcpp` / `_dclpy` wrapper 可以把第 1～4 步组合成一次安全操作；本文保留上述基础 primitives 以维持 type-erased boundary。实现不得在 write failure 后遗留对外可见的 half-accepted Goal。
+关键不变量：
+
+```text
+accepted response observable on wire
+    =>
+corresponding GoalRecord is committed locally
+```
+
+以及：
+
+```text
+accept_goal() returns failure before successful response write
+    =>
+no public GoalRecord remains
+```
+
+response 成功写出以后不得再执行可能失败的 heap allocation、registry insertion 或其它会使本地 commit 失败的步骤；这些资源必须在第 3 步完成 reservation/preparation。这样 DMW 不会形成“client 已观察 accepted，但本地没有 Goal”的 half-accepted state。
+
+上层 user callback 只决定 Reject / AcceptAndDefer / AcceptAndExecute policy；accepted transport commit 与 Goal state commit 只有 DMW 一个 authority。
 
 ### 11.14 CancelGoalCriteria
 
@@ -1713,7 +1759,7 @@ GuardCondition 使用 coalesced pending-trigger semantics：
 - WaitSet 报告 ready 时消费该次 logical trigger；
 - concurrent trigger/consume 不得丢新 trigger。
 
-Fast DDS/native wake 是 notification mechanism；实现必须先确保 logical state 与 native trigger 的提交顺序不会产生 lost wakeup。若 native GuardCondition trigger API 返回失败，`trigger()` 返回 `DDSError`，本次 trigger 不得伪装成 success。DMW 不再通过永久固定 100 ms polling slice 掩盖有效 Fast DDS GuardCondition 的错误。
+Fast DDS/native wake 是 notification mechanism；实现必须先确保 logical state 与 native trigger 的提交顺序不会产生 lost wakeup。若 native GuardCondition trigger API 返回失败，`trigger()` 返回 `DDSError`，本次 trigger 不得伪装成 success。DMW 不使用固定周期 polling 来掩盖有效 Fast DDS GuardCondition 的错误。
 
 ### 13.9 Event
 
@@ -1863,6 +1909,8 @@ ActionServer Goal registry / pending result table / expiry state 使用同一逻
 
 同 GoalId 的并发 transition：只有第一个合法 transition 成功；后续按新 state 验证。
 
+`accept_goal()` 与同一 ActionServer 的其它 Goal-registry / SendGoal-response operation 必须在线性化的 Action state transaction 中执行；Goal reservation 对其它线程不可见为 accepted Goal，直到 response write 成功并完成 no-fail commit。
+
 status snapshot 必须来自一致 state snapshot。
 
 ### 15.5 shutdown concurrency
@@ -1939,7 +1987,7 @@ Client request 写入前把 response reader GUID 放入 request related identity
 
 当 response target identity 表示 Client response reader 时，Server response writer 必须等待对应 reader matched 或确认目标已消失。
 
-**该等待时长不是 100 ms 的 DMW public constant。**
+该等待时长不是 DMW public hard-coded constant。
 
 Fast DDS 实现应参考 `rmw_fastrtps` Jazzy：从 effective response-writer reliability QoS 的 `max_blocking_time` 派生 absolute steady deadline。Humble/2.6.x path 必须通过 interoperability regression 验证。
 
@@ -2144,14 +2192,20 @@ Context shutdown
 GraphEvent destruction while registered
 ```
 
-### 18.5 Action Goal FSM tests
+### 18.5 Action Goal FSM / accept-transaction tests
 
 完整验证 transition table，包括所有非法 transition。
 
 必须覆盖：
 
 ```text
-accept duplicate GoalId
+reject response does not create GoalRecord
+accept_goal duplicate GoalId -> AlreadyExists
+accepted response write failure -> Goal reservation rolled back
+accepted response write success -> GoalRecord always committed
+no allocation/failable local step after accepted response write
+GoalAcceptMode::Defer -> Accepted
+GoalAcceptMode::Execute -> Executing
 Accepted -> Executing
 Accepted -> Canceling
 Executing -> Canceling
@@ -2159,6 +2213,7 @@ Executing -> Succeeded/Aborted
 Canceling -> Succeeded/Aborted/Canceled
 terminal transition rejection
 multiple goals
+concurrent accept same GoalId -> exactly one transaction succeeds
 concurrent transition same GoalId
 status snapshot consistency
 ```
@@ -2198,7 +2253,7 @@ ActionClient 一个 registration 必须正确报告五种子通道 readiness；A
 
 ### 18.9 ROS interoperability regression
 
-Jazzy 是新设计主要验证环境；Humble 是兼容性验证环境。
+Jazzy/Fast DDS 2.14.x 用于验证当前 peer reference line；Humble/Fast DDS 2.6.x 用于验证持续兼容性。两套环境都属于 DMW 的持续验证矩阵，不用 CI 命名表达上游参考优先级。
 
 分别覆盖 Topic / Service / Action 双向 interoperability。
 
@@ -2273,32 +2328,34 @@ Jazzy 是新设计主要验证环境；Humble 是兼容性验证环境。
 43. ActionClient/Server 作为 aggregate waitable，各使用一个 registration token。
 44. Action availability 由同一 DiscoveryGraph authority 计算。
 45. dclcpp/dclpy 不重新组合 3 Service + 2 Topic 建第二套协议。
+46. accepted SendGoal response 与 Goal registry commit 必须通过 `ActionServer::accept_goal()` 形成单一 DMW transaction；raw `write_goal_response()` 只用于 rejected response。
+47. accepted response 写出后的本地 Goal commit 必须 no-fail/no-allocation；write 失败必须 rollback reservation。
 
 ### 19.8 Graph
 
-46. GraphSnapshot/GraphEvent authority 位于 DMW DiscoveryGraph。
-47. dclcpp/dclpy 不建立独立 discovery cache。
-48. V1 Graph 只公开可可靠从 DDS discovery 获得/组合的信息。
-49. V1 不从 Participant name 猜测 ROS Node identity。
+48. GraphSnapshot/GraphEvent authority 位于 DMW DiscoveryGraph。
+49. dclcpp/dclpy 不建立独立 discovery cache。
+50. V1 Graph 只公开可可靠从 DDS discovery 获得/组合的信息。
+51. V1 不从 Participant name 猜测 ROS Node identity。
 
 ### 19.9 WaitSet
 
-50. WaitSet 在 DMW；Executor 在 Client Library。
-51. Timer/Action/GraphEvent 使用同一 WaitSet authority。
-52. Finite timeout 使用 steady-clock absolute deadline。
-53. topology wake 不重置 timeout。
-54. 正常路径不使用固定 100 ms polling slice。
-55. WaitSet 不拥有 registered waitable。
-56. registered waitable destructor 自动 detach。
+52. WaitSet 在 DMW；Executor 在 Client Library。
+53. Timer/Action/GraphEvent 使用同一 WaitSet authority。
+54. Finite timeout 使用 steady-clock absolute deadline。
+55. topology wake 不重置 timeout。
+56. 正常路径不使用固定周期 polling slice。
+57. WaitSet 不拥有 registered waitable。
+58. registered waitable destructor 自动 detach。
 
 ### 19.10 ROS 2 compatibility
 
-57. Topic 使用 ROS 2 `rt/` mapping。
-58. Service 使用 `rq/...Request` / `rr/...Reply` mapping。
-59. Service correlation 使用 SampleIdentity/related_sample_identity。
-60. response-reader wait timeout 从 effective response-writer QoS 派生，不是 public 100 ms 常量。
-61. Action logical suffix 使用 `/_action/send_goal`、`cancel_goal`、`get_result`、`feedback`、`status`。
-62. Wire compatibility 与完整 ROS Graph compatibility 分离。
+59. Topic 使用 ROS 2 `rt/` mapping。
+60. Service 使用 `rq/...Request` / `rr/...Reply` mapping。
+61. Service correlation 使用 SampleIdentity/related_sample_identity。
+62. response-reader wait timeout 从 effective response-writer QoS 派生，不是 public hard-coded constant。
+63. Action logical suffix 使用 `/_action/send_goal`、`cancel_goal`、`get_result`、`feedback`、`status`。
+64. Wire compatibility 与完整 ROS Graph compatibility 分离。
 
 ## 20. 结论
 
