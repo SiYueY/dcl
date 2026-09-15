@@ -158,6 +158,22 @@ int main() {
     assert(generated);
     assert(generated.value().type_name() == "dmw.test.NamedTopicDataType");
 
+    // A DDS Topic owns its name and wire type; endpoint QoS belongs to the
+    // DataWriter or DataReader.  A reliable writer and best-effort reader are
+    // therefore allowed to share the same Topic object.
+    {
+        dmw::Qos reliable_qos;
+        reliable_qos.reliable();
+        dmw::Qos best_effort_qos;
+        best_effort_qos.best_effort();
+        auto reliable_publisher = node.value()->create_publisher(
+            generated.value(), "endpoint_qos_is_not_topic_qos", reliable_qos);
+        assert(reliable_publisher);
+        auto best_effort_subscriber = node.value()->create_subscriber(
+            generated.value(), "endpoint_qos_is_not_topic_qos", best_effort_qos);
+        assert(best_effort_subscriber);
+    }
+
     {
         dmw::ContextOptions writer_context_options;
         writer_context_options.participant_name = "dmw-cross-context-writer";
@@ -793,10 +809,9 @@ int main() {
     assert(conflict_publisher);
     dmw::Qos conflicting_topic_qos;
     conflicting_topic_qos.reliable();
-    auto incompatible_subscriber = conflict_node.value()->create_subscriber(
+    auto differently_configured_subscriber = conflict_node.value()->create_subscriber(
         generated.value(), "fingerprint", conflicting_topic_qos);
-    assert(!incompatible_subscriber);
-    assert(incompatible_subscriber.error().code() == dmw::ErrorCode::DDSError);
+    assert(differently_configured_subscriber);
 
     auto null_result = dmw::fastdds::MessageTypeAdapter::create({}, typeid(NamedTopicDataType));
     assert(!null_result);

@@ -25,20 +25,6 @@ namespace dmw {
 
 namespace {
 
-bool same_duration(QosDuration left, QosDuration right) noexcept {
-    return left.kind() == right.kind() &&
-           (left.kind() != QosDuration::Kind::Finite || left.value() == right.value());
-}
-
-bool same_topic_qos(const Qos& left, const Qos& right) noexcept {
-    return left.history() == right.history() && left.depth() == right.depth() &&
-           left.reliability() == right.reliability() && left.durability() == right.durability() &&
-           left.liveliness() == right.liveliness() &&
-           same_duration(left.deadline(), right.deadline()) &&
-           same_duration(left.lifespan(), right.lifespan()) &&
-           same_duration(left.liveliness_lease_duration(), right.liveliness_lease_duration());
-}
-
 class ParticipantCreationGuard {
 public:
     ParticipantCreationGuard(
@@ -392,7 +378,7 @@ Result<TypeRegistration> Context::acquire_type(const MessageType& type) {
 }
 
 Result<Topic> Context::acquire_topic(
-    const MessageType& type, const std::string& dds_topic_name, const Qos& qos) {
+    const MessageType& type, const std::string& dds_topic_name, const Qos&) {
     const std::string type_name(type.type_name());
     auto type_registration = acquire_type(type);
     if (!type_registration) return Result<Topic>::failure(std::move(type_registration.error()));
@@ -407,18 +393,13 @@ Result<Topic> Context::acquire_topic(
             }
             const auto topic_it = topics_.find(dds_topic_name);
             if (topic_it == topics_.end()) {
-                topics_.emplace(dds_topic_name, RegisteredTopic(type_name, qos));
+                topics_.emplace(dds_topic_name, RegisteredTopic(type_name));
                 create_topic = true;
                 break;
             }
             if (topic_it->second.wire_type_name != type_name) {
                 return Result<Topic>::failure(
                     Error(ErrorCode::TypeMismatch, "DDS topic already has a different wire type"));
-            }
-            if (!same_topic_qos(topic_it->second.qos, qos)) {
-                topic_registry_degraded_ = true;
-                return Result<Topic>::failure(
-                    Error(ErrorCode::DDSError, "DDS topic has conflicting canonical QoS"));
             }
             if (topic_it->second.phase == RegistryEntryPhase::Active) {
                 ++topic_it->second.endpoint_reference_count;

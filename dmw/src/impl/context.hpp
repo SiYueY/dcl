@@ -104,11 +104,9 @@ private:
     };
 
     struct RegisteredTopic {
-        RegisteredTopic(std::string type_name, Qos value)
-        : wire_type_name(std::move(type_name)), qos(std::move(value)) {}
+        explicit RegisteredTopic(std::string type_name) : wire_type_name(std::move(type_name)) {}
 
         std::string wire_type_name;
-        Qos qos;
         eprosima::fastdds::dds::Topic* topic{nullptr};
         RegistryEntryPhase phase{RegistryEntryPhase::Creating};
         std::size_t endpoint_reference_count{0};
