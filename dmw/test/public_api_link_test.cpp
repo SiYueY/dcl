@@ -27,6 +27,7 @@ int main() {
     [[maybe_unused]] auto request = &dmw::Client::write_request;
     [[maybe_unused]] auto response = &dmw::Client::read_response;
     [[maybe_unused]] auto availability = &dmw::Client::service_is_available;
+    [[maybe_unused]] auto wait_for_service = &dmw::Client::wait_for_service;
     [[maybe_unused]] auto server_take = &dmw::Server::read_request;
     [[maybe_unused]] auto server_response = &dmw::Server::write_response;
 

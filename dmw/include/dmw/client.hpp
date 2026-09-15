@@ -8,6 +8,7 @@
 #include "dmw/request_id.hpp"
 #include "dmw/result.hpp"
 #include "dmw/visibility_control.hpp"
+#include "dmw/wait_timeout.hpp"
 
 namespace dmw {
 
@@ -34,6 +35,9 @@ public:
 
     /// Return a snapshot without combining endpoints from different participants.
     Result<bool> service_is_available() const;
+
+    /// Block until this service is available, the timeout expires, or Context shuts down.
+    Result<bool> wait_for_service(WaitTimeout timeout) const;
     std::string_view service_name() const noexcept;
 
 private:

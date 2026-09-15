@@ -2,6 +2,7 @@
 #define DMW_IMPL__SUBSCRIBER_IMPL_HPP_
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include <fastdds/dds/subscriber/DataReader.hpp>
@@ -10,6 +11,7 @@
 #include "impl/event_parent_state.hpp"
 #include "impl/context.hpp"
 #include "impl/reader_wait_state.hpp"
+#include "impl/temporary_sample.hpp"
 
 namespace dmw {
 
@@ -44,6 +46,8 @@ private:
     std::shared_ptr<impl::ReaderWaitState> wait_state_;
     std::shared_ptr<impl::EventParentState> event_parent_;
     impl::Topic topic_;
+    std::mutex read_mutex_;
+    std::unique_ptr<impl::TemporarySample> receive_scratch_;
 };
 
 }  // namespace dmw

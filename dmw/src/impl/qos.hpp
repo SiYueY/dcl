@@ -41,15 +41,19 @@ inline Result<eprosima::fastrtps::Duration_t> to_duration(QosDuration duration) 
 }
 
 template <class QosT>
-Result<void> to_qos(const Qos& source, RuntimeMode runtime_mode, QosT& qos) {
+void apply_ros2_compatibility_defaults(QosT& qos) noexcept {
     using namespace eprosima::fastdds::dds;
 
-    if (runtime_mode == RuntimeMode::ROS2) {
-        qos.history().kind = KEEP_LAST_HISTORY_QOS;
-        qos.history().depth = 10;
-        qos.reliability().kind = RELIABLE_RELIABILITY_QOS;
-        qos.durability().kind = VOLATILE_DURABILITY_QOS;
-    }
+    qos.history().kind = KEEP_LAST_HISTORY_QOS;
+    qos.history().depth = 10;
+    qos.reliability().kind = RELIABLE_RELIABILITY_QOS;
+    qos.durability().kind = VOLATILE_DURABILITY_QOS;
+}
+
+/// Apply only middleware-neutral DMW QoS fields to a concrete DDS endpoint QoS.
+template <class QosT>
+Result<void> apply_neutral_qos(const Qos& source, QosT& qos) {
+    using namespace eprosima::fastdds::dds;
 
     if (source.history() == HistoryPolicy::KeepLast) {
         if (source.depth() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
@@ -97,34 +101,42 @@ Result<void> to_qos(const Qos& source, RuntimeMode runtime_mode, QosT& qos) {
     return Result<void>::success();
 }
 
+inline void apply_ros2_writer_implementation_policy(
+    eprosima::fastdds::dds::DataWriterQos& qos) noexcept {
+    qos.endpoint().history_memory_policy =
+        eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
+    qos.publish_mode().kind = eprosima::fastrtps::SYNCHRONOUS_PUBLISH_MODE;
+    qos.data_sharing().off();
+    // This is a frozen rmw_fastrtps compatibility value, not a public DMW QoS policy.
+    qos.reliability().max_blocking_time = eprosima::fastrtps::Duration_t(0, 100000000U);
+}
+
+inline void apply_ros2_reader_implementation_policy(
+    eprosima::fastdds::dds::DataReaderQos& qos) noexcept {
+    qos.endpoint().history_memory_policy =
+        eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
+    qos.data_sharing().off();
+}
+
 inline Result<eprosima::fastdds::dds::DataWriterQos> to_writer_qos(
     const Qos& source, RuntimeMode runtime_mode) {
     auto qos = eprosima::fastdds::dds::DATAWRITER_QOS_DEFAULT;
-    auto result = to_qos(source, runtime_mode, qos);
+    if (runtime_mode == RuntimeMode::ROS2) apply_ros2_compatibility_defaults(qos);
+    auto result = apply_neutral_qos(source, qos);
     if (!result)
         return Result<eprosima::fastdds::dds::DataWriterQos>::failure(std::move(result.error()));
-    if (runtime_mode == RuntimeMode::ROS2) {
-        qos.endpoint().history_memory_policy =
-            eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
-        qos.publish_mode().kind = eprosima::fastrtps::SYNCHRONOUS_PUBLISH_MODE;
-        qos.data_sharing().off();
-        // This is a frozen rmw_fastrtps compatibility value, not a public DMW QoS policy.
-        qos.reliability().max_blocking_time = eprosima::fastrtps::Duration_t(0, 100000000U);
-    }
+    if (runtime_mode == RuntimeMode::ROS2) apply_ros2_writer_implementation_policy(qos);
     return Result<eprosima::fastdds::dds::DataWriterQos>::success(std::move(qos));
 }
 
 inline Result<eprosima::fastdds::dds::DataReaderQos> to_reader_qos(
     const Qos& source, RuntimeMode runtime_mode) {
     auto qos = eprosima::fastdds::dds::DATAREADER_QOS_DEFAULT;
-    auto result = to_qos(source, runtime_mode, qos);
+    if (runtime_mode == RuntimeMode::ROS2) apply_ros2_compatibility_defaults(qos);
+    auto result = apply_neutral_qos(source, qos);
     if (!result)
         return Result<eprosima::fastdds::dds::DataReaderQos>::failure(std::move(result.error()));
-    if (runtime_mode == RuntimeMode::ROS2) {
-        qos.endpoint().history_memory_policy =
-            eprosima::fastrtps::rtps::PREALLOCATED_WITH_REALLOC_MEMORY_MODE;
-        qos.data_sharing().off();
-    }
+    if (runtime_mode == RuntimeMode::ROS2) apply_ros2_reader_implementation_policy(qos);
     return Result<eprosima::fastdds::dds::DataReaderQos>::success(std::move(qos));
 }
 

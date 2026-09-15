@@ -166,10 +166,11 @@ int main() {
         (void)ros_service;
         auto dmw_client = node.value()->create_client(service_type, kDmwClientService, dmw::Qos{});
         assert(dmw_client);
-        assert(wait_until([&] {
-            auto available = dmw_client.value()->service_is_available();
-            return available && available.value();
-        }));
+        auto service_timeout = dmw::WaitTimeout::finite(std::chrono::seconds(5));
+        assert(service_timeout);
+        auto available = dmw_client.value()->wait_for_service(service_timeout.value());
+        assert(available);
+        assert(available.value());
 
         Request request;
         request.a = 3;

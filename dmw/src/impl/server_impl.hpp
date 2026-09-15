@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <mutex>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -14,6 +15,7 @@
 #include "impl/context.hpp"
 #include "impl/reader_wait_state.hpp"
 #include "impl/response.hpp"
+#include "impl/temporary_sample.hpp"
 
 namespace dmw {
 
@@ -85,6 +87,8 @@ private:
     std::shared_ptr<impl::ResponseState> response_state_;
     std::unique_ptr<impl::ResponseWriterListener> response_listener_;
     std::shared_ptr<impl::ReaderWaitState> request_wait_state_;
+    std::mutex request_read_mutex_;
+    std::unique_ptr<impl::TemporarySample> request_scratch_;
     impl::Topic request_topic_;
     impl::Topic response_topic_;
     impl::RankedMutex<impl::LockRank::PendingRequest> pending_mutex_;

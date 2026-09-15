@@ -67,6 +67,7 @@ Result<bool> Server::Impl::read_request(void* request, RequestId& request_id) {
     const auto operation = context_->try_acquire_operation();
     if (!operation)
         return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    std::lock_guard read_lock(request_read_mutex_);
     auto remaining = request_reader_->get_unread_count();
     while (remaining-- != 0U) {
         bool became_full = false;
@@ -75,13 +76,16 @@ Result<bool> Server::Impl::read_request(void* request, RequestId& request_id) {
                 ErrorCode::ResourceExhausted, "Server pending request capacity is exhausted"));
         if (became_full) request_wait_state_->set_blocking_enabled(false);
 
-        auto sample = impl::TemporarySample::create(request_type_);
-        if (!sample) {
-            if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
-            return Result<bool>::failure(std::move(sample.error()));
+        if (!request_scratch_) {
+            auto sample = impl::TemporarySample::create(request_type_);
+            if (!sample) {
+                if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
+                return Result<bool>::failure(std::move(sample.error()));
+            }
+            request_scratch_ = std::make_unique<impl::TemporarySample>(std::move(sample.value()));
         }
         eprosima::fastdds::dds::SampleInfo info;
-        const auto result = request_reader_->take_next_sample(sample.value().data(), &info);
+        const auto result = request_reader_->take_next_sample(request_scratch_->data(), &info);
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_NO_DATA) {
             if (release_request_reservation()) request_wait_state_->set_blocking_enabled(true);
             return Result<bool>::success(false);
@@ -124,7 +128,7 @@ Result<bool> Server::Impl::read_request(void* request, RequestId& request_id) {
         if (!inserted) continue;
 
         try {
-            auto committed = sample.value().commit_to(request);
+            auto committed = request_scratch_->commit_to(request);
             if (committed) {
                 request_id = *id;
                 return Result<bool>::success(true);

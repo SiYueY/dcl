@@ -37,9 +37,10 @@ Result<void> Publisher::Impl::write(const void* message) {
     const auto operation = context_->try_acquire_operation();
     if (!operation)
         return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
-    if (!writer_->write(const_cast<void*>(message))) {
-        return Result<void>::failure(Error(ErrorCode::DDSError, "Fast DDS write failed"));
-    }
+    const auto result = writer_->write(
+        const_cast<void*>(message), eprosima::fastdds::dds::HANDLE_NIL);
+    if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
+        return Result<void>::failure(impl::to_error(result, "Fast DDS DataWriter write failed"));
     return Result<void>::success();
 }
 

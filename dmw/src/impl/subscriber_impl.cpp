@@ -62,19 +62,23 @@ Result<bool> Subscriber::Impl::read(void* message, MessageInfo& info) {
     const auto operation = context_->try_acquire_operation();
     if (!operation)
         return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    std::lock_guard read_lock(read_mutex_);
     auto remaining = reader_->get_unread_count();
     while (remaining-- != 0U) {
-        auto sample = impl::TemporarySample::create(type_);
-        if (!sample) return Result<bool>::failure(std::move(sample.error()));
+        if (!receive_scratch_) {
+            auto sample = impl::TemporarySample::create(type_);
+            if (!sample) return Result<bool>::failure(std::move(sample.error()));
+            receive_scratch_ = std::make_unique<impl::TemporarySample>(std::move(sample.value()));
+        }
         eprosima::fastdds::dds::SampleInfo sample_info;
-        const auto result = reader_->take_next_sample(sample.value().data(), &sample_info);
+        const auto result = reader_->take_next_sample(receive_scratch_->data(), &sample_info);
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_NO_DATA)
             return Result<bool>::success(false);
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
             return Result<bool>::failure(impl::to_error(result, "Fast DDS take failed"));
         if (!sample_info.valid_data) continue;
 
-        auto committed = sample.value().commit_to(message);
+        auto committed = receive_scratch_->commit_to(message);
         if (!committed) return Result<bool>::failure(std::move(committed.error()));
 
         MessageInfo updated;

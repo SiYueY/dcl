@@ -17,6 +17,11 @@
 namespace dmw {
 
 Client::Impl::~Impl() noexcept {
+    service_subscription_.close_and_drain();
+    if (shutdown_callback_id_ != 0) {
+        context_->unregister_shutdown_callback(shutdown_callback_id_);
+        shutdown_callback_id_ = 0;
+    }
     if (response_reader_ != nullptr) {
         bool listener_detached = false;
         try {
@@ -91,14 +96,16 @@ Result<bool> Client::Impl::read_response(void* response, RequestId& request_id) 
     const auto operation = context_->try_acquire_operation();
     if (!operation)
         return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    std::lock_guard read_lock(response_read_mutex_);
     auto remaining = response_reader_->get_unread_count();
     while (remaining-- != 0U) {
-        auto sample = impl::TemporarySample::create(response_type_);
-        if (!sample) {
-            return Result<bool>::failure(std::move(sample.error()));
+        if (!response_scratch_) {
+            auto sample = impl::TemporarySample::create(response_type_);
+            if (!sample) return Result<bool>::failure(std::move(sample.error()));
+            response_scratch_ = std::make_unique<impl::TemporarySample>(std::move(sample.value()));
         }
         eprosima::fastdds::dds::SampleInfo info;
-        const auto result = response_reader_->take_next_sample(sample.value().data(), &info);
+        const auto result = response_reader_->take_next_sample(response_scratch_->data(), &info);
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_NO_DATA)
             return Result<bool>::success(false);
         if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
@@ -110,7 +117,7 @@ Result<bool> Client::Impl::read_response(void* response, RequestId& request_id) 
         }
         const auto response_id = impl::to_request_id(info.related_sample_identity);
         if (!response_id) continue;
-        auto committed = sample.value().commit_to(response);
+        auto committed = response_scratch_->commit_to(response);
         if (!committed) {
             return Result<bool>::failure(std::move(committed.error()));
         }
@@ -136,6 +143,40 @@ Result<bool> Client::Impl::service_is_available() const {
         // registries are inspected.  Keep allocation failure inside Result.
         return Result<bool>::failure(
             Error(ErrorCode::ResourceExhausted, "Service availability snapshot allocation failed"));
+    }
+}
+
+Result<bool> Client::Impl::wait_for_service(WaitTimeout timeout) const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation)
+        return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+
+    const auto deadline = timeout.kind() == WaitTimeout::Kind::Finite
+                              ? std::chrono::steady_clock::now() + timeout.duration()
+                              : std::chrono::steady_clock::time_point::max();
+    auto state = service_wait_state_;
+    std::unique_lock lock(state->mutex);
+    while (true) {
+        const auto observed_revision = state->revision.load(std::memory_order_acquire);
+        auto available = service_is_available();
+        if (!available || available.value() || timeout.kind() == WaitTimeout::Kind::Poll)
+            return available;
+        if (context_->is_shutdown()) {
+            return Result<bool>::failure(
+                Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        }
+        if (timeout.kind() == WaitTimeout::Kind::Finite) {
+            if (std::chrono::steady_clock::now() >= deadline) return Result<bool>::success(false);
+            state->cv.wait_until(lock, deadline, [&] {
+                return context_->is_shutdown() ||
+                       state->revision.load(std::memory_order_acquire) != observed_revision;
+            });
+        } else {
+            state->cv.wait(lock, [&] {
+                return context_->is_shutdown() ||
+                       state->revision.load(std::memory_order_acquire) != observed_revision;
+            });
+        }
     }
 }
 

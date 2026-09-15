@@ -22,4 +22,8 @@ Result<bool> Client::read_response(void* response, RequestId& request_id) {
 
 Result<bool> Client::service_is_available() const { return impl_->service_is_available(); }
 
+Result<bool> Client::wait_for_service(WaitTimeout timeout) const {
+    return impl_->wait_for_service(timeout);
+}
+
 }  // namespace dmw
