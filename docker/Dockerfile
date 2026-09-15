@@ -21,8 +21,9 @@
 #
 # Runtime contract:
 #     The repository is not copied into the image. docker.sh bind-mounts it at
-#     /workspace and runs the container with the host user's UID/GID.
-#     docker.sh supplies HOME, ROS_DOMAIN_ID, and host networking at runtime.
+#     /workspace/dcl and supplies the host user's UID/GID to the entry point.
+#     The entry point records that disposable runtime identity before dropping
+#     privileges. docker.sh supplies HOME, ROS_DOMAIN_ID, and host networking.
 #     Optional GUI sessions forward the host X11 display. DDS integration tests
 #     additionally force Fast DDS builtin transport to UDPv4.
 #
@@ -62,6 +63,8 @@ RUN apt-get update \
         python3-colcon-common-extensions \
         python3-rosdep \
         python3-vcstool \
+        passwd \
+        util-linux \
         xvfb \
         "ros-${ROS_DISTRO}-fastrtps" \
         "ros-${ROS_DISTRO}-rclcpp" \
@@ -71,6 +74,10 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /workspace
+COPY entrypoint.sh /usr/local/bin/dcl-entrypoint
+RUN chmod 0755 /usr/local/bin/dcl-entrypoint
 
+WORKDIR /workspace/dcl
+
+ENTRYPOINT ["/usr/local/bin/dcl-entrypoint"]
 CMD ["bash"]

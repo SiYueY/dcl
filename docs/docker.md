@@ -30,6 +30,7 @@ DCL/
 ├── docker/
 │   ├── Dockerfile
 │   ├── docker.sh
+│   ├── entrypoint.sh
 │   ├── humble.sh
 │   └── jazzy.sh
 └── docs/
@@ -42,6 +43,7 @@ DCL/
 | --- | --- |
 | `docker/Dockerfile` | 定义 Humble/Jazzy 共用的开发镜像内容 |
 | `docker/docker.sh` | Docker 公共实现，负责镜像、容器、构建和测试 |
+| `docker/entrypoint.sh` | 在容器内映射宿主 UID/GID，随后降权执行请求命令 |
 | `docker/humble.sh` | Humble / Ubuntu 22.04 公开入口 |
 | `docker/jazzy.sh` | Jazzy / Ubuntu 24.04 公开入口 |
 | `docs/docker.md` | Docker 环境设计与使用说明 |
@@ -120,20 +122,23 @@ configure → build → ctest
 脚本都会根据自身位置解析实际仓库根目录，并挂载到容器中的固定路径：
 
 ```text
-/workspace
+/workspace/dcl
 ```
 
 因此容器内部目录始终为：
 
 ```text
 /workspace/
-├── dclcpp/
-├── dclpy/
-├── dmw/
-├── docker/
-├── docs/
-└── ...
+└── dcl/
+    ├── dclcpp/
+    ├── dclpy/
+    ├── dmw/
+    ├── docker/
+    ├── docs/
+    └── ...
 ```
+
+`/workspace` 保留为容器内的项目父目录。需要临时添加或并行开发其他源码时，可将其挂载为 `/workspace/<project>`，而不改变 DCL 的固定工作目录。
 
 Docker 构建目录与宿主机构建目录隔离：
 
@@ -306,7 +311,7 @@ host network
 
 这些属于容器运行策略，由 `docker.sh` 统一设置。
 
-源码通过 bind mount 进入 `/workspace`。容器使用宿主机当前用户的 UID/GID 运行，从而避免 Docker 构建产物在宿主机上变成 root 所有。
+源码通过 bind mount 进入 `/workspace/dcl`。`docker.sh` 将宿主机当前用户的 UID/GID 传给容器 entry point；entry point 仅在本次可删除容器的账号数据库中补齐缺失的 passwd/group 条目，随后以该 UID/GID 执行请求命令。这样既避免 Docker 构建产物在宿主机上变成 root 所有，也保证 `whoami`、`groups` 等名称查询可用。它不会挂载宿主机的 `/etc/passwd` 或 `/etc/group`，也不会修改宿主机账号数据。
 
 每次运行容器时，`docker.sh` 使用 `mktemp` 创建独立的临时 HOME，并在脚本退出时通过 `trap` 清理。临时 HOME 不用于保存长期状态。
 
@@ -332,11 +337,13 @@ Bash 脚本应持续通过：
 ```bash
 bash -n \
     docker/docker.sh \
+    docker/entrypoint.sh \
     docker/humble.sh \
     docker/jazzy.sh
 
 shellcheck -x \
     docker/docker.sh \
+    docker/entrypoint.sh \
     docker/humble.sh \
     docker/jazzy.sh
 ```

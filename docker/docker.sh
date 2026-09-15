@@ -45,7 +45,7 @@ set -Eeuo pipefail
 readonly DEFAULT_COMMAND="shell"
 readonly DEFAULT_ROS_DOMAIN_ID="23"
 readonly FASTDDS_TRANSPORTS="UDPv4"
-readonly CONTAINER_WORKSPACE="/workspace"
+readonly CONTAINER_WORKSPACE="/workspace/dcl"
 readonly CONTAINER_HOME="/tmp/dcl-home"
 
 SCRIPT_DIR=""
@@ -631,8 +631,9 @@ ensure_image() {
 #     Propagates docker run or container-command failures.
 # Side effects:
 #     Creates TEMP_HOME_DIR when needed, starts a disposable container, mounts
-#     the repository at /workspace, uses host networking, and optionally
-#     forwards the host X11 display when --gui is enabled.
+#     the repository at /workspace/dcl, materializes the host UID/GID in the
+#     container account database, uses host networking, and optionally forwards
+#     the host X11 display when --gui is enabled.
 run_container() {
     local host_uid
     local host_gid
@@ -649,7 +650,8 @@ run_container() {
         --rm
         --init
         --network "host"
-        --user "${host_uid}:${host_gid}"
+        --env "DCL_HOST_UID=${host_uid}"
+        --env "DCL_HOST_GID=${host_gid}"
         --env "HOME=${CONTAINER_HOME}"
         --env "ROS_DOMAIN_ID=${ROS_DOMAIN_ID_VALUE}"
         --volume "${REPO_ROOT}:${CONTAINER_WORKSPACE}"
