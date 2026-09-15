@@ -182,12 +182,19 @@ if(BUILD_TESTING)
     target_link_libraries(dmw_name_test PRIVATE dmw::dmw)
     add_test(NAME dmw.name COMMAND dmw_name_test)
     set_tests_properties(dmw.name PROPERTIES LABELS "unit")
+
+    add_executable(dmw_wait_set_test test/wait_set_test.cpp)
+    target_link_libraries(dmw_wait_set_test PRIVATE dmw::dmw)
+    add_test(NAME dmw.wait_set COMMAND dmw_wait_set_test)
+    set_tests_properties(dmw.wait_set PROPERTIES LABELS "unit")
+
     if(DMW_ENABLE_DDS_INTEGRATION_TESTS)
         add_executable(dmw_interop_peer test/interop_peer.cpp)
         target_link_libraries(dmw_interop_peer PRIVATE dmw::fastdds_binding)
 
         set_tests_properties(
             dmw.message_type
+            dmw.wait_set
             PROPERTIES
                 ENVIRONMENT "DMW_ENABLE_DDS_INTEGRATION=1"
                 LABELS "unit;integration"

@@ -111,18 +111,18 @@ Result<WaitResult> WaitSet::Impl::wait(WaitTimeout timeout) {
             return Result<WaitResult>::success(WaitResult::timeout());
         }
 
-        const auto slice = std::chrono::milliseconds(100);
-        const auto wake_deadline =
-            timeout.kind() == WaitTimeout::Kind::Finite
-                ? std::min(deadline, std::chrono::steady_clock::now() + slice)
-                : std::chrono::steady_clock::now() + slice;
-        const auto remaining = wake_deadline - std::chrono::steady_clock::now();
-        if (remaining <= std::chrono::steady_clock::duration::zero()) {
-            continue;
-        }
         if (context->topology_generation() != observed_topology) continue;
-        const auto wake = context->wait_for_notification(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(remaining));
+        Result<void> wake = Result<void>::success();
+        if (timeout.kind() == WaitTimeout::Kind::Finite) {
+            const auto remaining = deadline - std::chrono::steady_clock::now();
+            if (remaining <= std::chrono::steady_clock::duration::zero()) {
+                return Result<WaitResult>::success(WaitResult::timeout());
+            }
+            wake = context->wait_for_notification(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(remaining));
+        } else {
+            wake = context->wait_for_notification();
+        }
         if (!wake) {
             return Result<WaitResult>::failure(wake.error());
         }

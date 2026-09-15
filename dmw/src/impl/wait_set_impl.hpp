@@ -289,6 +289,11 @@ public:
         registration->guard = std::move(guard);
         registration->reader = std::move(reader);
 
+        // A native wait holds native_mutex_ until the control guard wakes it.
+        // Wake before a topology mutation that may need that mutex, otherwise
+        // an infinite wait and a concurrent attach can deadlock each other.
+        wake_->notify();
+
         const std::weak_ptr<WaitSetState> weak_state = weak_from_this();
         const std::weak_ptr<Registration> weak_registration = registration;
         const auto attach = registration->claim(
@@ -367,6 +372,10 @@ public:
             return false;
         }
 
+        // See add(): release() may need native_mutex_, so wake a blocking
+        // native wait before attempting the detach.
+        wake_->notify();
+
         if (!registration->release(
                 wait_set_id_, [this](eprosima::fastdds::dds::Condition& condition) {
                     return detach_native_condition(condition);
@@ -403,6 +412,9 @@ public:
         if (registration.reader->closing.load(std::memory_order_acquire) ||
             registration.reader->reader == nullptr)
             return;
+        // Attaching or detaching a reader StatusCondition reconciles the
+        // native WaitSet and therefore must first release an infinite wait.
+        wake_->notify();
         if (!enabled) {
             if (registration.reader_condition != nullptr &&
                 !detach_native_condition(*registration.reader_condition)) {
@@ -432,6 +444,7 @@ public:
             shutdown_callback_id_ = 0;
         }
         if (shutdown_callback_id != 0) context_->unregister_shutdown_callback(shutdown_callback_id);
+        wake_->notify();
         while (true) {
             std::shared_ptr<Registration> registration;
             {
@@ -484,18 +497,12 @@ public:
         return topology_generation_.load(std::memory_order_acquire);
     }
 
-    Result<void> wait_for_notification(std::chrono::nanoseconds timeout) {
-        constexpr auto kNanosecondsPerSecond = std::chrono::nanoseconds::period::den;
-        const auto count = timeout.count();
-        const auto seconds = count / kNanosecondsPerSecond;
-        const auto nanoseconds = count % kNanosecondsPerSecond;
-        const eprosima::fastrtps::Duration_t duration(
-            static_cast<std::int32_t>(seconds), static_cast<std::uint32_t>(nanoseconds));
+    Result<void> wait_for_notification(const eprosima::fastrtps::Duration_t& timeout) {
         eprosima::fastdds::dds::ConditionSeq active_conditions;
         eprosima::fastrtps::types::ReturnCode_t result;
         {
             std::lock_guard lock(native_mutex_);
-            result = native_wait_set_.wait(active_conditions, duration);
+            result = native_wait_set_.wait(active_conditions, timeout);
         }
         (void)wake_->clear();
         if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK ||
@@ -503,6 +510,20 @@ public:
             return Result<void>::success();
         }
         return Result<void>::failure(impl::to_error(result, "Fast DDS WaitSet wait failed"));
+    }
+
+    Result<void> wait_for_notification(std::chrono::nanoseconds timeout) {
+        constexpr auto kNanosecondsPerSecond = std::chrono::nanoseconds::period::den;
+        const auto count = timeout.count();
+        const auto seconds = count / kNanosecondsPerSecond;
+        const auto nanoseconds = count % kNanosecondsPerSecond;
+        const eprosima::fastrtps::Duration_t duration(
+            static_cast<std::int32_t>(seconds), static_cast<std::uint32_t>(nanoseconds));
+        return wait_for_notification(duration);
+    }
+
+    Result<void> wait_for_notification() {
+        return wait_for_notification(eprosima::fastrtps::c_TimeInfinite);
     }
 
     Result<void> repair_control_guard_if_needed() noexcept {
