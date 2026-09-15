@@ -2,12 +2,12 @@
 
 | 属性 | 值 |
 | --- | --- |
-| 文档状态 | V1 Freeze Candidate |
-| 模块名称 | DMW — DDS Middleware Layer |
+| 文档状态 | V1 Architecture Revision Draft |
+| 模块名称 | DMW — DDS Middleware / Common Runtime Layer |
 | 上层 | `dclcpp`、`dclpy` |
 | 下层 | Fast DDS |
 | 语言标准 | C++17 |
-| ROS 2 兼容基线 | ROS 2 Humble + `rmw_fastrtps_cpp` |
+| ROS 2 兼容基线 | ROS 2 Humble / Jazzy + `rmw_fastrtps_cpp` |
 
 ## 1. 文档概述
 
@@ -17,9 +17,13 @@
 
 本文档是 DCL 项目中 `dmw` 模块 V1 的唯一公共运行时规范，定义公共 API、对象与所有权模型、生命周期、错误与并发语义，以及 ROS 2 Fast DDS wire interoperability contract。Fast DDS 专用实现规则由 [`dmw_fastdds.md`](dmw_fastdds.md) 定义；后者不得扩大、收窄或改写本文的公共契约。
 
+本文档同时定义 DMW 作为 `dclcpp` / `dclpy` 共享的 language-neutral common runtime 的职责边界。DMW 不增加独立的 `rcl` 等价包层，但会承载两种 Client Library 必须保持一致、且与具体语言运行时无关的协议、状态机、等待和兼容性语义。
+
 本文档不仅描述架构方向，还给出：
 
 > **DMW V1 可以直接进入实现阶段所需要的公共契约、生命周期规则、并发语义和 wire compatibility 规则。**
+
+当前已经实现并冻结候选的 Topic、Service、QoS、WaitSet、GuardCondition、Event 等详细契约继续有效；Timer 和 Action common runtime 是本轮架构扩展范围，其具体 public method、Factory 名称和完整状态机 API 必须在对应专项设计完成后再进入 Frozen 状态。本轮更新不得以尚未冻结的 Timer/Action API 细节反向削弱已有 DMW 契约。
 
 #### 1.1.1 阅读路径
 
@@ -28,6 +32,7 @@
 | 理解模块边界和对象关系 | [公共对象模型](#dmw-public-object-model) |
 | 实现公共 API 与生命周期 | [Factory 与 RAII](#dmw-public-object-model)、[Context runtime](#dmw-context-runtime) |
 | 实现 Topic、Service 和同步原语 | [Topic](#dmw-topic)、[Service](#dmw-service)、[WaitSet](#dmw-waitset) |
+| 理解 Timer / Action common runtime 边界 | [V1 范围与能力边界](#dmw-document-authority)、[Action common runtime](#dmw-action-runtime)、[WaitSet](#dmw-waitset) |
 | 理解 discovery、并发和 ROS 2 互操作 | [Registry 与 discovery](#dmw-registry-discovery)、[并发](#dmw-concurrency)、[ROS 2 互操作](#dmw-ros2-interop) |
 | 执行实现验收或冻结审查 | [验收](#dmw-verification)、[Frozen invariant](#dmw-frozen-invariants) |
 
@@ -54,11 +59,12 @@
 | parent | 创建并定义子实体逻辑归属的 Context、Node 或 endpoint |
 | backing/state | 用于并发安全和延迟 teardown 的内部共享状态，不改变 public ownership |
 | DDS entity | Fast DDS 创建的 Participant、Reader、Writer、Topic 或 Condition |
+| common runtime | `dclcpp` / `dclpy` 必须共享且不依赖具体语言 callback/Future/Executor 的通信协议与运行时状态 |
 | wire compatibility | DDS naming、type、QoS 和 identity 足以实现数据面互操作 |
 
 ### 1.2 DMW 定位
 
-DMW 是 DCL 的 middleware 核心层：
+DMW 是 DCL 的 middleware 与 language-neutral runtime 核心层：
 
 ```text
              dclcpp                    _dclpy
@@ -78,9 +84,11 @@ DMW 具有以下边界：
 
 - 不依赖 `rcl`、`rclcpp`、ROS 2 runtime 或 ament runtime；
 - 不支持在运行时或构建时切换到其他 DDS 实现；
-- 不额外引入 Runtime Core、实现选择层或 Protocol 等顶层抽象层。
+- 不额外引入独立 Runtime Core、实现选择层、Protocol 层或 `rcl` 等价 package；
+- 允许把适合跨语言共享的 `rcl` / `rcl_action` 类职责直接收敛到 DMW；
+- 不承担 user callback、Future、Executor scheduling、Python asyncio/GIL 等 language-specific runtime。
 
-DMW 直接使用 Fast DDS 提供 middleware primitives，但普通公共 API 不暴露 Fast DDS 类型。
+DMW 直接使用 Fast DDS 提供 middleware primitives，但普通公共 API 不暴露 Fast DDS 类型。其目标不是与 ROS 2 RMW 层一一同构，而是在 DCL 的两层架构中提供上层 Client Library 所需的稳定 common runtime，使同一协议、状态机和 readiness 语义只存在一个 authority。
 
 ### 1.3 V1 核心设计原则
 
@@ -101,10 +109,46 @@ DMW V1 冻结以下基础原则：
 13. DMW listener 不执行 user callback；
 14. DMW 提供 WaitSet，但不提供 Executor；
 15. DMW 提供 Topic 和 Service primitive；
-16. Action 不作为 DMW primitive；
-17. V1 支持 RMW 基础通信能力；
-18. V1 支持 ROS 2 Humble + Fast DDS wire interoperability；
-19. V1 不要求完整 ROS Graph compatibility。
+16. DMW 提供 Timer 和 Action 的 language-neutral common runtime，具体 Timer/Action public API 在专项设计中冻结；
+17. DMW 不提供 Future、callback 或语言级任务调度；
+18. V1 支持 RMW 基础通信能力及构建 Client Library 所需的 common runtime；
+19. V1 同一份源码持续支持 ROS 2 Humble / Fast DDS 2.6.x 与 ROS 2 Jazzy / Fast DDS 2.14.x wire interoperability 验证；
+20. V1 不要求完整 ROS Graph compatibility。
+
+### 1.4 Common Runtime 下沉规则
+
+功能满足以下条件时，应优先由 DMW 实现一次：
+
+```text
+与 C++ / Python 类型系统无关
++
+两种 Client Library 必须保持相同语义
++
+涉及协议、identity、状态机、readiness 或 shutdown/lifecycle
+```
+
+典型能力包括：
+
+```text
+Service correlation
+Service availability/wait
+Timer period/deadline/readiness
+Action endpoint composition
+Goal identity / Goal FSM
+Action goal/result/cancel correlation
+Action availability/status/result protocol state
+ROS 2 wire compatibility mapping
+```
+
+以下能力不得仅为了减少表面代码重复而下沉：
+
+```text
+std::future / Python Future
+std::function / Python callable
+Executor callback scheduling
+C++ exception presentation
+Python exception / asyncio / GIL
+```
 
 ## 2. V1 范围与能力边界
 
@@ -119,6 +163,8 @@ V1 支持：
 - shutdown
 - 一个进程创建多个 Context
 - 多 DDS Domain
+- language-neutral Timer runtime（架构范围；详细 API 待专项冻结）
+- language-neutral Action common runtime（架构范围；详细 API 待专项冻结）
 
 ### 2.2 Topic
 
@@ -147,8 +193,9 @@ V1 支持：
 - `RequestId`
 - multi-client correlation
 - service availability
+- blocking service availability wait
 - WaitSet readiness
-- ROS 2 Humble Fast DDS Service interoperability
+- ROS 2 Humble / Jazzy Fast DDS Service interoperability
 
 ### 2.4 Wait
 
@@ -165,6 +212,8 @@ V1 支持：
 - Subscriber readiness
 - Client readiness
 - Server readiness
+- Timer readiness（新增 common runtime 范围）
+- Action runtime readiness（新增 common runtime 范围）
 - topology wakeup
 - Context shutdown wakeup
 
@@ -174,6 +223,7 @@ V1 支持：
 
 - `MessageType`
 - `ServiceType`
+- `ActionType` common runtime descriptor（详细 API 待专项冻结）
 - Fast DDS TypeSupport binding
 - TypeRegistry
 - TopicRegistry
@@ -193,14 +243,24 @@ V1 支持：
 
 ### 2.7 ROS 2 Compatibility
 
-V1 的 ROS2 RuntimeMode 精确限定为：
+V1 的 ROS2 RuntimeMode 采用同一 DMW source 在两个主要环境持续验证：
 
 ```text
 ROS 2 Humble
 +
-rmw_fastrtps_cpp
+rmw_fastrtps_cpp Humble
 +
-Fast DDS
+Fast DDS 2.6.x
+```
+
+以及：
+
+```text
+ROS 2 Jazzy
++
+rmw_fastrtps_cpp Jazzy
++
+Fast DDS 2.14.x
 ```
 
 支持：
@@ -214,7 +274,10 @@ Fast DDS
 - request SampleIdentity；
 - related_sample_identity；
 - Client/Server correlation；
-- Service availability。
+- Service availability；
+- Action endpoint naming 与 common protocol semantics（新增架构范围；实现后必须纳入 Humble/Jazzy interoperability matrix）。
+
+后续新增 DMW 能力以 Fast DDS 2.14.x 的现代 public API/behavior 为主要实现基础，以 `rmw_fastrtps` Jazzy 为 ROS 2 Fast DDS 工程行为参考，同时保持 Humble/Fast DDS 2.6.x 的 source/runtime compatibility 验证。
 
 ### 2.8 V1 非目标
 
@@ -237,8 +300,7 @@ V1 不实现：
 - public assert-liveliness；
 - network flow endpoint；
 - DDS Security public API；
-- Action；
-- callback；
+- user callback；
 - Executor；
 - Future；
 - Python asyncio；
@@ -250,7 +312,7 @@ V1 不实现：
 - Connext；
 - middleware plugin abstraction。
 
-### 2.9 V1 RMW 基础功能矩阵
+### 2.9 V1 基础与 Common Runtime 功能矩阵
 
 | 能力                               | V1 |
 | -------------------------------- | -: |
@@ -276,18 +338,25 @@ V1 不实现：
 | RequestId                        |  ✅ |
 | multi-client correlation         |  ✅ |
 | service availability             |  ✅ |
+| service availability wait        |  ✅ |
 | QoS                              |  ✅ |
 | WaitSet                          |  ✅ |
 | GuardCondition                   |  ✅ |
 | Event                            |  ✅ |
+| Timer common runtime             |  设计范围 |
+| ActionType                       |  设计范围 |
+| ActionClient / ActionServer runtime |  设计范围 |
+| Goal identity / Goal FSM         |  设计范围 |
 | ROS 2 Topic wire compatibility   |  ✅ |
 | ROS 2 Service wire compatibility |  ✅ |
+| ROS 2 Action wire compatibility  |  设计范围 |
 | Graph introspection              |  ❌ |
 | SerializedMessage                |  ❌ |
 | loaned message                   |  ❌ |
 | zero-copy                        |  ❌ |
 | actual QoS                       |  ❌ |
-| Action                           |  ❌ |
+
+“设计范围”表示本轮已经冻结职责归属，但具体 public API、状态机细节和 implementation contract 尚未完成专项冻结，不得把该标记解释为当前代码已经实现。
 
 <a id="dmw-architecture"></a>
 
@@ -299,11 +368,12 @@ V1 不实现：
 
 ```text
 ┌───────────────────────────────────────────────────────┐
-│                       dclcpp                          │
+│                 dclcpp / _dclpy                      │
 │                                                       │
-│ Publisher<T> / Subscriber<T>                          │
-│ Client<S> / Server<S>                                 │
-│ Executor / Callback / Future / Action                 │
+│ typed/Python Publisher / Subscriber                    │
+│ typed/Python Client / Service                          │
+│ typed/Python Timer / Action wrapper                    │
+│ Executor / Callback / Future / asyncio                 │
 └───────────────────────────┬───────────────────────────┘
                             │
                             ▼
@@ -311,9 +381,12 @@ V1 不实现：
 │                         dmw                           │
 │                                                       │
 │ Context / Node                                        │
-│ MessageType / ServiceType                             │
+│ MessageType / ServiceType / ActionType                │
 │ Publisher / Subscriber                                │
 │ Client / Server                                       │
+│ Timer common runtime                                  │
+│ ActionClient / ActionServer common runtime            │
+│ Goal identity / Goal FSM / protocol state             │
 │ Qos / Gid / MessageInfo / RequestId                   │
 │ WaitSet / GuardCondition / Event                      │
 │ TypeRegistry / TopicRegistry                          │
@@ -337,6 +410,8 @@ V1 不实现：
                         DDSI-RTPS
 ```
 
+DMW 继续保持一个 package/library family，而不是拆出独立 `rcl`/`action-runtime` 层。Timer 和 Action common runtime 复用现有 Context、Service、Topic、WaitSet、Discovery 与 Result/lifecycle 规则。
+
 ### 3.2 Fast DDS 映射
 
 ```text
@@ -359,7 +434,17 @@ Client
 Server
    ├── request DataReader
    └── response DataWriter
+
+Timer
+   ↓
+DMW monotonic runtime state + WaitSet notification
+
+ActionClient / ActionServer
+   ↓
+DMW Service × 3 + Topic × 2 composition
 ```
+
+Timer 不是 DDS entity；Action 也不要求 Fast DDS 提供原生 Action entity。两者的 language-neutral state 由 DMW 管理，并复用现有底层 primitives。
 
 ### 3.3 Non-template Runtime API
 
@@ -374,6 +459,13 @@ class Server;
 
 class MessageType;
 class ServiceType;
+
+// architecture-approved common runtime concepts;
+// exact API is frozen in dedicated Timer/Action design.
+class Timer;
+class ActionType;
+class ActionClient;
+class ActionServer;
 ```
 
 禁止：
@@ -388,6 +480,8 @@ typed API 属于：
 `dclcpp`
 
 而不是 DMW。
+
+同理，`ActionClient<ActionT>`、Python Action type、`std::future` 和 Python Future 也属于 Client Library；DMW 只提供 type-erased common runtime。
 
 ### 3.4 Type Erasure
 
@@ -421,6 +515,8 @@ Result<void> Server::write_response(
     const void* response);
 ```
 
+Timer / Action 仍遵循 type-erased、non-template boundary；具体函数签名不在本轮架构更新中提前冻结。
+
 ### 3.5 Type-erased Pointer 公共契约
 
 #### 3.5.1 非空要求
@@ -446,6 +542,8 @@ Server::write_response(..., response)
 `ErrorCode::InvalidArgument`
 
 DMW 不访问该指针。
+
+Timer/Action 后续出现的 type-erased message 参数必须沿用同一规则，专项设计不得重新定义相反语义。
 
 #### 3.5.2 Concrete Type 前置条件
 
@@ -579,6 +677,8 @@ commit、Error 或允许传播的 C++ exception，只保证全部 output 仍 val
 
 ##### 3.6.1.1 Resource/Entity
 
+当前已冻结候选并已实现：
+
 ```text
 Context
 Node
@@ -593,6 +693,16 @@ WaitSet
 GuardCondition
 Event
 ```
+
+本轮新增的 common runtime 架构概念：
+
+```text
+Timer
+ActionClient
+ActionServer
+```
+
+后者的完整 Factory、method、ownership 细节必须通过专项设计进入本文后才升级为 Frozen public contract。
 
 ##### 3.6.1.2 Value/Descriptor/Result
 
@@ -628,6 +738,17 @@ WaitResult
 Error
 Result<T>
 ```
+
+新增架构概念包括：
+
+```text
+ActionType
+GoalId
+GoalState
+Timer configuration/info values
+```
+
+具体 value layout 和名称待专项 API 设计冻结。
 
 #### 3.6.2 Resource/Entity 语义
 
@@ -686,9 +807,11 @@ auto second = std::move(first);
 
 而不是 Publisher 对象本身。
 
+Timer、ActionClient、ActionServer 进入正式 public API 后必须遵守同一 Resource/Entity 语义，除非专项设计给出经评审的明确例外。
+
 #### 3.6.3 公共 Factory
 
-唯一 Factory 结构：
+当前已经冻结并实现的 Factory 结构保持：
 
 ```text
                      Context::create()
@@ -708,9 +831,11 @@ Publisher Subscriber Client  Server
      └ create_event ┘
 ```
 
+Timer 应归属 Context/runtime；ActionClient/ActionServer 应归属 Node/logical naming context。具体 Factory 名称与参数将在 Timer/Action 专项设计中冻结，本轮不以示意图提前锁死 method signature。
+
 #### 3.6.4 Factory 命名
 
-冻结为：
+当前冻结为：
 
 ```text
 Context
@@ -744,6 +869,8 @@ Event
 
 不得提供 `create_subscription()` 或 `create_service()` 这类与当前实体命名和归属层级不一致的 Factory。
 
+Timer/Action 的最终 Factory naming 必须延续“Factory 名与返回实体和 ownership 一致”的原则，但名称在专项设计完成前不属于 Frozen contract。
+
 #### 3.6.5 Factory 返回类型
 
 统一：
@@ -758,6 +885,8 @@ Result<std::unique_ptr<T>>
 Result<std::unique_ptr<Publisher>>
 Node::create_publisher(...);
 ```
+
+Timer/Action resource Factory 也应遵守该返回模型。
 
 #### 3.6.6 事务式创建
 
@@ -1311,6 +1440,8 @@ private:
 };
 ```
 
+Timer 的 Context-scoped Factory 将在 Timer 专项 API 设计中加入；本轮不修改上述已实现 API signature。
+
 ### 5.3 Context 与 DomainParticipant
 
 冻结：
@@ -1470,10 +1601,11 @@ diagnostic、conservative retention 或 quarantine，不得 retroactively 改变
 2. 阻止新 endpoint；
 3. 阻止新 WaitSet；
 4. 阻止新 GuardCondition；
-5. 通知所有 WaitSet；
-6. 打断 Fast DDS WaitSet wait；
-7. 等待 WaitSet 离开需要 Context Active 的 Fast DDS WaitSet wait；
-8. 标记 runtime Shutdown。
+5. 阻止新 Timer/Action common runtime resource；
+6. 通知所有 WaitSet；
+7. 打断 Fast DDS WaitSet wait；
+8. 等待 WaitSet 离开需要 Context Active 的 Fast DDS WaitSet wait；
+9. 标记 runtime Shutdown。
 
 如果某个 Fast DDS wake 操作失败：
 
@@ -1536,6 +1668,8 @@ Node
 WaitSet
 GuardCondition
 Event
+Timer（实现后）
+ActionClient / ActionServer（实现后）
 ```
 
 依赖 `Context`：
@@ -1625,6 +1759,8 @@ private:
 };
 ```
 
+ActionClient/ActionServer 归属 Node 的 logical naming/runtime context；其 Factory 将在 Action 专项 API 设计中加入。本轮不提前改变已实现 Node API signature。
+
 ### 5.14 Node 生命周期
 
 内部：
@@ -1638,6 +1774,8 @@ NodeState
  │  │  │  │
 Pub Sub Client Server
 ```
+
+未来 ActionClient/ActionServer 也引用同一 NodeState，不创建额外 DomainParticipant 或第二套 logical node identity。
 
 Node facade 可以先析构。
 
@@ -1720,6 +1858,8 @@ Timeout
 ```
 
 等底层错误。
+
+Timer/Action 专项设计必须复用本错误优先级，不得建立第二套互相冲突的 lifecycle/error order。
 
 <a id="dmw-type-system"></a>
 
@@ -1991,6 +2131,22 @@ ServiceType：
 - value descriptor；
 - 不拥有 DDS resource。
 
+### 6.8 ActionType 架构边界
+
+ActionType 是本轮新增的 type-erased common runtime descriptor。它组合：
+
+```text
+SendGoal ServiceType
+CancelGoal ServiceType
+GetResult ServiceType
+Feedback MessageType
+Status MessageType
+```
+
+并为 DMW ActionClient/ActionServer 提供统一 runtime type information。`dclcpp::ActionType<ActionT>` 和 Python Action type wrapper 保留语言类型信息，但都映射到同一个 DMW ActionType。
+
+本节只冻结职责与组成关系，不冻结具体 constructor、getter、copy/move API；这些在 Action 专项 public API 设计中补充，并必须沿用 MessageType/ServiceType 的 immutable descriptor 思路。
+
 <a id="dmw-profile-qos"></a>
 
 ## 7. RuntimeMode、Naming 与 QoS
@@ -2254,7 +2410,7 @@ EntityKind
 
 - DMW V1 不读取 `RMW_FASTRTPS_USE_QOS_FROM_XML`；
 - 不加载 ROS 2 Fast DDS XML override；
-- `SystemDefault` 按 [ROS 2 interoperability contract](#dmw-ros2-interop) 固定版本 baseline 的 Fast DDS defaults 解析。
+- `SystemDefault` 按 [ROS 2 interoperability contract](#dmw-ros2-interop) validated baseline 的 Fast DDS defaults 解析。
 
 如果需要普通 ROS 2 默认 Topic QoS，应显式使用：
 
@@ -2298,7 +2454,7 @@ Liveliness   = SystemDefault
 Lease        = SystemDefault
 ```
 
-这与 Humble RMW service default profile 的基础策略一致。
+这与 Humble/Jazzy `rmw_fastrtps` service default profile 的基础策略一致；精确实现值以对应环境的验证 manifest 和 interoperability test 为准。
 
 ### 7.13 Unsupported Policy
 
@@ -2352,6 +2508,8 @@ normalized logical DMW name，不返回 runtime-mode-specific resolved DDS name�
 behavior 与 wire-interoperability scope。完整 wire interoperability 要求 `MessageType` /
 `ServiceType` 同时提供兼容的 wire type name 与 CDR serializer；选择 RuntimeMode 不表示 runtime
 能够自动认证任意 custom `TopicDataType`。
+
+Action ROS 2 naming 在 Action 专项 contract 中定义，并复用同一个 Context-scoped RuntimeMode，不允许 `dclcpp` / `dclpy` 各自选择不同的 Action wire mode。
 
 <a id="dmw-topic"></a>
 
@@ -2668,6 +2826,9 @@ public:
     Result<bool>
     service_is_available() const;
 
+    Result<bool>
+    wait_for_service(WaitTimeout timeout) const;
+
     std::string_view
     service_name() const noexcept;
 
@@ -2682,6 +2843,8 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 ```
+
+`wait_for_service()` 属于 language-neutral discovery/runtime semantic，必须在 DMW 实现一次。`dclcpp` / `dclpy` 可以提供语言友好的 timeout 参数和错误映射，但不得各自通过 polling 建立第二套 availability wait semantics。
 
 ### 9.5 Server API
 
@@ -2864,7 +3027,7 @@ DMW Client 必须过滤：
 
 但 DMW V1：
 
-> **不维护 dclcpp 层的 future/outstanding-request table。**
+> **不维护 Client Library 层的 future/outstanding-request table。**
 
 因此：
 
@@ -2877,15 +3040,11 @@ DMW Client 必须过滤：
 
 它不保证：
 
-`RequestId 当前仍存在于某个 dclcpp pending future table`
+`RequestId 当前仍存在于某个 dclcpp/dclpy pending Future table`
 
 。
 
-Future / timeout / pending request 生命周期属于：
-
-`dclcpp::Client`
-
-。
+Future / callback / pending Future 生命周期属于对应 Client Library。
 
 ### 9.12 Service Availability
 
@@ -2906,6 +3065,8 @@ success + false
 error
     -> discovery query failed
 ```
+
+`wait_for_service()` 在相同 availability authority 上阻塞等待 graph/discovery revision 或 Context shutdown，不使用任意固定 sleep interval 轮询。
 
 ### 9.13 Service Availability Pairing
 
@@ -2949,7 +3110,7 @@ has compatible response DataWriter
 
 ### 9.14 Same-participant 限制
 
-ROS 2 Humble Fast DDS wire discovery 并没有为 request DataReader / response DataWriter 暴露一个 DMW 可以直接使用的标准 service-instance pair ID。
+ROS 2 Fast DDS wire discovery 并没有为 request DataReader / response DataWriter 暴露一个 DMW 可以直接使用的标准 service-instance pair ID。
 
 因此 V1 对同一 remote Participant 内多个同名 Server 的定义是：
 
@@ -2981,15 +3142,95 @@ true
 
 这种跨 Participant 假阳性。
 
+<a id="dmw-action-runtime"></a>
+
+## 9A. Action Common Runtime（架构边界）
+
+Action 是 DMW language-neutral common runtime，而不是 `dclcpp` / `dclpy` 分别组合的高层私有协议。
+
+底层 wire composition 仍然是：
+
+```text
+Action
+├── SendGoal Service
+├── CancelGoal Service
+├── GetResult Service
+├── Feedback Topic
+└── Status Topic
+```
+
+DMW 负责：
+
+- type-erased `ActionType`；
+- ActionClient / ActionServer runtime；
+- Goal identity；
+- GoalState / Goal FSM；
+- Goal、Result、Cancel request/response correlation；
+- Action availability；
+- Feedback / Status endpoint readiness 与 routing；
+- status bookkeeping；
+- terminal result cache 的协议级 state/lifetime；
+- pending result request；
+- WaitSet integration；
+- Context shutdown 与 endpoint teardown；
+- ROS2 RuntimeMode 下的 Action endpoint naming、QoS 与 wire semantics。
+
+DMW 不负责：
+
+- `std::future` / Python Future；
+- C++ / Python GoalHandle presentation；
+- 用户 goal/cancel/feedback/result callback；
+- Executor scheduling；
+- Python coroutine/asyncio/GIL。
+
+这些语言层能力分别属于 `dclcpp` 和 `dclpy`。
+
+Goal FSM 的状态和 event-to-state transition 必须只有一个 DMW authority；不得让 C++ 与 Python 分别维护一套状态转换表。典型状态至少包括：
+
+```text
+ACCEPTED
+EXECUTING
+CANCELING
+SUCCEEDED
+CANCELED
+ABORTED
+```
+
+具体 GoalId representation、ActionOptions、ActionClient/ActionServer method、result cache timeout policy、cancel selection rules 和 WaitSet registration surface 在 Action 专项 public API 设计中冻结。本节只冻结层级职责，避免上层提前实现重复 protocol runtime。
+
 <a id="dmw-waitset"></a>
 
-## 10. WaitSet、GuardCondition 与 Event
+## 10. Timer、WaitSet、GuardCondition 与 Event
 
-本章统一定义同步模型：WaitSet 观察 waitable，Registration 协调并发 attach/detach，GuardCondition 使用 coalesced trigger，Event 使用独立 cursor 的 level-triggered readiness。WaitSet 不拥有注册实体。
+本章统一定义同步模型：WaitSet 观察 waitable，Registration 协调并发 attach/detach，GuardCondition 使用 coalesced trigger，Event 使用独立 cursor 的 level-triggered readiness。WaitSet 不拥有注册实体。Timer 和 Action common runtime 必须接入同一个 readiness 模型，而不是由两个 Client Library 自己轮询。
+
+### 10.0 Timer Common Runtime（架构边界）
+
+Timer 的以下语义属于 DMW：
+
+- monotonic period/deadline；
+- autostart；
+- cancel / reset；
+- readiness；
+- consume/call state；
+- time-until-next / expected-actual trigger metadata（若 public API 暴露）；
+- Context shutdown；
+- WaitSet integration。
+
+DMW Timer 不保存或执行 user callback，也不创建用于执行 callback 的私有线程。
+
+```text
+dmw::Timer readiness
+       │
+       ├── dclcpp::Timer + std::function
+       └── dclpy.Timer + Python callable
+```
+
+具体 TimerOptions、TimerInfo、Factory 和 method signature 在 Timer 专项 public API 设计中冻结。Timer 实现必须使用 monotonic clock，并复用本文 WaitSet/lifecycle/error 原则。
 
 ### 10.1 Waitable Entity
 
-V1：
+当前已冻结并实现：
 
 ```text
 Subscriber
@@ -3000,6 +3241,15 @@ GuardCondition
 ```
 
 可以加入 WaitSet。
+
+本轮架构增加：
+
+```text
+Timer
+ActionClient / ActionServer common runtime readiness
+```
+
+它们的 `add()` overload 与 `WaitableKind` 枚举值在专项 API 设计中冻结；在此之前不得让 dclcpp/dclpy 通过固定 sleep/polling 或直接组合内部 3 Service + 2 Topic 来建立另一套 readiness authority。
 
 Publisher 不直接 waitable。
 
@@ -3079,6 +3329,8 @@ WaitTimeout::poll()
 
 ### 10.4 WaitSet API
 
+当前已实现 public API 保持：
+
 ```cpp
 struct WaitSetOptions
 {
@@ -3127,6 +3379,8 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 ```
+
+Timer/Action runtime 的 overload 在专项设计中加入；本轮不伪装为当前代码已经存在。
 
 WaitSet 只能注册与自身属于同一 Context 的 waitable。跨 Context `add()` 返回
 `InvalidArgument`；该 argument error 优先于 Context state。失败不得创建 Registration、
@@ -3185,7 +3439,7 @@ std::chrono::steady_clock
 
 不得使用 system wall clock。
 
-Humble RMW 也明确建议 wait timeout 基于 monotonic clock；这里将该建议提升为 DMW V1 的强制规范。
+ROS 2 wait timeout 也以 monotonic clock 为正确工程实践；这里将其提升为 DMW V1 的强制规范。Timer common runtime 必须采用同一 monotonic-time 原则。
 
 ### 10.7 Deadline Overflow
 
@@ -3235,6 +3489,8 @@ private:
     };
 };
 ```
+
+Timer/Action 对应 kind 在其 WaitSet API 冻结时追加，不改变现有 token identity 规则。
 
 ### 10.9 Invalid Token
 
@@ -3378,7 +3634,7 @@ DMW 不允许通过 WaitableRegistration 解引用 public entity。
 交给 caller。`remove()` 返回后必须保证实现层不会因该旧 snapshot 访问已释放的
 Registration/Waitable/DDS entity Info；它不撤回已经形成的 value snapshot。
 
-dclcpp Executor 必须维护自己的：
+dclcpp/dclpy Executor 必须维护自己的：
 
 `WaitableRegistration -> weak/high-level registration`
 
@@ -3395,6 +3651,8 @@ V1：
 `AlreadyRegistered`
 
 。
+
+Timer/Action common runtime 接入 WaitSet 后也必须明确其 registration ownership，不得通过隐藏的第二 WaitSet 绕过该规则。
 
 ### 10.15 单 Active Wait
 
@@ -3496,9 +3754,9 @@ trigger WaitSet control
       ↓
 drain active wait reference
       ↓
-detach Fast DDS condition
+detach Fast DDS/native condition
       ↓
-destroy DDS endpoint
+destroy backing resource
 ```
 
 waitable 析构必要时可以短暂阻塞。
@@ -3508,10 +3766,12 @@ waitable 析构必要时可以短暂阻塞。
 ```text
 public facade pointer
 WaitableState
-Fast DDS Condition
+Fast DDS/native Condition
 ```
 
 引用。
+
+该规则未来同样适用于 Timer/Action runtime waitable。
 
 ### 10.20 WaitSet 先析构
 
@@ -3539,7 +3799,7 @@ WaitSet destructor
       ↓
 invalidate registration
       ↓
-detach Fast DDS conditions
+detach Fast DDS/native conditions
       ↓
 destroy Fast DDS WaitSet
 ```
@@ -4049,6 +4309,8 @@ Service availability
 
 。
 
+Action common runtime 实现后复用同一 discovery authority 计算 Action availability；不得在 dclcpp/dclpy 分别建立第二套 action graph cache。
+
 不暴露完整 public ROS Graph。
 
 ### 11.7 ServiceDiscoveryRegistry
@@ -4077,6 +4339,8 @@ RuntimeMode
 
 用于消除跨 Participant request/response 拼接导致的 availability 假阳性。
 
+Action availability 应在该 discovery authority 之上组合 3 Service + 2 Topic 的所需 endpoint 状态，具体可见性规则在 Action 专项 contract 中冻结。
+
 <a id="dmw-concurrency"></a>
 
 ## 12. 并发与对象销毁
@@ -4099,6 +4363,8 @@ dclcpp callback
 ```
 
 。
+
+Timer/Action runtime 也不得借 internal thread 直接执行 user callback。
 
 ### 12.2 Listener 允许行为
 
@@ -4133,6 +4399,7 @@ Client::write_request()
 Client::read_response()
 
 Client::service_is_available()
+Client::wait_for_service()
 
 Server::read_request()
 
@@ -4147,6 +4414,8 @@ Event::take()
 。
 
 同一 `RequestId` 的两个 `write_response()` 按 [Client/Server contract](#dmw-service) 返回 `Busy`。
+
+Timer/Action 的 concurrency matrix 在专项设计中冻结，但必须服从 Context shutdown、WaitSet registration、RAII 和单一状态 authority 原则。
 
 ### 12.4 Object Destruction
 
@@ -4226,6 +4495,8 @@ half-destroyed DDS resource access
 
 。
 
+Timer/Action common runtime 实现后必须满足同一 shutdown linearization model。
+
 ### 12.7 Factory 并发
 
 允许：
@@ -4245,69 +4516,80 @@ Node::create_server
 
 Registry 必须同步。
 
+Timer/Action Factory concurrency 在其 public API 冻结时追加，默认不得弱于现有 Factory transactional/lifecycle 约束。
+
 <a id="dmw-ros2-interop"></a>
 
 ## 13. ROS 2 Fast DDS Wire Contract
 
 ### 13.1 Compatibility Baseline
 
-`ROS2` 不是模糊的“兼容 Humble”。
+`ROS2` 不是模糊的“兼容某一个发行版”，而是由可复现验证环境定义的 wire/runtime contract。
 
-V1 compatibility test baseline 固定为：
+当前必须持续验证两个主要环境：
 
-| 组件 | Release | Upstream Git ref |
-| --- | --- | --- |
-| OS | Ubuntu 22.04 | Jammy image digest 由 CI baseline manifest 冻结 |
-| ROS 2 | Humble | ROS apt snapshot 由 CI baseline manifest 冻结 |
-| `rmw` | 6.1.3 | `6.1.3` |
-| `rmw_fastrtps_cpp` | 6.2.10 | `6.2.10` |
-| `rosidl_typesupport_fastrtps_cpp` | 2.2.4 | `2.2.4` |
-| Fast DDS | 2.6.12 | `v2.6.12` |
-| Fast CDR | 1.0.29 | `v1.0.29` (`959ff6c`) |
+| ROS 2 | Tier-1 OS | Fast DDS line | `rmw_fastrtps` | 角色 |
+| --- | --- | --- | --- | --- |
+| Humble | Ubuntu 22.04 Jammy | 2.6.x | Humble branch/packages | 当前主要开发环境之一、兼容基线 |
+| Jazzy | Ubuntu 24.04 Noble | 2.14.x | Jazzy branch/packages | 新功能/现代 Fast DDS reference 与兼容基线 |
 
-截至 2026 年 8 月，ROS Index 中 Humble 的 `rmw` 为 6.1.3、
-`rmw_fastrtps_cpp` 为 6.2.10、Fast DDS Humble 线为 2.6.x 且当前发布版本为
-2.6.12，Humble 的 `rosidl_typesupport_fastrtps_cpp` 为 2.2.4；Fast CDR 使用
-官方 `v1.0.29` release。
+同一份 DMW source 必须在两套环境分别 build/test；涉及 wire behavior 的修改还必须分别执行 Topic/Service interoperability，并执行 Humble ↔ Jazzy cross-version probe。Action common runtime 实现后必须加入同一矩阵。
 
 每次 interoperability CI 必须生成并归档 baseline manifest，至少记录：
 
 ```text
+ROS distro
 upstream Git ref
 resolved full Git commit
 apt repository snapshot/date
 dpkg-query 的完整 Debian package revision
+Fast DDS / Fast CDR resolved version
 OS image digest
 CPU architecture
 compiler version
 ```
 
-表中的 release/ref 与归档 manifest 共同构成可复现 baseline；只有 semver 而没有
-对应 manifest 的测试结果不得用于扩大 compatibility guarantee。
+发行版名称和 semver 只描述支持线，归档 manifest 才定义某次验证的精确可复现环境。更新任一 baseline dependency 时：
 
-更新任何 baseline dependency 时：
-
-> 必须重新运行[测试与验收](#dmw-verification)中的全部 ROS interoperability tests。
+> 必须重新运行[测试与验收](#dmw-verification)中的对应 ROS interoperability tests。
 
 未经重新验证，不自动扩展 `ROS2` compatibility guarantee。
 
-### 13.2 Source of Truth
+后续 DMW 新功能以 Fast DDS 2.14.x 的现代 DDS API 和行为为主要实现基础；为了保持 Humble 支持，具体实现优先使用 Fast DDS 2.6.x 与 2.14.x 的公共能力，只在确有 API 差异且无法规避时引入局部 compatibility shim，不把 Fast DDS minor version 泄漏到普通 public API。
+
+### 13.2 Source of Truth 与上游参考
 
 RuntimeMode 是以下三部分共同定义的可验证契约：
 
 1. 本文档明确冻结的规范；
-2. baseline manifest 固定的 reference implementation，包括
-   `rmw_fastrtps_cpp`、`rosidl_typesupport_fastrtps_cpp`、Fast DDS 和 Fast CDR；
+2. Humble/Jazzy baseline manifest 固定的 reference implementation；
 3. [测试与验收](#dmw-verification)中 interoperability tests 的可复现结果。
 
-三者不存在“文档无条件覆盖实现或测试”的简单优先级。任意两者冲突都属于：
+后续开发参考关系明确为：
+
+```text
+Fast DDS 2.14.x
+    -> DDS API、Entity、QoS、WaitSet、Discovery、lifecycle 等实现基础
+
+rmw_fastrtps Jazzy
+    -> ROS 2 Fast DDS naming/QoS/service/identity/wait/discovery 工程行为参考
+
+rcl / rcl_action Jazzy
+    -> language-neutral runtime 与 Action common-state 职责划分参考
+
+rclcpp / rclpy Jazzy
+    -> C++ / Python Client Library language-specific 职责边界参考
+```
+
+这些参考不意味着 DCL 引入 ROS 2 runtime dependency，也不意味着复制 ROS 2 的 package hierarchy。
+
+规范、manifest 与测试任意两者冲突都属于：
 
 `RuntimeModeDefect`
 
-必须先修复规范、RuntimeMode implementation 或 test，使三者重新一致；冲突状态下
-不得把新的 baseline 标记为 Frozen，也不得声称已验证 wire compatibility。
+必须先修复规范、RuntimeMode implementation 或 test，使三者重新一致；冲突状态下不得把新的 baseline 标记为 Frozen，也不得声称已验证 wire compatibility。
 
-ROS 2 官方命名规范定义了 `rt`、`rq`、`rr` 等 DDS namespace prefix；`rmw_fastrtps` 官方文档也展示了诸如 `rq/add_two_intsRequest` 和 `rr/add_two_intsReply` 的实际 service endpoint 名称。
+ROS 2 官方命名规范定义了 `rt`、`rq`、`rr` 等 DDS namespace prefix；`rmw_fastrtps` 也使用诸如 `rq/add_two_intsRequest` 和 `rr/add_two_intsReply` 的 service endpoint 名称。
 
 ### 13.3 ROS Name Validation
 
@@ -4326,7 +4608,7 @@ substitution
 
 。
 
-这些更高层 name expansion 属于 dclcpp。
+这些更高层 name expansion 属于 dclcpp/dclpy language API。
 
 ### 13.4 Node Namespace Normalization
 
@@ -4499,7 +4781,7 @@ related_sample_identity
 
 。
 
-Humble `rmw_fastrtps` request/response 路径本身使用 Fast CDR `DDS_CDR` representation，并通过 sample identity metadata 完成 request/response correlation。
+Humble 与 Jazzy `rmw_fastrtps` 的 request/response 路径均以 Fast DDS/Fast CDR message serialization 与 sample identity metadata 完成 request/response correlation；具体 API 版本差异不得改变 DMW public RequestId contract。
 
 ### 13.12 Client Request Identity
 
@@ -4534,7 +4816,7 @@ sample_identity.sequence_number
 request sequence
 ```
 
-Humble `rmw_fastrtps` 正是把 response reader GUID 放进 request 的 `related_sample_identity.writer_guid`，并从 write 后的 sample identity 得到 sequence number。
+`rmw_fastrtps` 的 ROS 2 service mapping 将 response reader GUID 与 request sample identity 关联，并从 write 后的 sample identity 获取 sequence number；DMW 在 Humble/Jazzy interoperability 中验证该 observable behavior。
 
 ### 13.13 DMW `write_request()` 返回值
 
@@ -4597,7 +4879,7 @@ sequence：
 
 。
 
-Humble `rmw_fastrtps` 也采用这一兼容处理：当 related identity 中存在 response reader GUID 时，用它替换 request identity 中的 writer GUID，以便后续正确将 response 定向回 Client。
+`rmw_fastrtps` 采用 compatible request identity handling：当 related identity 中存在 response reader GUID 时，用它作为后续 response target identity。DMW 以 Humble/Jazzy observable interoperability 作为最终验证。
 
 ### 13.15 Server Send Response
 
@@ -4617,7 +4899,7 @@ request_id.sequence_number
 
 随后发送 response payload。
 
-Humble `rmw_fastrtps` 的 `rmw_send_response` 也是把 request header GUID 和 sequence number写入 response `related_sample_identity`。
+`rmw_fastrtps` 的 response path 同样把 request header identity 写入 response `related_sample_identity`；具体内部 helper/API 名称不是 DMW public contract。
 
 ### 13.16 Response-reader Discovery Workaround
 
@@ -4625,15 +4907,13 @@ Humble `rmw_fastrtps` 的 `rmw_send_response` 也是把 request header GUID 和 
 
 `request_id.client_gid`
 
-表示 response DataReader GUID，则 Server response DataWriter 在写 response 前必须确保该 reader 已匹配。
+表示 response DataReader GUID，则 Server response DataWriter 在写 response 前必须确保该 reader 已匹配或已经确认目标 reader/participant 消失。
 
-`ROS2` V1 固定：
+当前 DMW ROS2 compatibility contract 使用：
 
 `service response discovery timeout = 100 ms`
 
-该值来自 Fast DDS 2.6.12 `ReliabilityQosPolicy::max_blocking_time` baseline
-default。V1 Qos 尚未公开 reliability max blocking time，因此这里不从用户 Qos
-读取；未来公开该 policy 时再以 resolved response-writer QoS 为准。
+V1 Qos 尚未公开 reliability max blocking time，因此这里不从用户 Qos 读取；未来公开该 policy 时再以 resolved response-writer QoS 为准。
 
 等待语义固定为：
 
@@ -4643,8 +4923,7 @@ default。V1 Qos 尚未公开 reliability max blocking time，因此这里不从
 - discovery/control wake 不重置原始 deadline；
 - Context 进入 `ShuttingDown` 必须立即中断并返回 `ContextShutdown`；
 - 同一 Server facade 的析构与 `write_response()` 不得并发；
-- 如果等待期间 discovery registry 已确认目标 Client response reader 消失，则按
-  Humble workaround 语义视为 response 已不再需要发送并返回 success；
+- 如果等待期间 discovery registry 已确认目标 Client response reader 消失，则视为 response 已不再需要发送并返回 success；
 - 否则 deadline 到期且目标仍未匹配时返回 `Timeout`。
 
 超时：
@@ -4653,7 +4932,7 @@ default。V1 Qos 尚未公开 reliability max blocking time，因此这里不从
 
 。
 
-这是 Humble `rmw_fastrtps` 为 service request/reply discovery race 使用的兼容行为。
+该行为最初用于兼容 Fast DDS service discovery race，当前必须通过 Humble/Jazzy Service interoperability 和 failure/race tests 持续验证；不再把单一旧 Fast DDS minor version 的内部 default 当作唯一 authority。
 
 ### 13.17 Client Take Response
 
@@ -4679,7 +4958,7 @@ request_writer_gid
 - 丢弃/忽略；
 - 继续读取后续 sample。
 
-Humble `rmw_fastrtps` 的 response take 同样会根据 Client 自己的 reader/writer GUID 过滤 response。
+`rmw_fastrtps` 的 response take 同样依据 Client 自身 endpoint identity 过滤 response；DMW 在 Humble/Jazzy 中验证该 observable behavior。
 
 返回：
 
@@ -4722,14 +5001,14 @@ Qos::ros2_services_default();
 
 ### 13.19 Fast DDS Implementation Defaults
 
-为了与固定 `rmw_fastrtps_cpp` baseline 行为尽量一致，ROS2 integration 实现应以固定版本的 rmw_fastrtps 行为为参考，包括：
+为了与当前支持的 `rmw_fastrtps_cpp` baseline 行为一致，ROS2 integration 实现应以 Humble/Jazzy 的可验证行为为参考，包括：
 
 - Fast DDS entity QoS mapping；
 - publication behavior；
 - history memory policy；
 - data sharing baseline。
 
-当前官方 `rmw_fastrtps` 文档说明默认使用 synchronous publication mode，并设置 Fast DDS-specific history/data-sharing 行为；这些属于实现 baseline，而不是独立 public DMW QoS policy。
+Fast DDS-specific history/data-sharing/publication mode 属于 implementation baseline，而不是独立 public DMW QoS policy。新增实现优先参考 Fast DDS 2.14.x / `rmw_fastrtps` Jazzy，同时通过 Humble regression 防止破坏现有支持。
 
 ### 13.20 Wire Compatibility 与 Graph Compatibility
 
@@ -4739,7 +5018,7 @@ ROS wire compatibility
 ROS Graph compatibility
 ```
 
-V1 保证：
+V1 保证并持续验证：
 
 ```text
 Topic data exchange
@@ -4759,6 +5038,33 @@ ros2 service list
 
 完整呈现 DMW logical Node。
 
+### 13.21 ROS 2 Action Compatibility 边界
+
+Action common runtime 实现后，ROS2 模式必须由 DMW 统一负责并验证：
+
+```text
+Action logical name -> ROS 2 Action endpoint names
+SendGoal / CancelGoal / GetResult Service mapping
+Feedback / Status Topic mapping
+Action QoS baseline
+Goal UUID/identity wire representation
+Goal/result/cancel correlation
+Status/feedback routing
+Action availability
+```
+
+`dclcpp` / `dclpy` 只把该 common runtime 映射为各自 typed/Python GoalHandle、Future、callback 与 Executor API，不得修改 wire protocol。
+
+Action interoperability matrix至少覆盖：
+
+```text
+DMW ActionClient -> ROS 2 ActionServer
+ROS 2 ActionClient -> DMW ActionServer
+Humble DMW <-> Jazzy DMW cross-version Action protocol
+```
+
+具体 endpoint suffix、type descriptor、QoS、cancel/result cache contract 在 Action 专项设计中冻结，并必须以 `rcl_action` / `rmw_fastrtps` Jazzy 行为及 Humble/Jazzy 实测共同验证。
+
 <a id="dmw-verification"></a>
 
 ## 14. 实现边界、测试与验收
@@ -4766,6 +5072,8 @@ ros2 service list
 本章只规定代码组织边界和公共行为验收，不新增运行时语义。测试必须引用前述正文契约；若测试描述与正文冲突，以正文为准并修复测试。
 
 ### 14.1 目录结构
+
+当前已实现 Foundation 的目录结构保持：
 
 ```text
 dmw/
@@ -4856,6 +5164,8 @@ dmw/
             └── return_code.hpp
 ```
 
+Timer/Action common runtime 实现后，在同一 `include/dmw/`、`src/` 与 `src/impl/` 边界内增加对应文件；不新增独立 `rcl`、`runtime_core` 或 `action_runtime` 顶层 package。具体文件名随专项 public API 一并冻结。
+
 根 `src/*.cpp` 与公开头文件一一对应，只保留 public-object 生命周期包装、只读 getter 和向对应 `Impl` 的转发；它们不得直接包含 Fast DDS 头。`src/impl/*.cpp` 同时承担对象业务逻辑和 Fast DDS runtime/helper 逻辑。DMW 当前是 Fast DDS 专用实现，不引入多 DDS runtime dispatch。`WaitSetState`、`ReaderWaitState`、`EventParentState` 与 service state 等 runtime/concurrency authority 均位于 `dmw::impl`。
 
 ### 14.2 Fast DDS Boundary
@@ -4869,11 +5179,13 @@ eprosima::fastcdr::*
 
 。
 
-唯一 integration boundary：
+当前 type integration boundary：
 
 `dmw/fastdds/message_type.hpp`
 
 。
+
+Timer 不需要泄漏 Fast DDS 类型。Action runtime 复用 MessageType/ServiceType binding，不允许在普通 Action public API 暴露 Fast DDS 类型。
 
 ### 14.3 PImpl Naming
 
@@ -4904,6 +5216,8 @@ RegistrationState
 ```
 
 。
+
+Timer/Action public resource 也遵守相同 PImpl naming；纯内部 Goal/runtime state 使用 `dmw::impl` 下语义明确的名称，不建立第二套 public ownership model。
 
 ### 14.4 Targets
 
@@ -4947,6 +5261,8 @@ target_link_libraries(dclcpp
 ```
 
 。
+
+Timer/Action common runtime 继续属于 `dmw::dmw`，不新增独立必须链接的 runtime library。
 
 ### 14.5 测试与验收
 
@@ -5149,6 +5465,11 @@ multiple clients
 response routing
 
 service availability
+
+wait_for_service immediate ready
+wait_for_service timeout
+wait_for_service discovery wake
+wait_for_service Context shutdown
 ```
 
 。
@@ -5402,6 +5723,8 @@ no stale Fast DDS condition access
 不测试也不支持同一 WaitSet facade 的 `wait()` 与析构无同步并发；该场景违反
 [WaitSet 与对象销毁契约](#dmw-waitset)定义的调用者前置条件。
 
+Timer/Action 接入后必须补充与 active infinite wait 并发 add/remove/destruction、Context shutdown 和 runtime state transition 的等价测试。
+
 #### 14.5.14 Registry Tests
 
 TypeRegistry：
@@ -5434,9 +5757,9 @@ different type
 
 #### 14.5.15 ROS Topic Interoperability
 
-使用 [ROS 2 interoperability contract](#dmw-ros2-interop) 固定的 baseline。
+使用 [ROS 2 interoperability contract](#dmw-ros2-interop) 的 Humble/Jazzy validated baseline。
 
-验证：
+分别验证：
 
 ```text
 DMW Publisher
@@ -5468,9 +5791,11 @@ matched count
 
 。
 
+并保持 Humble ↔ Jazzy cross-version DMW Topic probe。
+
 #### 14.5.16 ROS Service Interoperability
 
-验证：
+在 Humble/Jazzy 分别验证：
 
 ```text
 DMW Client
@@ -5512,6 +5837,15 @@ service availability
 
 。
 
+并保持：
+
+```text
+Humble DMW Client -> Jazzy DMW Server
+Jazzy DMW Client  -> Humble DMW Server
+```
+
+cross-version probe。
+
 #### 14.5.17 Version Regression Test
 
 升级：
@@ -5524,13 +5858,14 @@ Fast DDS
 Fast CDR
 ```
 
-任一基线版本后：
+任一支持环境的 baseline 版本后：
 
 必须重新执行：
 
 ```text
-17.15
-17.16
+14.5.15
+14.5.16
+以及已启用的 Action interoperability tests
 ```
 
 。
@@ -5541,15 +5876,57 @@ Fast CDR
 
 。
 
-每次运行必须归档完整 baseline manifest，并验证 release、Git ref、resolved
+每次运行必须归档完整 baseline manifest，并验证 ROS distro、release、Git ref、resolved
 commit、Debian package revision、OS image digest、architecture 和 compiler version
 均与测试报告一致。
+
+#### 14.5.18 Timer / Action Common Runtime Tests
+
+Timer API 冻结并实现后至少覆盖：
+
+```text
+periodic readiness
+autostart / non-autostart
+cancel
+reset
+monotonic deadline
+WaitSet finite/infinite wait
+Context shutdown
+Timer destruction during registered WaitSet
+no user callback from DMW internal thread
+```
+
+Action API 冻结并实现后至少覆盖：
+
+```text
+ActionType composition
+Goal identity uniqueness
+Goal FSM valid/invalid transitions
+accept/reject
+execute/succeed/abort/cancel
+multiple goals
+multiple clients
+result before/after terminal state
+result cache expiry
+cancel matching
+feedback/status routing
+Action availability
+WaitSet readiness
+Context shutdown / endpoint destruction
+Humble ROS 2 bidirectional Action interop
+Jazzy ROS 2 bidirectional Action interop
+Humble <-> Jazzy cross-version Action interop
+```
+
+这些 protocol/runtime tests 属于 DMW，不得要求 dclcpp/dclpy 各自重复建立相同状态机证明。
 
 <a id="dmw-frozen-invariants"></a>
 
 ## 15. Frozen Invariant 索引与附录
 
 本章是正文契约的审查索引，不是第二份 normative specification。每一项都必须能够回溯到前述正文；若简述与正文冲突，以正文为准，并必须修复本索引。编号用于评审和测试追踪，不得被实现当作独立语义来源。
+
+Timer/Action common runtime 当前冻结的是“职责归属与跨语言唯一 authority”，不是尚未完成专项设计的 method-level API。已有 Foundation invariant 继续有效。
 
 ### 15.1 架构
 
@@ -5558,8 +5935,8 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 3. runtime API non-template。
 4. 普通 public API 隐藏 Fast DDS 类型。
 5. 不提供 C API。
-6. 不提供 middleware plugin abstraction。
-7. 不提供 Action primitive。
+6. 不提供 middleware plugin abstraction，也不新增独立 `rcl` 等价 package。
+7. DMW 承担 language-neutral Timer/Action common runtime；不承担 user callback、Future、Executor、asyncio/GIL。
 8. Context 是 runtime root。
 9. 一个 Context 固定一个 Domain。
 10. 一个 Context 创建一个 DomainParticipant。
@@ -5575,7 +5952,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 17. ownership transfer 移动 `unique_ptr`。
 18. 只有 `Context::create()` 是 static root Factory。
 19. 其他 entity 由 parent Factory 创建。
-20. Factory 名与返回实体完全一致；WaitSetOptions/GuardConditionOptions 是空的 V1 扩展点。
+20. Factory 名与返回实体完全一致；WaitSetOptions/GuardConditionOptions 是空的 V1 扩展点；Timer/Action Factory 待专项设计冻结。
 21. 使用 `Subscriber`，不使用 public `Subscription`。
 22. 使用 `Server`，不使用 public `Service` entity。
 23. 不使用两阶段初始化。
@@ -5639,6 +6016,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 66. 相同 wire name + same binding identity 可复用。
 67. 相同 wire name + different binding identity 返回 TypeMismatch。
 68. V1 不做结构化 wire-layout equivalence。
+68A. ActionType 的职责归属 DMW；具体 descriptor API 待专项冻结。
 
 ### 15.8 QoS
 
@@ -5646,7 +6024,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 70. duration conversion 必须 checked；`Qos()` 等价于 `system_default()`，失败 setter 保持整个 Qos 不变，并提供全部基础 policy getter。
 71. keep_last depth 必须 > 0。
 72. KeepAll canonical depth 为 0。
-73. SystemDefault 由 Context 的 immutable RuntimeMode + entity kind + frozen Fast DDS baseline 解析，不读取 runtime/XML mutable default。
+73. SystemDefault 由 Context 的 immutable RuntimeMode + entity kind + validated Fast DDS baseline 解析，不读取 runtime/XML mutable default。
 74. ROS2 不读取 ROS XML overrides。
 75. 提供 `ros2_default()`。
 76. 提供 `ros2_services_default()`。
@@ -5673,8 +6051,8 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 91. concurrent response 同 ID 返回 Busy。
 92. response write failure后 request 恢复 Pending；V1 只在 Pending/Responding 生命周期内去重。
 93. Client 过滤其他 Client 的 response。
-94. DMW 不维护 dclcpp Future outstanding table。
-95. service availability 返回 Result<bool>。
+94. DMW 不维护 Client Library Future outstanding table。
+95. service availability 返回 Result<bool>，blocking availability wait 也由 DMW 统一提供。
 96. availability 必须按 remote Participant 配对 request/response endpoint。
 97. 不允许跨 Participant 拼接产生 availability true。
 
@@ -5697,6 +6075,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 112. WaitSet 非 owning。
 113. waitable 析构自动 detach。
 114. WaitSet 析构自动 detach，但前置条件是自身没有 active wait；不支持自身 `wait()` 与析构并发；跨 Context add 返回 InvalidArgument且无状态变化。
+114A. Timer/Action common runtime 必须接入同一个 WaitSet readiness authority，具体 registration API 待专项冻结。
 
 ### 15.12 GuardCondition / Event
 
@@ -5713,7 +6092,7 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 ### 15.13 ROS 2 Compatibility
 
 124. RuntimeMode 名称为 `ROS2`；RuntimeMode 由 ContextOptions 唯一持有且创建后 immutable，endpoint options 不提供 override。
-125. compatibility 由规范、manifest 固定的 reference implementation 和 interoperability tests 共同定义。
+125. compatibility 由规范、Humble/Jazzy manifest 固定的 reference implementation 和 interoperability tests 共同定义。
 126. ROS relative name 先解析成 FQN。
 127. Topic DDS name 使用 `rt`。
 128. request DDS topic 使用 `rq...Request`。
@@ -5728,6 +6107,8 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 137. ROS Service default QoS 固定；response-reader discovery timeout 使用 steady-clock 100 ms 原始 deadline。
 138. V1 保证 wire compatibility，不保证完整 Graph compatibility。
 139. dependency baseline 更新必须重新做 interoperability regression 并归档完整可复现 manifest。
+139A. 同一 DMW source 持续验证 Humble/Fast DDS 2.6.x 与 Jazzy/Fast DDS 2.14.x；新增实现以 Fast DDS 2.14.x 为主要实现基础，以 `rmw_fastrtps` Jazzy 为 ROS 2 工程参考。
+139B. Action ROS 2 wire semantics 归 DMW common runtime，具体 contract 实现后必须进入 Humble/Jazzy interoperability matrix。
 
 ### 15.14 C++17
 
@@ -5735,6 +6116,8 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 141. 文档禁止使用 C++20 designated initializer。
 
 ### 15.15 最终架构
+
+当前 Foundation：
 
 ```text
                      Context
@@ -5749,6 +6132,22 @@ commit、Debian package revision、OS image digest、architecture 和 compiler v
 Publisher Subscriber Client   Server
     │       │
     └── Event
+```
+
+本轮冻结的职责扩展目标：
+
+```text
+                     Context
+                        │
+             ┌──────────┼───────────┐
+             ▼          ▼           ▼
+           Timer       Node       WaitSet
+                        │
+          ┌─────────────┼──────────────────┐
+          ▼             ▼                  ▼
+     Topic/Service   ActionClient      ActionServer
+                         │                  │
+                         └── Goal FSM / common protocol state
 ```
 
 底层：
@@ -5773,9 +6172,15 @@ Client
 Server
    ├── Request DataReader
    └── Response DataWriter
+
+Timer
+   └── monotonic runtime + wait notification
+
+Action runtime
+   └── 3 Service + 2 Topic + Goal/common state
 ```
 
-DMW V1 最终能力边界：
+DMW V1 目标能力边界：
 
 ```text
 Context / Node
@@ -5786,6 +6191,10 @@ matched count
       +
 Service Client/Server
       +
+Timer common runtime
+      +
+Action common runtime / Goal FSM
+      +
 WaitSet
       +
 GuardCondition
@@ -5794,27 +6203,30 @@ Event
       +
 Basic QoS
       +
-ROS 2 Humble Fast DDS wire compatibility
+ROS 2 Humble/Jazzy Fast DDS wire compatibility
 ```
 
 而：
 
 ```text
-Graph
+Graph public API
 Serialized Message
 Loaned Message
 Zero-copy
 Advanced Introspection
-Action
+User Callback
+Future
+Executor
+Python asyncio / GIL
 ```
 
-明确留给后续版本。
+明确留在后续功能或 Client Library 层。
 
 ## 结论
 
-DMW V1 的核心目标不是复制完整 ROS 2 RMW API，而是：
+DMW V1 的核心目标不是复制完整 ROS 2 RMW API，也不是新增一个 `rcl` package，而是：
 
-> **提供构建 DCL Client Library 所需的 RMW 基础 middleware primitive，同时把生命周期、并发、错误模型和 ROS 2 Fast DDS wire behavior 定义到足以直接实现的程度。**
+> **提供构建 DCL Client Library 所需的稳定 language-neutral middleware/runtime core，把 DDS binding、协议、状态机、readiness、生命周期、并发、错误模型和 ROS 2 Fast DDS wire behavior 收敛到一个公共 authority。**
 
 Factory 保证：
 
@@ -5830,12 +6242,16 @@ Shared internal state 保证：
 
 WaitSet contract 保证：
 
-> endpoint 与 WaitSet 任一侧先销毁都不会产生悬空 Fast DDS condition。
+> endpoint/runtime waitable 与 WaitSet 任一侧先销毁都不会产生悬空 Fast DDS/native condition。
 
 `Result<T>` contract 保证：
 
 > Factory 和 runtime error 具有统一、明确且支持 move-only object 的 C++17 使用模型。
 
+Common runtime boundary 保证：
+
+> Timer、Action Goal FSM、Action correlation 等与语言无关且容易产生语义分叉的能力只在 DMW 实现一次；dclcpp/dclpy 只增加 typed/Python API、Future、callback 和 Executor integration。
+
 ROS compatibility contract 保证：
 
-> `ROS2` 不再只是“兼容目标”，而是具有固定版本、确定 naming、type、QoS 和 request/reply identity mapping 的可测试 wire contract。
+> `ROS2` 不再只是“兼容目标”，而是由 Humble/Jazzy 可复现 baseline、确定 naming/type/QoS/identity mapping 和 interoperability tests 共同定义的可测试 wire contract。
