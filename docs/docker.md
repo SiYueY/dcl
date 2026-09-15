@@ -1,441 +1,467 @@
 # Docker 开发与兼容性验证环境
 
-本文档说明 DCL 仓库中的 Docker 开发环境，包括 ROS 2 Humble 与 Jazzy 的构建、测试及 DDS 互操作配置。
+本文档说明 DCL 仓库当前 Docker 开发/测试环境，以及它在新的 Fast DDS 2.14.x / `rmw_fastrtps` Jazzy 参考策略中的角色。
 
-Docker 环境用于提供稳定、可重复的 ROS 2 / Fast DDS 验证基线，不替代宿主机日常开发环境，也不将 DCL 源码打包进镜像。
+Docker 用于提供可重复的构建和 interoperability 环境，不替代宿主机日常开发，也不把 DCL 源码复制进镜像。
 
-## 1. 设计目标
+## 1. 环境定位
 
-DCL 当前需要同时验证两套 ROS 2 / Fast DDS 环境：
+DCL 当前维护两套 ROS 2 验证环境：
 
-| 环境 | Ubuntu | ROS 2 | Fast DDS 基线 | 入口 |
-| --- | --- | --- | --- | --- |
-| Humble | 22.04 Jammy | Humble | 2.6.x | `./docker/humble.sh` |
-| Jazzy | 24.04 Noble | Jazzy | 2.14.x | `./docker/jazzy.sh` |
+| 环境 | Ubuntu | ROS 2 | Fast DDS line | 角色 | 入口 |
+| --- | --- | --- | --- | --- | --- |
+| Humble | 22.04 Jammy | Humble | 2.6.x | compatibility validation | `./docker/humble.sh` |
+| Jazzy | 24.04 Noble | Jazzy | 2.14.x | primary modern validation | `./docker/jazzy.sh` |
 
-Docker 环境承担以下职责：
+这张表描述**验证角色**，不是 DMW reference hierarchy。
 
-- 为同一份 DCL/DMW 源码提供独立的 Humble 与 Jazzy 构建环境；
-- 验证 DMW 在两套 Fast DDS 2.x 基线上的源码兼容性；
-- 运行 DMW 单元测试、构建测试及 ROS 2 互操作测试；
-- 为 Humble 与 Jazzy 之间的 DDS 通信测试提供统一网络条件；
-- 为后续 CI 提供与本地开发一致的验证入口。
-
-当前目标是**源码级兼容**。Humble 与 Jazzy 分别使用各自环境中的 Fast DDS，不要求同一个预编译 DMW 二进制同时兼容两个 Fast DDS ABI。
-
-## 2. 目录结构
+DMW 设计本身同时以：
 
 ```text
-DCL/
-├── docker/
-│   ├── Dockerfile
-│   ├── docker.sh
-│   ├── entrypoint.sh
-│   ├── cross-integration-test.sh
-│   ├── humble.sh
-│   └── jazzy.sh
-└── docs/
-    └── docker.md
+Fast DDS 2.14.x
++
+rmw_fastrtps Jazzy
 ```
 
-各文件职责如下：
+作为平等主要参考基线；Docker Jazzy 环境用于落实这套现代实现的主要 build/test/interoperability 验证。Humble 环境验证同一源码对 Fast DDS 2.6.x 的兼容性。
+
+## 2. 镜像基线
+
+wrapper 使用 ROS Desktop Full：
+
+```text
+Humble -> osrf/ros:humble-desktop-full
+Jazzy  -> osrf/ros:jazzy-desktop-full
+```
+
+Desktop Full 提供完整 ROS 2 desktop/visualization/CLI 环境；DCL Dockerfile 只额外安装：
+
+- build/debug tooling；
+- workspace tooling；
+- Fast DDS；
+- `rmw_fastrtps_cpp`；
+- ROSIDL Fast RTPS type support；
+- integration-test 需要的 ROS messages；
+- Xvfb 等开发辅助工具。
+
+不在 Dockerfile 中长期 pin 具体 Debian revision；实际验证版本由 CI/test manifest 记录。
+
+## 3. 目录结构
+
+```text
+docker/
+├── Dockerfile
+├── docker.sh
+├── entrypoint.sh
+├── humble.sh
+├── jazzy.sh
+└── cross-integration-test.sh
+```
+
+职责：
 
 | 文件 | 职责 |
 | --- | --- |
-| `docker/Dockerfile` | 定义 Humble/Jazzy 共用的开发镜像内容 |
-| `docker/docker.sh` | Docker 公共实现，负责镜像、容器、构建和测试 |
-| `docker/entrypoint.sh` | 在容器内映射宿主 UID/GID，随后降权执行请求命令 |
-| `docker/cross-integration-test.sh` | 构建两个发行版的 peer，并验证 Humble/Jazzy 的 DDS wire 互操作 |
-| `docker/humble.sh` | Humble / Ubuntu 22.04 公开入口 |
-| `docker/jazzy.sh` | Jazzy / Ubuntu 24.04 公开入口 |
-| `docs/docker.md` | Docker 环境设计与使用说明 |
+| `Dockerfile` | Humble/Jazzy 共用镜像定义 |
+| `docker.sh` | 公共 launcher 实现 |
+| `entrypoint.sh` | runtime UID/GID 与降权执行 |
+| `humble.sh` | Humble 公开入口 |
+| `jazzy.sh` | Jazzy 公开入口 |
+| `cross-integration-test.sh` | Humble/Jazzy cross-version Topic/Service wire probe |
 
-`docker.sh` 属于内部公共实现。正常使用时应调用 `humble.sh` 或 `jazzy.sh`，不需要直接向 `docker.sh` 传递 `--ros-distro`、`--base-image` 等内部参数。
+正常用户调用 wrapper，不直接传 `docker.sh --ros-distro ...` 内部参数。
 
-## 3. 基本使用
+## 4. 支持命令
 
-首次使用前确保脚本具有执行权限：
+两个发行版 wrapper 均支持：
 
-```bash
-chmod +x docker/docker.sh docker/humble.sh docker/jazzy.sh
+```text
+shell
+build
+test
+integration-test
+benchmark
+rebuild
 ```
 
-### 进入开发环境
+### 4.1 shell
 
 ```bash
 ./docker/humble.sh
 ./docker/jazzy.sh
 ```
 
-无参数时默认执行 `shell`，进入对应 ROS 2 环境的交互式 Bash。
+无 command 时等价于 `shell`。
 
-### 构建 DMW
+### 4.2 build
 
 ```bash
 ./docker/humble.sh build
 ./docker/jazzy.sh build
 ```
 
-`build` 会依次执行 CMake configure 和 compile。
+标准 build tree：
 
-### 运行测试
+```text
+build/docker/<distro>/dmw
+```
+
+配置：
+
+```text
+BUILD_TESTING=ON
+DMW_ENABLE_DDS_INTEGRATION_TESTS=OFF
+```
+
+因此普通开发 build 不引入 ROS 2 DDS integration-test 环境差异。
+
+### 4.3 test
 
 ```bash
 ./docker/humble.sh test
 ./docker/jazzy.sh test
 ```
 
-`test` 是自包含操作，会依次执行：
+`test` 是 self-contained：
 
 ```text
-configure → build → ctest
+configure -> build -> ctest
 ```
 
-不要求先单独执行 `build`。
+使用标准 build tree，不开启 DDS integration tests。
 
-### 重建镜像
+### 4.4 integration-test
 
-当 `Dockerfile`、基础镜像或镜像依赖发生变化时执行：
+```bash
+./docker/humble.sh integration-test
+./docker/jazzy.sh integration-test
+```
+
+独立 build tree：
+
+```text
+build/docker/<distro>/dmw-integration
+```
+
+配置：
+
+```text
+BUILD_TESTING=ON
+DMW_ENABLE_DDS_INTEGRATION_TESTS=ON
+```
+
+CTest 只运行：
+
+```text
+--label-regex integration
+```
+
+### 4.5 benchmark
+
+```bash
+./docker/humble.sh benchmark
+./docker/jazzy.sh benchmark
+```
+
+benchmark 使用 integration build tree 构建当前 DMW foundation benchmark，然后直接运行 benchmark executable。
+
+### 4.6 rebuild
 
 ```bash
 ./docker/humble.sh rebuild
 ./docker/jazzy.sh rebuild
 ```
 
-普通 `shell`、`build`、`test` 只在对应镜像不存在时自动构建镜像，不会每次强制执行 `docker build`。
+显式重建镜像。普通 `shell/build/test/integration-test/benchmark` 只有在本地镜像不存在时自动 build image。
 
-### 查看帮助
+## 5. 工作区与构建隔离
 
-```bash
-./docker/humble.sh --help
-./docker/jazzy.sh --help
-```
-
-## 4. 工作区与构建目录
-
-宿主机仓库位置不做任何假设。无论 DCL 位于：
-
-```text
-~/workspace/dcl
-~/projects/dcl
-/data/src/dcl
-```
-
-脚本都会根据自身位置解析实际仓库根目录，并挂载到容器中的固定路径：
+仓库 bind mount 为：
 
 ```text
 /workspace/dcl
 ```
 
-因此容器内部目录始终为：
+宿主机实际仓库路径不做假设。
 
-```text
-/workspace/
-└── dcl/
-    ├── dclcpp/
-    ├── dclpy/
-    ├── dmw/
-    ├── docker/
-    ├── docs/
-    └── ...
-```
-
-`/workspace` 保留为容器内的项目父目录。需要临时添加或并行开发其他源码时，可将其挂载为 `/workspace/<project>`，而不改变 DCL 的固定工作目录。
-
-Docker 构建目录与宿主机构建目录隔离：
-
-```text
-build/
-└── docker/
-    ├── humble/
-    │   └── dmw/
-    └── jazzy/
-        └── dmw/
-```
-
-对应路径为：
+构建目录必须隔离：
 
 ```text
 build/docker/humble/dmw
+build/docker/humble/dmw-integration
 build/docker/jazzy/dmw
+build/docker/jazzy/dmw-integration
 ```
 
-不得让 Humble、Jazzy 或宿主机构建共享同一个 CMake build tree。CMake Cache 包含编译器、依赖和绝对路径信息，跨环境复用容易造成错误配置或不可预测的链接结果。
+原因：CMake Cache 含编译器、依赖版本和绝对路径，不能在 Humble/Jazzy/宿主机构建间共享。
 
-## 5. DDS 网络默认配置
+## 6. 容器 runtime
 
-Docker 环境默认就是 DDS 互操作环境，不额外提供 `dds` 模式。
-
-每个容器默认使用：
+标准 container 使用：
 
 ```text
-Docker network:             host
-ROS_DOMAIN_ID:              23
-Fast DDS builtin transport: UDPv4
-RMW implementation:         rmw_fastrtps_cpp
-```
-
-### Host network
-
-容器使用：
-
-```text
+--rm
+--init
 --network host
 ```
 
-这是有意的设计。DCL 当前主要运行在 Linux 上，DDS discovery 和 RTPS 通信应尽量避免受到 Docker bridge、NAT、multicast 转发和 locator 地址转换的额外影响。
+并设置：
 
-Humble 与 Jazzy 容器因此直接使用同一宿主机网络栈，可以在相同 ROS Domain 中发现彼此。
+```text
+HOME=/tmp/dcl-home
+ROS_DOMAIN_ID=<validated value, default 23>
+```
 
-### UDPv4
+源码目录和临时 HOME 都通过 bind mount 提供。
 
-脚本默认设置：
+### 6.1 UID/GID
+
+launcher 把宿主 UID/GID 传给 `entrypoint.sh`：
+
+```text
+DCL_HOST_UID
+DCL_HOST_GID
+```
+
+entrypoint 在容器中建立 disposable runtime identity 后降权执行，避免宿主构建目录生成 root-owned artifact。
+
+## 7. DDS transport policy
+
+这是当前 Docker 文档中最重要的区分：
+
+> **普通 shell/build/test 不全局设置 `FASTDDS_BUILTIN_TRANSPORTS=UDPv4`。**
+
+标准 container 只设置：
+
+```text
+ROS_DOMAIN_ID
+```
+
+Fast DDS transport 使用镜像/中间件正常配置。
+
+只有：
+
+```text
+integration-test
+benchmark
+cross-integration-test
+```
+
+这类明确验证 DDS wire path 的流程通过 integration container/process 设置：
 
 ```text
 FASTDDS_BUILTIN_TRANSPORTS=UDPv4
 ```
 
-跨 Fast DDS 版本测试的核心目标是验证 DDSI-RTPS 网络通信，而不是验证 Docker 容器间共享内存。因此默认不共享宿主机 IPC，也不将 SHM 作为测试数据路径。
+目的：
 
-这使 Humble/Fast DDS 2.6 与 Jazzy/Fast DDS 2.14 之间的通信路径更明确：
+- 排除同机 SHM/Data Sharing 路径对 wire test 的干扰；
+- 明确验证 UDPv4 / DDSI-RTPS interoperability；
+- 不改变普通开发环境的 Fast DDS 行为。
 
-```text
-Humble / Fast DDS 2.6
-        │
-        │ UDPv4 / DDSI-RTPS
-        │
-Jazzy / Fast DDS 2.14
-```
+## 8. ROS_DOMAIN_ID
 
-### ROS_DOMAIN_ID
-
-默认值为：
+默认：
 
 ```text
 ROS_DOMAIN_ID=23
 ```
 
-`23` 是 DCL Docker 环境的默认测试 Domain ID。它同时保留一个小彩蛋：Humble 的 Ubuntu 基线是 22.04，Jazzy 的 Ubuntu 基线是 24.04，二者中间值为 23。
-
-该值不是 DCL 协议约束，可以通过宿主机环境变量覆盖：
+可覆盖：
 
 ```bash
-ROS_DOMAIN_ID=42 ./docker/humble.sh
-ROS_DOMAIN_ID=42 ./docker/jazzy.sh
+ROS_DOMAIN_ID=42 ./docker/jazzy.sh integration-test
 ```
 
-脚本会验证 Domain ID，并接受 `0..232` 范围内的十进制整数。
+launcher 验证十进制 `0..232`。
 
-## 6. Humble 与 Jazzy DDS 通信测试
+Domain 23 是测试默认值，不属于 DCL protocol contract。
 
-默认配置允许两个发行版容器同时运行并参与同一个 DDS Domain。
+## 9. GUI
 
-终端一启动 Humble：
+GUI 是 opt-in：
 
 ```bash
-./docker/humble.sh
+./docker/jazzy.sh --gui
 ```
 
-终端二启动 Jazzy：
+启用后 launcher：
 
-```bash
-./docker/jazzy.sh
-```
+- 传递 `DISPLAY`；
+- mount `/tmp/.X11-unix`；
+- `/dev/dri` 存在时透传；
+- 不自动执行 `xhost +`；
+- 不默认引入 Xauthority 复制逻辑。
 
-两个环境默认均使用 Domain 23 和 UDPv4，因此无需额外 Docker 网络配置。
+如果宿主 X server 本身拒绝授权，再针对实际授权失败单独处理，不预先扩大容器权限。
 
-最基础的验证可以先使用 ROS 2 Topic。例如在 Humble 中发布：
+## 10. RMW
 
-```bash
-ros2 topic pub \
-    /dcl_test \
-    std_msgs/msg/String \
-    '{data: "hello from humble"}'
-```
-
-在 Jazzy 中订阅：
-
-```bash
-ros2 topic echo /dcl_test std_msgs/msg/String
-```
-
-随后应反向执行一次 Jazzy Publisher → Humble Subscriber。
-
-DCL 后续的跨发行版互操作验证应至少覆盖：
-
-```text
-DCL Humble Publisher  → ROS 2 Jazzy Subscriber
-ROS 2 Humble Publisher → DCL Jazzy Subscriber
-DCL Jazzy Publisher   → ROS 2 Humble Subscriber
-ROS 2 Jazzy Publisher → DCL Humble Subscriber
-
-DCL Humble Client      → ROS 2 Jazzy Service
-ROS 2 Humble Client    → DCL Jazzy Server
-DCL Jazzy Client       → ROS 2 Humble Service
-ROS 2 Jazzy Client     → DCL Humble Server
-```
-
-跨 Humble/Jazzy 测试用于评估 Fast DDS 2.6 与 2.14 的实际 wire interoperability。除非项目后续明确冻结并持续验证该矩阵，否则它应视为兼容性验证结果，而不是对 ROS 2 跨发行版兼容性的无条件承诺。
-
-仓库提供可重复执行的 DMW wire-level 验证：
-
-```bash
-./docker/cross-integration-test.sh
-```
-
-脚本先分别运行 Humble 与 Jazzy 的完整 DMW 集成测试，然后在 host network、同一
-`ROS_DOMAIN_ID` 和 `FASTDDS_BUILTIN_TRANSPORTS=UDPv4` 条件下运行四个独立进程对：
-
-```text
-Humble Publisher → Jazzy Subscriber
-Jazzy Publisher  → Humble Subscriber
-Humble Client    → Jazzy Server
-Jazzy Client     → Humble Server
-```
-
-Topic peer 验证可靠写入和接收；Service peer 验证服务发现、request/reply wire mapping 与
-request identity correlation。它们使用两个发行版各自编译的 DMW 二进制，因此覆盖 Fast DDS
-2.6.x 与 2.14.x 之间的实际网络路径，而不是同一进程内的模拟。
-
-## 7. 镜像内容与运行时职责
-
-`Dockerfile` 只定义稳定的软件环境，不保存项目源码，也不编码宿主机特定状态。
-
-当前镜像安装的主要依赖包括：
-
-```text
-build-essential
-cmake
-ninja-build
-ros-${ROS_DISTRO}-fastrtps
-ros-${ROS_DISTRO}-rclcpp
-ros-${ROS_DISTRO}-rmw-fastrtps-cpp
-ros-${ROS_DISTRO}-rosidl-typesupport-fastrtps-cpp
-ros-${ROS_DISTRO}-std-msgs
-```
-
-ROS 侧默认使用：
+Dockerfile 固定：
 
 ```text
 RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 ```
 
-Dockerfile 不负责以下内容：
+这是因为 DCL 的 ROS 2 interoperability target就是 Fast DDS path；避免 base image默认 RMW 选择影响测试。
 
-```text
-ROS_DOMAIN_ID
-FASTDDS_BUILTIN_TRANSPORTS
-host network
-宿主机 UID/GID
-源码挂载
-临时 HOME
-```
+这不表示 DMW链接或依赖 ROS 2 RMW runtime。DMW仍直接使用 Fast DDS。
 
-这些属于容器运行策略，由 `docker.sh` 统一设置。
+## 11. Humble/Jazzy cross-version test
 
-源码通过 bind mount 进入 `/workspace/dcl`。`docker.sh` 将宿主机当前用户的 UID/GID 传给容器 entry point；entry point 仅在本次可删除容器的账号数据库中补齐缺失的 passwd/group 条目，随后以该 UID/GID 执行请求命令。这样既避免 Docker 构建产物在宿主机上变成 root 所有，也保证 `whoami`、`groups` 等名称查询可用。它不会挂载宿主机的 `/etc/passwd` 或 `/etc/group`，也不会修改宿主机账号数据。
-
-每次运行容器时，`docker.sh` 使用 `mktemp` 创建独立的临时 HOME，并在脚本退出时通过 `trap` 清理。临时 HOME 不用于保存长期状态。
-
-## 8. 测试范围与维护约束
-
-当前 `test` 命令执行 DMW 配置、编译和 CTest。是否执行需要 Fast DDS transport 或 ROS 2 的集成测试，仍由 DMW 自身的 CMake 测试选项决定；Docker launcher 不应隐式改变 DMW 的测试语义。
-
-`integration-test` 执行需要 DDS transport 的测试，当前覆盖：Topic QoS endpoint reuse、
-event-driven WaitSet（Guard、动态注册、并发 Busy、shutdown）、生命周期反复创建/销毁、
-以及 DMW ↔ rclcpp 的双向 Topic 和 AddTwoInts Service 互操作。应在两个发行版中执行：
+运行：
 
 ```bash
-./docker/humble.sh integration-test
-./docker/jazzy.sh integration-test
 ./docker/cross-integration-test.sh
 ```
 
-### Sanitizer 验证
+当前 script：
 
-AddressSanitizer/UndefinedBehaviorSanitizer 与 ThreadSanitizer 使用独立 build tree，不能与普通
-构建目录混用。已验证的 Jazzy ASan/UBSan 配置为：
+1. 分别准备 Humble/Jazzy integration build；
+2. 强制 peer process使用 UDPv4；
+3. 验证：
 
-```bash
-cmake -S dmw -B build/docker/jazzy/dmw-asan -G Ninja \
-  -DBUILD_TESTING=ON -DDMW_ENABLE_DDS_INTEGRATION_TESTS=ON \
-  -DDMW_ENABLE_SANITIZERS=ON
-cmake --build build/docker/jazzy/dmw-asan
-DMW_ENABLE_DDS_INTEGRATION=1 ctest --test-dir build/docker/jazzy/dmw-asan \
-  --output-on-failure --label-regex integration
+```text
+Humble Publisher -> Jazzy Subscriber
+Jazzy Publisher  -> Humble Subscriber
+Humble Client    -> Jazzy Server
+Jazzy Client     -> Humble Server
 ```
 
-TSan 使用 `-fno-pie/-no-pie`。在 Docker 的 GCC TSan 环境中，进程启动前还需要关闭 ASLR；
-标准容器的 seccomp profile 会拒绝该 personality 调用。因此 TSan 必须在专用、显式的验证容器中
-以 `--security-opt seccomp=unconfined` 和 `setarch x86_64 -R` 运行。不要把这两个选项加入日常
-开发容器的默认配置。专用容器内的配置与执行为：
+当前 cross script 只覆盖 Topic/Service。
 
-```bash
-cmake -S dmw -B build/docker/jazzy/dmw-tsan -G Ninja \
-  -DBUILD_TESTING=ON -DDMW_ENABLE_DDS_INTEGRATION_TESTS=ON \
-  -DDMW_ENABLE_TSAN=ON
-cmake --build build/docker/jazzy/dmw-tsan
-DMW_ENABLE_DDS_INTEGRATION=1 setarch x86_64 -R \
-  ctest --test-dir build/docker/jazzy/dmw-tsan --output-on-failure \
-  --label-regex integration
+Action common runtime实现后，应在同一机制增加 ActionClient/ActionServer cross-version probe；在实现落地前文档不声称 cross Action 已验证。
+
+## 12. Primary / compatibility validation
+
+### 12.1 Jazzy
+
+Jazzy环境是 DMW 新实现的主要验证环境，特别用于：
+
+- Fast DDS 2.14.x API/build；
+- `rmw_fastrtps` Jazzy interoperability；
+- WaitSet/GuardCondition race regression；
+- Service response reader behavior；
+- 新 Timer/Graph/Action integration tests。
+
+这不改变 Fast DDS 2.14.x 与 `rmw_fastrtps` Jazzy 在设计参考上的平等地位。
+
+### 12.2 Humble
+
+Humble环境验证：
+
+- 2.6.x source compatibility；
+- Topic/Service wire compatibility；
+- private compatibility shim 是否足够；
+- 新功能是否意外依赖 2.14-only API。
+
+不因为 Humble 缺少某个现代 convenience API 就修改 DMW public contract；优先在 private implementation中兼容。
+
+## 13. Baseline manifest
+
+正式 CI/interoperability report 建议至少记录：
+
+```text
+ROS distro
+Ubuntu image/tag/digest
+Fast DDS version
+Fast CDR version
+rmw_fastrtps package revision
+rosidl_typesupport_fastrtps package revision
+compiler version
+architecture
+Git commit
+ROS_DOMAIN_ID
+transport override used by integration test
 ```
 
-上述命令已在 Jazzy 中通过全部 5 个集成测试。基础性能基线应以同一硬件、同一 Domain、UDPv4
-transport 下的 publish→receive 延迟、以及 WaitSet idle/ready 两种负载分别记录。执行入口为：
+这样“Jazzy”或“2.14.x”只是支持线标签，具体一次验证仍可复现。
+
+## 14. 与 DMW 设计的关系
+
+Docker 是验证工具，不是 public runtime contract。
+
+例如：
+
+```text
+integration test sets UDPv4
+```
+
+不意味着：
+
+```text
+DMW production runtime only supports UDPv4
+```
+
+同理：
+
+```text
+Docker uses rmw_fastrtps_cpp for ROS peer
+```
+
+不意味着：
+
+```text
+DMW depends on rmw_fastrtps
+```
+
+DMW public/implementation contract分别以 `dmw/docs/dmw.md` 和 `dmw/docs/dmw_fastdds.md` 为准。
+
+## 15. 推荐日常流程
+
+新 DMW 修改：
+
+```bash
+./docker/jazzy.sh build
+./docker/jazzy.sh test
+./docker/jazzy.sh integration-test
+```
+
+兼容性回归：
+
+```bash
+./docker/humble.sh build
+./docker/humble.sh test
+./docker/humble.sh integration-test
+```
+
+跨版本 wire probe：
+
+```bash
+./docker/cross-integration-test.sh
+```
+
+涉及性能时：
 
 ```bash
 ./docker/jazzy.sh benchmark
-./docker/humble.sh benchmark
 ```
 
-该目标输出 publish→receive 的 p50/p95，以及 WaitSet poll timeout 和已触发 GuardCondition 的平均
-耗时；它不设机器相关阈值。接收路径的 allocation 变化由 `temporary_sample` 单元测试保护，若需
-比较绝对 allocation 数应使用同一 allocator/profiler 和同一机器单独记录。基线用于检测回归，不应
-跨不同机器比较绝对数值。
+## 16. 非目标
 
-维护 Docker 环境时遵循以下约束：
+当前 Docker 环境不引入：
 
-- Humble/Jazzy 应尽量共用一个 `Dockerfile` 和一个 `docker.sh`；
-- 发行版差异只放在 `humble.sh` / `jazzy.sh` 等环境入口中；
-- 不在 DMW 生产代码中因为 Docker 环境引入 `ROS_HUMBLE`、`ROS_JAZZY` 等条件分支；
-- 不在镜像中另外安装一套与 ROS 发行版脱离的 Fast DDS，默认验证发行版真实提供的 Fast DDS 栈；
-- 不将源码 `COPY` 到开发镜像；
-- 不复用 Humble/Jazzy 的 CMake build directory；
-- 不默认启用 `--ipc=host` 或 SHM；
-- 不将 `ROS_DOMAIN_ID=23` 解释为公共 API 或协议要求；
-- 新增依赖时应确认它是 DCL 构建、测试或互操作验证的真实依赖；
-- Dockerfile 依赖版本默认跟随所选 ROS 基础镜像的软件仓库 patch 更新，不固定易失效的 Debian revision。
+- Docker Compose；
+- devcontainer；
+- privileged mode；
+- NVIDIA runtime；
+- Wayland forwarding；
+- 自动 `xhost +`；
+- 多套 profile framework；
+- 单独 headless mode flag。
 
-Bash 脚本应持续通过：
+有实际需求再扩展。
 
-```bash
-bash -n \
-    docker/docker.sh \
-    docker/entrypoint.sh \
-    docker/humble.sh \
-    docker/jazzy.sh
+## 17. 总结
 
-shellcheck -x \
-    docker/docker.sh \
-    docker/entrypoint.sh \
-    docker/humble.sh \
-    docker/jazzy.sh
+Docker 环境当前承担三个职责：
+
+```text
+reproducible build
++
+Jazzy/2.14 modern validation
++
+Humble/2.6 compatibility/wire regression
 ```
 
-Dockerfile 建议使用 Hadolint 检查：
-
-```bash
-hadolint docker/Dockerfile
-```
-
-Docker 环境发生变化后，至少执行：
-
-```bash
-./docker/humble.sh rebuild
-./docker/jazzy.sh rebuild
-
-./docker/humble.sh test
-./docker/jazzy.sh test
-```
-
-当修改涉及 DDS wire behavior、QoS、类型支持、Topic、Service 或 request/reply identity 时，还应执行 Humble ↔ Jazzy 的双向互操作验证。
+最重要的环境边界是：普通开发不强制 UDPv4；只有 integration/benchmark/cross-wire 测试显式固定 UDPv4。这样既保持日常环境接近真实 Fast DDS default，又让 interoperability test 有清晰、稳定的数据路径。
