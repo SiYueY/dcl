@@ -47,6 +47,8 @@ dclpy → dclcpp → dmw
 
 `_dclpy` 是 native extension，直接绑定 `dmw` C++ API。
 
+`dmw` 负责两种 Client Library 必须共享的 language-neutral communication/runtime semantics，包括 Topic、Service、Timer、WaitSet 以及 Action 的公共协议和状态机；`dclpy` 只在其上增加 Python 类型、callback、Future、Executor、asyncio 和 GIL integration。不得在 Python 层重新实现一套与 `dclcpp` 平行的 middleware protocol state machine。
+
 ---
 
 ## 3. 总体架构
@@ -61,6 +63,7 @@ dclpy → dclcpp → dmw
 │ Context / Node                                │
 │ Publisher / Subscription                      │
 │ Client / Service                              │
+│ Timer                                         │
 │ ActionClient / ActionServer                   │
 │ QoS                                           │
 │ Executor / asyncio                            │
@@ -97,13 +100,17 @@ Publisher
 Subscription
 Client
 Service
+Timer
 ActionClient
 ActionServer
 QoS
 Executor
 MessageType
 ServiceType
+ActionType
 ```
+
+其中 Topic、Service、Timer、Action protocol/runtime state、WaitSet readiness 等 language-neutral 语义必须来自同一个 `dmw` runtime；两种 Client Library 不分别维护第二套 transport identity、Goal FSM、Action endpoint composition 或 Timer readiness 语义。
 
 语言特性差异：
 
@@ -251,28 +258,64 @@ service = node.create_service(
     callback)
 ```
 
-DMW 仍负责 request identity / DDS correlation；DCLPY 负责 Python Future 和 callback。
+DMW 仍负责 request identity / DDS correlation / service availability 和 blocking wait；DCLPY 负责 Python Future、pending Future completion 和 callback。Future registry 不下沉到 DMW，因为其 cancellation、exception 和 asyncio integration 属于 Python runtime semantics。
 
 ---
 
 ## 9. Action API 目标
 
-Action 与 DCLCPP 一样不下沉到 DMW。
+Action 的 language-neutral protocol/runtime semantics 下沉到 DMW，DCLPY 不再使用 3 Service + 2 Topic 自行实现一套 Python-side Action protocol。
 
 ```text
-dclpy Action
-├── 3 Service
-├── 2 Topic
-└── Python-side Goal semantics
+dclpy.ActionClient / ActionServer
+            ↓
+          _dclpy
+            ↓
+dmw::ActionClient / ActionServer
+            ↓
+3 Service + 2 Topic
 ```
 
-应与 ROS 2 Action wire protocol 保持一致时，由 DMW 提供 Topic/Service compatibility，DCLPY 实现 Action 组合和 Goal 状态语义。
+DMW 负责：
 
-Action 详细设计后置。
+- Action endpoint composition；
+- Goal identity；
+- Goal state machine；
+- goal/result/cancel correlation；
+- Action availability；
+- status bookkeeping；
+- result/cancel 等公共 protocol state；
+- WaitSet readiness；
+- ROS 2 Action wire-level naming 和 compatibility semantics。
+
+DCLPY 负责：
+
+- Python Action type wrapper；
+- Python ClientGoalHandle / ServerGoalHandle wrapper；
+- Python Future；
+- feedback/result/cancel callback；
+- asyncio/await integration；
+- Python exception 和 GIL boundary。
+
+Action 详细 API 设计后置，但不得重新在 Python 层实现 DMW 已经拥有的 Goal FSM、endpoint composition 或 transport correlation。
 
 ---
 
 ## 10. Executor / asyncio
+
+### 10.1 Timer
+
+Timer 的 period、deadline/readiness、cancel/reset 和 WaitSet integration 属于 language-neutral runtime semantics，由 `dmw::Timer` 提供。Python Timer 只包装 native Timer 并保存 Python callback：
+
+```text
+dclpy.Timer
+    ├── dmw::Timer
+    └── Python callable
+```
+
+Timer callback 必须由 Python Executor 调度，不得从 DMW/Fast DDS internal thread 直接进入 Python。
+
+### 10.2 Executor / asyncio
 
 Python 侧不能简单复用 C++ Executor。
 
@@ -286,7 +329,7 @@ Python 侧不能简单复用 C++ Executor。
 dclpy.Executor
 ```
 
-使用 native thread 调 `dmw::WaitSet::wait()`，ready 后回到 Python 调 callback。
+使用 native thread 调 `dmw::WaitSet::wait()`，ready 后回到 Python 调 callback。Subscription、Client、Service、Timer 和 Action common runtime 均通过 DMW readiness 接入，不在 Python Executor 内复制底层等待状态机。
 
 ### Stage B
 
@@ -358,6 +401,7 @@ dclpy/
 │       ├── subscription.py
 │       ├── client.py
 │       ├── service.py
+│       ├── timer.py
 │       ├── action.py
 │       ├── qos.py
 │       └── executor.py
@@ -369,6 +413,8 @@ dclpy/
     ├── subscription.cpp
     ├── client.cpp
     ├── service.cpp
+    ├── timer.cpp
+    ├── action.cpp
     ├── qos.cpp
     ├── wait_set.cpp
     └── detail/
@@ -435,10 +481,15 @@ dclpy publisher → dclcpp subscriber
 dclcpp client → dclpy service
 dclpy client → dclcpp service
 
+dclcpp ActionClient → dclpy ActionServer
+dclpy ActionClient → dclcpp ActionServer
+
 dclpy ↔ ROS 2 Humble Topic
 dclpy ↔ ROS 2 Humble Service
 dclpy ↔ ROS 2 Humble Action
 ```
+
+其中 Action 的 protocol correctness 由 DMW 公共 runtime 验证；跨语言测试重点验证 typed/Python binding、Future、callback 与 Executor integration。
 
 ---
 
@@ -451,10 +502,12 @@ DCLPY 正式开发建议等以下能力稳定后再开始：
 3. Publisher/Subscription 稳定；
 4. WaitSet 稳定；
 5. Service request/reply 稳定；
-6. `dclcpp` 已验证 Topic/Service；
-7. ROS 2 compatibility 的底层 naming/type/QoS 规则已基本冻结。
+6. `dmw::Timer` 与 WaitSet integration 稳定；
+7. DMW Action common runtime 的 public boundary 稳定；
+8. `dclcpp` 已验证 Topic/Service；
+9. ROS 2 compatibility 的底层 naming/type/QoS 规则已基本冻结。
 
-Action 可在 Python Topic/Service 稳定后再实现。
+Python Action wrapper 可在 Python Topic/Service/Timer binding 稳定后实现，但不需要等待 Python 重新实现 Action protocol。
 
 ---
 
@@ -468,10 +521,11 @@ Action 可在 Python Topic/Service 稳定后再实现。
 4. `dmw` 不因 Python 而改成 C API；
 5. Python callback 不运行在 DDS internal thread；
 6. Python Executor 独立设计；
-7. Action 不进入 DMW；
-8. Python Message 复用 `dmw::MessageType`；
-9. 优先评估“绑定 Fast DDS-Gen C++ Msg”而不是自行实现 Python serialization；
-10. 具体 binding 技术和 API 细节后置。
+7. Timer 与 Action 的 language-neutral runtime semantics 由 DMW 提供，DCLPY 不重复实现；
+8. Python Future、callback、asyncio、GIL 和语言级 GoalHandle 保留在 DCLPY；
+9. Python Message 复用 `dmw::MessageType`；
+10. 优先评估“绑定 Fast DDS-Gen C++ Msg”而不是自行实现 Python serialization；
+11. 具体 binding 技术和 API 细节后置。
 
 ---
 
@@ -489,4 +543,4 @@ DMW shared runtime
 Fast DDS
 ```
 
-它与 DCLCPP 共享 middleware 核心，但不共享 Client Library 实现。这样既能保证两种语言的行为一致，又允许 Python 使用适合自身的 Future、asyncio、GIL 和 callback 模型，同时不会迫使 DMW 为 Python 改为 C API。
+它与 DCLCPP 共享 middleware/runtime 核心，包括语言无关的 Topic、Service、Timer、Action protocol 和等待语义，但不共享 Client Library 实现。这样既能保证两种语言的行为一致，又允许 Python 使用适合自身的 Future、asyncio、GIL、callback 和 Executor 模型，同时不会迫使 DMW 为 Python 改为 C API。
