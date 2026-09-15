@@ -16,12 +16,13 @@
 1. 提供现代 C++17 typed API；
 2. 隐藏 `dmw` 的 type-erased 细节；
 3. 隐藏 Fast DDS；
-4. 提供 Topic / Service / Action；
+4. 提供 Topic / Service / Timer / Action；
 5. 提供 WaitSet / Executor；
 6. 提供 RAII、callback、future；
-7. 支持 Native DDS 和 ROS 2 Humble compatibility；
+7. 支持 Native DDS 和 ROS 2 Humble/Jazzy compatibility；
 8. 使用 Fast DDS-Gen 产物，不重新实现完整 codegen；
-9. 允许一次性绑定 `Msg + MsgPubSubType`，后续只使用 `MsgType<Msg>`。
+9. 允许一次性绑定 `Msg + MsgPubSubType`，后续只使用 `MsgType<Msg>`；
+10. 复用 `dmw` 提供的 language-neutral runtime、protocol state 和 readiness，不在 C++ Client Library 重复实现与 `dclpy` 平行的底层状态机。
 
 ---
 
@@ -33,6 +34,8 @@ DCLCPP V1 不负责：
 - Fast DDS Listener 用户 callback；
 - Service request identity 底层实现；
 - ROS 2 request/reply DDS mapping；
+- Timer deadline/readiness 底层状态机；
+- Action endpoint composition、transport correlation 和 Goal FSM 底层实现；
 - Python API；
 - 多 middleware；
 - 完整 ROS Graph；
@@ -52,11 +55,12 @@ DCLCPP V1 不负责：
 │                    dclcpp                       │
 │                                                 │
 │ Context / Node                                  │
-│ MsgType / ServiceType                           │
+│ MsgType / ServiceType / ActionType              │
 │ Publisher<T> / Subscription<T>                  │
 │ Client<S> / Service<S>                          │
+│ Timer + callback                                │
 │ ActionClient<A> / ActionServer<A>               │
-│ GoalHandle / Goal FSM                           │
+│ typed GoalHandle                                │
 │ QoS                                             │
 │ WaitSet / Executor                              │
 │ Callback / Future                               │
@@ -67,6 +71,8 @@ DCLCPP V1 不负责：
                         ▼
                     Fast DDS
 ```
+
+`dmw` 不只是 DDS entity wrapper，也承担 `dclcpp` 与 `dclpy` 必须共享的 language-neutral runtime semantics。DCLCPP 不复制 DMW 已经提供的 Timer、Action protocol、Goal FSM、Service correlation、WaitSet readiness 或 ROS 2 wire mapping。
 
 ---
 
@@ -97,7 +103,9 @@ ActionServer<ActionT>
 
 ### 4.4 Callback 不在 DDS 内部线程执行
 
-所有 subscription/service/action callback 通过 Executor 调度。
+所有 subscription/service/timer/action callback 通过 Executor 调度。
+
+DMW 可以维护 readiness、protocol state 和内部 listener，但不得执行用户 callback；DCLCPP 负责把 ready runtime entity 转换为 C++ callback、promise/future completion 或 typed GoalHandle 操作。
 
 ---
 
@@ -125,9 +133,11 @@ ContextOptions 可包含：
 
 - domain id；
 - participant name；
-- compatibility default；
+- compatibility/runtime mode；
 - discovery options；
 - transport config（后续）。
+
+ROS 2 compatibility 由底层 DMW Context 统一决定，不在每个 endpoint 重复实现独立 middleware mode。
 
 ---
 
@@ -147,6 +157,7 @@ Node 负责创建：
 - Subscription；
 - Client；
 - Service；
+- Timer；
 - ActionClient；
 - ActionServer。
 
@@ -431,7 +442,7 @@ RequestId -> promise<Response>
 
 原因：
 
-- DMW 负责 transport identity；
+- DMW 负责 transport identity、correlation 与 service availability/wait；
 - DCLCPP 负责 future/callback completion。
 
 Response ready：
@@ -445,6 +456,8 @@ PendingRequestRegistry
         ↓
 promise.set_value(response)
 ```
+
+Future registry 不下沉到 DMW。`std::promise` / `std::future`、callback completion 和 cancellation policy 属于 C++ Client Library semantics。
 
 ---
 
@@ -477,7 +490,9 @@ Executor：
 
 ## 14. Action 总体设计
 
-Action 仅位于 DCLCPP：
+Action 的 language-neutral protocol/runtime semantics 位于 DMW，DCLCPP 不再直接用 3 Service + 2 Topic 自行维护完整 Action protocol。
+
+底层仍然由 ROS 2-compatible Action 组合构成：
 
 ```text
 Action
@@ -488,7 +503,25 @@ Action
 └── Status Topic
 ```
 
-不新增 DMW Action primitive。
+但组合、Goal identity、Goal FSM、goal/result/cancel correlation、Action availability、status bookkeeping 和 WaitSet readiness 由 DMW 统一实现，使 `dclcpp` 与 `dclpy` 共用同一 runtime semantics。
+
+```text
+dclcpp::ActionClient<ActionT>
+            │
+            ▼
+     dmw::ActionClient
+            │
+            ▼
+      Service/Topic primitives
+
+
+dclcpp::ActionServer<ActionT>
+            │
+            ▼
+     dmw::ActionServer
+```
+
+DCLCPP 负责 typed API、GoalHandle wrapper、Future、callback 和 Executor dispatch；不复制 DMW 的 Action protocol state machine。
 
 ---
 
@@ -511,13 +544,23 @@ struct Move {
 };
 ```
 
-DCLCPP Action 使用这些已有 MsgType/ServiceType。
+DCLCPP 使用这些强类型消息构造 typed `ActionType<ActionT>`，内部绑定一个 type-erased `dmw::ActionType`：
+
+```text
+ActionT + MsgType / ServiceType
+            ↓
+dclcpp::ActionType<ActionT>
+            ↓
+      dmw::ActionType
+```
+
+DCLCPP 保留 ActionT 的编译期类型信息；DMW 负责运行时 Action descriptor 与 endpoint composition。
 
 ---
 
 ## 16. Goal FSM
 
-状态：
+Action Goal 状态仍采用：
 
 ```text
 ACCEPTED
@@ -528,14 +571,7 @@ CANCELED
 ABORTED
 ```
 
-GoalStateMachine 必须是纯逻辑组件：
-
-- 不依赖 Fast DDS；
-- 不依赖 Executor；
-- 不依赖 callback；
-- 易单元测试。
-
-状态转换由事件驱动：
+状态转换事件仍包括：
 
 ```text
 accept
@@ -546,7 +582,16 @@ succeed
 abort
 ```
 
-非法转换返回明确错误。
+但 Goal FSM 属于 language-neutral protocol state，统一由 DMW 实现和验证。DCLCPP 不维护第二套 `GoalStateMachine`。
+
+DCLCPP 的 GoalHandle 只负责：
+
+- typed Goal/Result/Feedback 访问；
+- 将 C++ API 操作转发到 DMW Goal runtime；
+- Future/callback 生命周期；
+- 将 DMW state/error 映射为 C++ API。
+
+非法状态转换由 DMW 返回明确错误，DCLCPP 负责转换为统一的 C++ status/exception model。
 
 ---
 
@@ -556,26 +601,37 @@ abort
 
 ```text
 ActionServer<ActionT>
-├── Service<SendGoal>
-├── Service<CancelGoal>
-├── Service<GetResult>
-├── Publisher<Feedback>
-├── Publisher<Status>
-├── GoalRegistry
-├── GoalStateMachine
-├── ResultCache
-└── PendingResultRequests
+├── dmw::ActionServer
+├── typed ServerGoalHandle wrappers
+├── goal/cancel/execute callbacks
+└── Future/callback-facing state
 ```
 
-### GoalRegistry
+DMW `ActionServer` 内部负责公共 runtime：
 
 ```text
-Goal UUID -> ServerGoalHandle
+3 Service + 2 Topic composition
+Goal identity / Goal FSM
+Goal registry protocol state
+Result cache protocol state
+Pending result requests
+Cancel matching
+Status bookkeeping
 ```
+
+### GoalHandle
+
+```text
+DMW Goal identity/state
+        ↓
+dclcpp::ServerGoalHandle<ActionT>
+```
+
+GoalHandle 不重新成为 Goal FSM authority。
 
 ### ResultCache
 
-保存 terminal goals 的 result，直到 timeout/cleanup policy 到期。
+terminal goal result 的协议级保存、过期和 GetResult correlation 由 DMW 统一维护；DCLCPP 只持有 typed result/future wrapper 所需的语言层引用。
 
 ### Cancellation
 
@@ -587,6 +643,8 @@ Goal UUID -> ServerGoalHandle
 - already terminal；
 - cancel callback 决策。
 
+其中匹配和状态转换由 DMW 执行；用户 cancel callback 仍由 DCLCPP Executor 调度并把决策返回 DMW。
+
 ---
 
 ## 18. ActionClient
@@ -595,25 +653,39 @@ Goal UUID -> ServerGoalHandle
 
 ```text
 ActionClient<ActionT>
-├── Client<SendGoal>
-├── Client<CancelGoal>
-├── Client<GetResult>
-├── Subscription<Feedback>
-├── Subscription<Status>
-└── GoalRegistry
+├── dmw::ActionClient
+├── typed ClientGoalHandle wrappers
+├── acceptance/result Future registry
+└── feedback/result callbacks
 ```
 
 ClientGoalHandle：
 
-- Goal UUID；
+- Goal UUID/identity 的 typed wrapper；
 - acceptance future；
 - result future；
 - feedback callback；
-- latest status。
+- latest status view。
+
+底层 goal/result/cancel request correlation、feedback/status endpoint readiness 和 Action availability 由 DMW 负责；DCLCPP 不重新组合三个 Client 和两个 Subscription 来实现 transport protocol。
 
 ---
 
-## 19. WaitSet
+## 19. Timer / WaitSet
+
+### 19.1 Timer
+
+Timer 的 period、deadline/readiness、cancel/reset 和 WaitSet integration 下沉到 `dmw::Timer`。DCLCPP Timer 只增加 C++ callback 和 typed/RAII convenience：
+
+```text
+dclcpp::Timer
+    ├── dmw::Timer
+    └── std::function callback
+```
+
+Timer 不创建自己的 callback thread。到期 readiness 由 DMW WaitSet 报告，callback 由 Executor 执行。
+
+### 19.2 WaitSet
 
 `dclcpp::WaitSet` 是 `dmw::WaitSet` 的 C++ typed wrapper。
 
@@ -623,7 +695,10 @@ ClientGoalHandle：
 wait_set.add_subscription(sub);
 wait_set.add_client(client);
 wait_set.add_service(service);
+wait_set.add_timer(timer);
 ```
+
+Action common runtime 是否以 Action registration 或其内部 ready token 暴露，由 DMW Action public contract 冻结；DCLCPP 不自行轮询 Action 的 3 Service + 2 Topic。
 
 内部最终注册相应 `dmw` entity。
 
@@ -662,8 +737,11 @@ ReadySet
    ├── Subscription → take → callback
    ├── Service      → take → callback → response
    ├── Client       → take → fulfill promise
-   └── Action       → composed endpoint dispatch
+   ├── Timer        → consume → callback
+   └── Action       → dmw runtime event → typed Future/callback dispatch
 ```
+
+Executor 负责执行策略和语言层任务调度，不成为 Timer、Service correlation 或 Action Goal FSM authority。
 
 ## 20.3 不做 ROS 2 Executor 复杂度复制
 
@@ -691,6 +769,7 @@ Node
 ├── subscriptions
 ├── clients
 ├── services
+├── timers
 └── actions
 ```
 
@@ -700,18 +779,18 @@ Node
 
 ## 22. Compatibility
 
-`NodeOptions` 或 endpoint options 指定：
+DCLCPP 不自行实现 DDS naming/QoS/type/service/action wire mapping。Context 的 compatibility/runtime mode 传递给 DMW，并由 DMW 对所有 endpoint 保持一致。
+
+概念上支持：
 
 ```cpp
 Compatibility::NativeDDS
-Compatibility::Ros2Humble
+Compatibility::ROS2
 ```
-
-默认 compatibility 可在 Context/Node 设置，endpoint 可覆盖。
 
 实际 DDS naming/QoS/type mapping 交给 DMW。
 
-DCLCPP Action 在 ROS2Humble 模式下采用 ROS 2 Action endpoint naming 和 semantics。
+DCLCPP Action 在 ROS2 模式下使用 DMW 提供的 ROS 2 Action endpoint naming 和 protocol semantics。Humble 与 Jazzy 的 wire/runtime compatibility 由 DMW 双环境验证矩阵保证，而不是在 DCLCPP 中维护 distro-specific Action implementation。
 
 ---
 
@@ -743,7 +822,7 @@ DclcppError
 
 `publish()` 设计为可并发。
 
-### Subscription/Service callback
+### Subscription/Service/Timer callback
 
 SingleThreadedExecutor 下顺序执行。
 
@@ -753,7 +832,7 @@ pending registry 必须线程安全，以支持发送线程与 executor response
 
 ### Action
 
-GoalRegistry/ResultCache 必须定义 executor-thread-only 或显式 mutex policy，优先选择清晰的单 executor ownership，避免过早引入复杂锁。
+Goal protocol state、Goal FSM 和 ResultCache 的并发规则由 DMW 定义。DCLCPP 只需为 typed GoalHandle、Future/callback registry 以及 Executor dispatch 定义清晰的线程安全策略，优先选择清晰的单 executor ownership，避免过早引入复杂锁。
 
 ---
 
@@ -770,10 +849,12 @@ dclcpp/
 │       ├── create_msg_type.hpp
 │       ├── service_type.hpp
 │       ├── create_service_type.hpp
+│       ├── action_type.hpp
 │       ├── publisher.hpp
 │       ├── subscription.hpp
 │       ├── client.hpp
 │       ├── service.hpp
+│       ├── timer.hpp
 │       ├── action_client.hpp
 │       ├── action_server.hpp
 │       ├── client_goal_handle.hpp
@@ -788,12 +869,13 @@ dclcpp/
     ├── context.cpp
     ├── node.cpp
     ├── qos.cpp
+    ├── timer.cpp
     ├── wait_set.cpp
     ├── executor.cpp
     └── action/
-        ├── goal_state_machine.cpp
-        ├── goal_registry.cpp
-        └── result_cache.cpp
+        ├── action_client.cpp
+        ├── action_server.cpp
+        └── goal_handle.cpp
 ```
 
 模板实现建议：
@@ -872,18 +954,27 @@ auto server = node->create_service(
 - multiple clients；
 - unavailable service。
 
+### Timer
+
+- periodic readiness；
+- cancel/reset；
+- Executor callback；
+- shutdown；
+- DMW Timer wrapper behavior。
+
 ### Action
 
-- accept/reject；
-- feedback；
-- succeed；
-- abort；
-- cancel；
+- typed ActionType binding；
+- GoalHandle wrapper；
+- acceptance/result Future completion；
+- feedback callback；
+- cancel callback integration；
 - multiple goals；
 - multiple clients；
-- result before completion；
-- result cache；
-- shutdown。
+- shutdown；
+- DMW Action runtime error/state mapping。
+
+Goal FSM、result cache、endpoint composition 和 transport correlation 的完整 protocol tests 属于 DMW；DCLCPP 不重复建立第二套同语义测试矩阵。
 
 ### ROS 2 interoperability
 
@@ -899,14 +990,16 @@ auto server = node->create_service(
 2. MsgType / create_msg_type；
 3. Publisher / Subscription；
 4. QoS；
-5. WaitSet / SingleThreadedExecutor；
+5. Timer / WaitSet / SingleThreadedExecutor；
 6. ServiceType；
 7. Client / Service；
 8. Future/pending request；
-9. Goal FSM；
-10. ActionServer/ActionClient；
+9. ActionType / GoalHandle wrapper；
+10. ActionServer/ActionClient wrapper；
 11. ROS 2 interoperability；
 12. MultiThreadedExecutor/advanced features。
+
+其中 Timer 与 Action wrapper 的开发以前置 `dmw::Timer` 和 DMW Action common runtime public contract 稳定为条件。
 
 ---
 
@@ -919,13 +1012,14 @@ auto server = node->create_service(
 5. 后续 endpoint API 不重复传 PubSubType；
 6. `Publisher<T>` / `Subscription<T>`；
 7. `Client<S>` / `Service<S>`；
-8. Action 只存在于 DCLCPP；
-9. Action = 3 Service + 2 Topic + FSM；
-10. Executor 在 DCLCPP；
-11. V1 只实现 SingleThreadedExecutor；
-12. callbacks 不在 Fast DDS thread；
-13. ROS 2 low-level mapping 交给 DMW；
-14. Fast DDS public types不进入普通 DCLCPP API。
+8. Timer 的 runtime/readiness 位于 DMW，DCLCPP 只增加 C++ callback wrapper；
+9. Action 的 protocol/runtime state 和 Goal FSM 位于 DMW；
+10. DCLCPP 提供 typed `ActionType`、GoalHandle、Future 和 callback wrapper；
+11. Executor 在 DCLCPP；
+12. V1 只实现 SingleThreadedExecutor；
+13. callbacks 不在 Fast DDS/DMW internal thread；
+14. ROS 2 low-level mapping 交给 DMW；
+15. Fast DDS public types不进入普通 DCLCPP API。
 
 ---
 
@@ -934,8 +1028,8 @@ auto server = node->create_service(
 DCLCPP 的核心职责可以概括为：
 
 ```text
-把 DMW 的非模板、type-erased middleware primitives，
+把 DMW 的非模板、type-erased communication/runtime primitives，
 转换成现代、强类型、RAII、callback/future 友好的 C++ API。
 ```
 
-其最重要的边界是：`dclcpp` 负责类型安全和高层语义，`dmw` 负责 DDS 语义；Action 保留在 `dclcpp`，Service 下沉到 `dmw`；类型绑定通过 `MsgType<Msg>` 一次完成，从而避免用户在整个应用中反复操作 `MsgPubSubType`。
+其最重要的边界是：`dclcpp` 负责类型安全、C++ callback/Future 和 Executor 调度，`dmw` 负责 DDS 语义以及跨语言必须一致的 Timer、Service、Action protocol/runtime state；类型绑定通过 `MsgType<Msg>` 一次完成，从而避免用户在整个应用中反复操作 `MsgPubSubType`。
