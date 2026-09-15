@@ -381,8 +381,17 @@ DMW_ENABLE_DDS_INTEGRATION=1 setarch x86_64 -R \
 ```
 
 上述命令已在 Jazzy 中通过全部 5 个集成测试。基础性能基线应以同一硬件、同一 Domain、UDPv4
-transport 下的 publish→receive 延迟、接收路径分配数、以及 WaitSet idle/ready 两种负载分别记录；
-它们用于检测回归，不应跨不同机器比较绝对数值。
+transport 下的 publish→receive 延迟、以及 WaitSet idle/ready 两种负载分别记录。执行入口为：
+
+```bash
+./docker/jazzy.sh benchmark
+./docker/humble.sh benchmark
+```
+
+该目标输出 publish→receive 的 p50/p95，以及 WaitSet poll timeout 和已触发 GuardCondition 的平均
+耗时；它不设机器相关阈值。接收路径的 allocation 变化由 `temporary_sample` 单元测试保护，若需
+比较绝对 allocation 数应使用同一 allocator/profiler 和同一机器单独记录。基线用于检测回归，不应
+跨不同机器比较绝对数值。
 
 维护 Docker 环境时遵循以下约束：
 

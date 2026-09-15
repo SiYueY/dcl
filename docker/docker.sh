@@ -18,6 +18,7 @@
 #     build               Configure and build DMW.
 #     test                Configure, build, and run DMW tests.
 #     integration-test    Configure, build, and run DDS/ROS 2 integration tests.
+#     benchmark           Configure, build, and run the DMW foundation benchmark.
 #     rebuild             Rebuild the Docker image.
 #
 # Parameters:
@@ -82,6 +83,7 @@ print_usage() {
             '    build               Configure and build DMW.' \
             '    test                Configure, build, and run DMW tests.' \
             '    integration-test    Configure, build, and run DDS/ROS 2 integration tests.' \
+            '    benchmark           Configure, build, and run the DMW foundation benchmark.' \
             '    rebuild             Rebuild the Docker image.' \
             '' \
             'Options:' \
@@ -102,6 +104,7 @@ print_usage() {
         '    build               Configure and build DMW.' \
         '    test                Configure, build, and run DMW tests.' \
         '    integration-test    Configure, build, and run DDS/ROS 2 integration tests.' \
+        '    benchmark           Configure, build, and run the DMW foundation benchmark.' \
         '    rebuild             Rebuild the Docker image.' \
         '' \
         'Options:' \
@@ -309,7 +312,7 @@ parse_arguments() {
                 shift
                 ;;
 
-            shell | build | test | integration-test | rebuild)
+            shell | build | test | integration-test | benchmark | rebuild)
                 if [[ -n "${COMMAND}" ]]; then
                     die_usage "Multiple commands were specified: '${COMMAND}' and '$1'."
                 fi
@@ -892,6 +895,24 @@ integration_test_dmw() {
 }
 
 # Purpose:
+#     Build and run the non-asserting DMW foundation performance benchmark.
+# Arguments:
+#     None.
+# Returns:
+#     0 when configuration, compilation, and benchmark execution succeed.
+# Exit codes:
+#     Propagates Docker, configuration, compilation, or benchmark failures.
+# Side effects:
+#     Creates or updates integration build artifacts and writes benchmark
+#     measurements to stdout.
+benchmark_dmw() {
+    configure_dmw_integration
+    compile_dmw_integration
+    log_info "Running DMW foundation benchmark for ROS 2 ${ROS_DISTRO}."
+    run_integration_container "${INTEGRATION_BUILD_DIR}/dmw_benchmark"
+}
+
+# Purpose:
 #     Dispatch the validated public command.
 # Arguments:
 #     None.
@@ -921,6 +942,11 @@ execute_command() {
         integration-test)
             ensure_image
             integration_test_dmw
+            ;;
+
+        benchmark)
+            ensure_image
+            benchmark_dmw
             ;;
 
         rebuild)

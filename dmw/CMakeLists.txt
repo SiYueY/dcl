@@ -192,6 +192,9 @@ if(BUILD_TESTING)
         add_executable(dmw_interop_peer test/interop_peer.cpp)
         target_link_libraries(dmw_interop_peer PRIVATE dmw::fastdds_binding)
 
+        add_executable(dmw_benchmark test/benchmark.cpp)
+        target_link_libraries(dmw_benchmark PRIVATE dmw::fastdds_binding)
+
         set_tests_properties(
             dmw.message_type
             dmw.wait_set
