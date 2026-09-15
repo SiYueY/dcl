@@ -3,15 +3,15 @@
 # DCL ROS 2 Jazzy Docker entry point.
 #
 # Purpose:
-#     Select the ROS 2 Jazzy / Ubuntu 24.04 (Noble) environment and delegate
-#     Docker operations to docker.sh.
+#     Select the ROS 2 Jazzy Desktop Full environment and delegate Docker
+#     operations to docker.sh.
 #
 # Usage:
-#     jazzy.sh [shell|build|test|rebuild]
+#     jazzy.sh [options] [command]
 #     jazzy.sh --help
 #
 # Parameters:
-#     Optional command forwarded unchanged to docker.sh.
+#     Optional command and options forwarded unchanged to docker.sh.
 #
 # Dependencies:
 #     bash and an executable docker.sh in the same directory.
@@ -27,7 +27,7 @@
 set -Eeuo pipefail
 
 readonly ROS_DISTRO="jazzy"
-readonly ROS_BASE_IMAGE="ros:jazzy-ros-base-noble"
+readonly ROS_BASE_IMAGE="osrf/ros:jazzy-desktop-full"
 
 # Purpose:
 #     Resolve the directory containing this entry script independently of the
@@ -63,7 +63,7 @@ resolve_script_dir() {
 #     Validate the shared launcher and replace this process with docker.sh
 #     configured for ROS 2 Jazzy.
 # Arguments:
-#     $@ - Optional public command or help option.
+#     $@ - Optional public command/options or help option.
 # Returns:
 #     Does not return after a successful exec.
 # Exit codes:

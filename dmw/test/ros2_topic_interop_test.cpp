@@ -1,5 +1,6 @@
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -7,6 +8,7 @@
 #include <typeindex>
 
 #include "fastcdr/Cdr.h"
+#include "fastcdr/config.h"
 #include "fastcdr/FastBuffer.h"
 #include "fastdds/dds/topic/TopicDataType.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -24,6 +26,21 @@ namespace {
 constexpr char kTopicName[] = "/dmw_ros2_topic_interop";
 constexpr char kWireTypeName[] = "std_msgs::msg::dds_::String_";
 
+#if FASTCDR_VERSION_MAJOR >= 2
+constexpr auto kRosCdrVersion = eprosima::fastcdr::DDS_CDR;
+#else
+constexpr auto kRosCdrVersion = eprosima::fastcdr::Cdr::DDS_CDR;
+#endif
+
+std::uint32_t ros_domain_id() {
+    const char* value = std::getenv("ROS_DOMAIN_ID");
+    assert(value != nullptr);
+    char* end = nullptr;
+    const auto parsed = std::strtoul(value, &end, 10);
+    assert(*value != '\0' && *end == '\0' && parsed <= 232U);
+    return static_cast<std::uint32_t>(parsed);
+}
+
 class RosStringTypeSupport final : public eprosima::fastdds::dds::TopicDataType {
 public:
     RosStringTypeSupport() {
@@ -36,12 +53,16 @@ public:
         eprosima::fastcdr::FastBuffer buffer(
             reinterpret_cast<char*>(payload->data), payload->max_size);
         eprosima::fastcdr::Cdr cdr(
-            buffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, eprosima::fastcdr::Cdr::DDS_CDR);
+            buffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, kRosCdrVersion);
         cdr.serialize_encapsulation();
         if (!callbacks()->cdr_serialize(data, cdr)) {
             return false;
         }
+#if FASTCDR_VERSION_MAJOR >= 2
+        payload->length = static_cast<std::uint32_t>(cdr.get_serialized_data_length());
+#else
         payload->length = static_cast<std::uint32_t>(cdr.getSerializedDataLength());
+#endif
         return true;
     }
 
@@ -49,7 +70,7 @@ public:
         eprosima::fastcdr::FastBuffer buffer(
             reinterpret_cast<char*>(payload->data), static_cast<std::size_t>(payload->length));
         eprosima::fastcdr::Cdr cdr(
-            buffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, eprosima::fastcdr::Cdr::DDS_CDR);
+            buffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, kRosCdrVersion);
         cdr.read_encapsulation();
         return callbacks()->cdr_deserialize(cdr, data);
     }
@@ -114,6 +135,7 @@ int main() {
 
         dmw::ContextOptions context_options;
         context_options.participant_name = "dmw-ros2-topic-peer";
+        context_options.domain_id = ros_domain_id();
         context_options.runtime_mode = dmw::RuntimeMode::ROS2;
         auto context = dmw::Context::create(context_options);
         assert(context);

@@ -1,29 +1,36 @@
 # syntax=docker/dockerfile:1
 #
-# DCL ROS 2 development image.
+# DCL ROS 2 development and validation image.
 #
 # Purpose:
-#     Provide a small, reproducible build environment for DCL/DMW development
-#     and ROS 2 Fast DDS interoperability testing.
+#     Provide a reproducible full ROS 2 development environment for DCL.
+#     The selected ROS Desktop Full image supplies the standard ROS 2 desktop,
+#     visualization, perception, simulation, and command-line environment.
+#     This Dockerfile adds the build, debugging, and DCL-specific dependencies
+#     required by the repository.
 #
 # Supported configurations:
 #     ROS 2 Humble on Ubuntu 22.04 (Jammy)
 #     ROS 2 Jazzy  on Ubuntu 24.04 (Noble)
 #
 # Build arguments:
-#     ROS_BASE_IMAGE   ROS base image. The launcher supplies this together with
-#                      ROS_DISTRO. The default keeps direct Humble builds useful.
+#     ROS_BASE_IMAGE   ROS Desktop Full image. The launcher supplies this
+#                      together with ROS_DISTRO. The default keeps direct
+#                      Humble builds useful.
 #     ROS_DISTRO       ROS 2 distribution used to select ROS package names.
 #
 # Runtime contract:
 #     The repository is not copied into the image. docker.sh bind-mounts it at
 #     /workspace and runs the container with the host user's UID/GID.
-#     docker.sh also supplies HOME, ROS_DOMAIN_ID, host networking, and
-#     FASTDDS_BUILTIN_TRANSPORTS=UDPv4 at runtime.
+#     docker.sh supplies HOME, ROS_DOMAIN_ID, and host networking at runtime.
+#     Optional GUI sessions forward the host X11 display. DDS integration tests
+#     additionally force Fast DDS builtin transport to UDPv4.
 #
 # Installed dependencies:
-#     C++ build toolchain, CMake, Ninja, Fast DDS, rclcpp, std_msgs, the Fast DDS
-#     RMW implementation, and Fast DDS ROSIDL type support.
+#     ROS Desktop Full from the base image; C++ build/debug tooling; common ROS
+#     workspace tooling; Fast DDS, the Fast DDS RMW implementation and ROSIDL
+#     type support used by DCL interoperability tests; and Xvfb for headless GUI
+#     smoke/integration tests.
 #
 # Notes:
 #     Package versions intentionally follow the ROS repository configured by
@@ -31,7 +38,7 @@
 #     supported ROS patch releases instead of pinning package revisions that
 #     may later disappear from the repository.
 
-ARG ROS_BASE_IMAGE=ros:humble-ros-base-jammy
+ARG ROS_BASE_IMAGE=osrf/ros:humble-desktop-full
 FROM ${ROS_BASE_IMAGE}
 
 ARG ROS_DISTRO=humble
@@ -46,7 +53,16 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
         build-essential \
         cmake \
+        gdb \
+        git \
+        iproute2 \
+        iputils-ping \
         ninja-build \
+        procps \
+        python3-colcon-common-extensions \
+        python3-rosdep \
+        python3-vcstool \
+        xvfb \
         "ros-${ROS_DISTRO}-fastrtps" \
         "ros-${ROS_DISTRO}-rclcpp" \
         "ros-${ROS_DISTRO}-rmw-fastrtps-cpp" \

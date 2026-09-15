@@ -4,24 +4,30 @@
 #
 # Purpose:
 #     Build and run the DCL Docker environment selected by an entry script such
-#     as humble.sh or jazzy.sh. The container uses host networking and UDPv4 so
-#     Humble and Jazzy containers can participate in the same DDS network.
+#     as humble.sh or jazzy.sh. The container uses host networking so ROS 2
+#     processes can communicate naturally with the host and peer containers.
+#     Optional GUI mode forwards the host X11 display for tools such as RViz.
+#     DDS integration tests additionally force Fast DDS builtin transport to
+#     UDPv4 for deterministic wire-level interoperability testing.
 #
 # Usage:
-#     docker.sh --ros-distro <distro> --base-image <image> [command]
+#     docker.sh --ros-distro <distro> --base-image <image> [options] [command]
 #
 # Commands:
-#     shell       Start an interactive shell. This is the default.
-#     build       Configure and build DMW.
-#     test        Configure, build, and run DMW tests.
-#     rebuild     Rebuild the Docker image.
+#     shell               Start an interactive shell. This is the default.
+#     build               Configure and build DMW.
+#     test                Configure, build, and run DMW tests.
+#     integration-test    Configure, build, and run DDS/ROS 2 integration tests.
+#     rebuild             Rebuild the Docker image.
 #
 # Parameters:
 #     --ros-distro <distro>   ROS 2 distribution name, e.g. humble or jazzy.
 #     --base-image <image>    Docker base image for the selected distribution.
+#     --gui                   Enable X11 forwarding for GUI applications.
 #
 # Environment:
 #     ROS_DOMAIN_ID           Optional ROS 2 domain ID override. Defaults to 23.
+#     DISPLAY                 Required when --gui is enabled.
 #
 # Dependencies:
 #     bash, docker, id, mktemp, rm
@@ -49,8 +55,10 @@ ROS_DISTRO=""
 ROS_BASE_IMAGE=""
 COMMAND=""
 ROS_DOMAIN_ID_VALUE=""
+GUI_ENABLED="false"
 IMAGE_NAME=""
 BUILD_DIR=""
+INTEGRATION_BUILD_DIR=""
 TEMP_HOME_DIR=""
 
 # Purpose:
@@ -67,38 +75,44 @@ TEMP_HOME_DIR=""
 print_usage() {
     if [[ -n "${ROS_DISTRO}" ]]; then
         printf '%s\n' \
-            "Usage: ${ROS_DISTRO}.sh [command]" \
+            "Usage: ${ROS_DISTRO}.sh [options] [command]" \
             '' \
             'Commands:' \
-            '    shell       Start an interactive shell. This is the default.' \
-            '    build       Configure and build DMW.' \
-            '    test        Configure, build, and run DMW tests.' \
-            '    rebuild     Rebuild the Docker image.' \
+            '    shell               Start an interactive shell. This is the default.' \
+            '    build               Configure and build DMW.' \
+            '    test                Configure, build, and run DMW tests.' \
+            '    integration-test    Configure, build, and run DDS/ROS 2 integration tests.' \
+            '    rebuild             Rebuild the Docker image.' \
             '' \
             'Options:' \
+            '    --gui        Enable X11 forwarding for GUI applications.' \
             '    -h, --help   Show this help message.' \
             '' \
             'Environment:' \
-            '    ROS_DOMAIN_ID   ROS 2 domain ID. Defaults to 23.'
+            '    ROS_DOMAIN_ID   ROS 2 domain ID. Defaults to 23.' \
+            '    DISPLAY         Required when --gui is enabled.'
         return 0
     fi
 
     printf '%s\n' \
-        'Usage: docker.sh --ros-distro <distro> --base-image <image> [command]' \
+        'Usage: docker.sh --ros-distro <distro> --base-image <image> [options] [command]' \
         '' \
         'Commands:' \
-        '    shell       Start an interactive shell. default.' \
-        '    build       Configure and build DMW.' \
-        '    test        Configure, build, and run DMW tests.' \
-        '    rebuild     Rebuild the Docker image.' \
+        '    shell               Start an interactive shell. default.' \
+        '    build               Configure and build DMW.' \
+        '    test                Configure, build, and run DMW tests.' \
+        '    integration-test    Configure, build, and run DDS/ROS 2 integration tests.' \
+        '    rebuild             Rebuild the Docker image.' \
         '' \
         'Options:' \
         '    --ros-distro <distro>   ROS 2 distribution name.' \
         '    --base-image <image>    Docker base image.' \
+        '    --gui                   Enable X11 forwarding for GUI applications.' \
         '    -h, --help              Show this help message.' \
         '' \
         'Environment:' \
-        '    ROS_DOMAIN_ID           ROS 2 domain ID. Defaults to 23.'
+        '    ROS_DOMAIN_ID           ROS 2 domain ID. Defaults to 23.' \
+        '    DISPLAY                 Required when --gui is enabled.'
 }
 
 # Purpose:
@@ -274,7 +288,7 @@ require_option_value() {
 # Exit codes:
 #     0 for --help; 2 for invalid usage.
 # Side effects:
-#     Assigns ROS_DISTRO, ROS_BASE_IMAGE, and COMMAND.
+#     Assigns ROS_DISTRO, ROS_BASE_IMAGE, GUI_ENABLED, and COMMAND.
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -290,7 +304,12 @@ parse_arguments() {
                 shift 2
                 ;;
 
-            shell | build | test | rebuild)
+            --gui)
+                GUI_ENABLED="true"
+                shift
+                ;;
+
+            shell | build | test | integration-test | rebuild)
                 if [[ -n "${COMMAND}" ]]; then
                     die_usage "Multiple commands were specified: '${COMMAND}' and '$1'."
                 fi
@@ -373,7 +392,7 @@ validate_domain_id() {
 # Exit codes:
 #     2 for invalid ROS distribution or ROS_DOMAIN_ID.
 # Side effects:
-#     Assigns immutable domain, image, and build-directory values.
+#     Assigns immutable domain, image, GUI, and build-directory values.
 validate_configuration() {
     local requested_domain_id
 
@@ -386,13 +405,16 @@ validate_configuration() {
 
     IMAGE_NAME="dcl:${ROS_DISTRO}"
     BUILD_DIR="build/docker/${ROS_DISTRO}/dmw"
+    INTEGRATION_BUILD_DIR="build/docker/${ROS_DISTRO}/dmw-integration"
 
     readonly ROS_DISTRO
     readonly ROS_BASE_IMAGE
     readonly COMMAND
     readonly ROS_DOMAIN_ID_VALUE
+    readonly GUI_ENABLED
     readonly IMAGE_NAME
     readonly BUILD_DIR
+    readonly INTEGRATION_BUILD_DIR
 }
 
 # Purpose:
@@ -421,6 +443,30 @@ validate_environment() {
 
     if [[ ! -d "${REPO_ROOT}/dmw" ]]; then
         die_runtime "Expected DMW directory not found under repository root: ${REPO_ROOT}"
+    fi
+}
+
+# Purpose:
+#     Validate host-side requirements for an X11-enabled container.
+# Arguments:
+#     None.
+# Returns:
+#     0 when GUI mode is disabled or the X11 host environment is usable.
+# Exit codes:
+#     1 when GUI mode is enabled without DISPLAY or the X11 socket directory.
+# Side effects:
+#     None.
+validate_gui_environment() {
+    if [[ "${GUI_ENABLED}" != "true" ]]; then
+        return 0
+    fi
+
+    if [[ -z "${DISPLAY:-}" ]]; then
+        die_runtime "DISPLAY is not set; GUI mode requires an X11 display."
+    fi
+
+    if [[ ! -d /tmp/.X11-unix ]]; then
+        die_runtime "X11 socket directory '/tmp/.X11-unix' does not exist."
     fi
 }
 
@@ -585,13 +631,14 @@ ensure_image() {
 #     Propagates docker run or container-command failures.
 # Side effects:
 #     Creates TEMP_HOME_DIR when needed, starts a disposable container, mounts
-#     the repository at /workspace, uses host networking, and forces Fast DDS
-#     builtin transport to UDPv4 for deterministic DDS wire testing.
+#     the repository at /workspace, uses host networking, and optionally
+#     forwards the host X11 display when --gui is enabled.
 run_container() {
     local host_uid
     local host_gid
     local -a docker_args
 
+    validate_gui_environment
     create_temp_home
 
     host_uid="$(id -u)"
@@ -605,11 +652,23 @@ run_container() {
         --user "${host_uid}:${host_gid}"
         --env "HOME=${CONTAINER_HOME}"
         --env "ROS_DOMAIN_ID=${ROS_DOMAIN_ID_VALUE}"
-        --env "FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_TRANSPORTS}"
         --volume "${REPO_ROOT}:${CONTAINER_WORKSPACE}"
         --volume "${TEMP_HOME_DIR}:${CONTAINER_HOME}"
         --workdir "${CONTAINER_WORKSPACE}"
     )
+
+    if [[ "${GUI_ENABLED}" == "true" ]]; then
+        docker_args+=(
+            --env "DISPLAY=${DISPLAY}"
+            --volume "/tmp/.X11-unix:/tmp/.X11-unix"
+        )
+
+        if [[ -d /dev/dri ]]; then
+            docker_args+=(
+                --device "/dev/dri:/dev/dri"
+            )
+        fi
+    fi
 
     # Add terminal options only when matching host file descriptors are TTYs.
     # This keeps interactive shells pleasant without breaking non-TTY CI jobs.
@@ -625,6 +684,23 @@ run_container() {
 }
 
 # Purpose:
+#     Run a command inside the DCL integration-test environment.
+# Arguments:
+#     $@ - Command and arguments to execute in the container.
+# Returns:
+#     The status returned by run_container.
+# Exit codes:
+#     Propagates docker run or container-command failures.
+# Side effects:
+#     Uses the standard container environment and forces Fast DDS builtin
+#     transports to UDPv4 for deterministic DDS interoperability testing.
+run_integration_container() {
+    run_container \
+        env "FASTDDS_BUILTIN_TRANSPORTS=${FASTDDS_TRANSPORTS}" \
+        "$@"
+}
+
+# Purpose:
 #     Start the default interactive development shell.
 # Arguments:
 #     None.
@@ -636,13 +712,14 @@ run_container() {
 #     Starts a disposable container attached to available terminal streams.
 run_shell() {
     log_info "Starting ROS 2 ${ROS_DISTRO} development shell."
-    log_info "ROS_DOMAIN_ID=${ROS_DOMAIN_ID_VALUE}; Fast DDS transport=${FASTDDS_TRANSPORTS}."
+    log_info "ROS_DOMAIN_ID=${ROS_DOMAIN_ID_VALUE}; GUI=${GUI_ENABLED}."
 
     run_container bash
 }
 
 # Purpose:
-#     Configure the DMW CMake build tree for the selected ROS 2 environment.
+#     Configure the standard DMW CMake build tree for the selected ROS 2
+#     environment.
 # Arguments:
 #     None.
 # Returns:
@@ -660,11 +737,12 @@ configure_dmw() {
         -S "dmw" \
         -B "${BUILD_DIR}" \
         -G "Ninja" \
-        -DBUILD_TESTING=ON
+        -DBUILD_TESTING=ON \
+        -DDMW_ENABLE_DDS_INTEGRATION_TESTS=OFF
 }
 
 # Purpose:
-#     Compile the configured DMW build tree.
+#     Compile the standard DMW build tree.
 # Arguments:
 #     None.
 # Returns:
@@ -682,7 +760,7 @@ compile_dmw() {
 }
 
 # Purpose:
-#     Run the DMW CTest suite from the configured build tree.
+#     Run the standard DMW CTest suite from the configured build tree.
 # Arguments:
 #     None.
 # Returns:
@@ -698,6 +776,69 @@ run_dmw_tests() {
         ctest \
         --test-dir "${BUILD_DIR}" \
         --output-on-failure
+}
+
+# Purpose:
+#     Configure the DMW integration-test build tree with DDS transport tests
+#     enabled.
+# Arguments:
+#     None.
+# Returns:
+#     0 when CMake configuration succeeds.
+# Exit codes:
+#     Propagates Docker or CMake failures.
+# Side effects:
+#     Creates or updates INTEGRATION_BUILD_DIR in the host repository.
+configure_dmw_integration() {
+    log_info "Configuring DMW integration tests for ROS 2 ${ROS_DISTRO}."
+    log_info "Integration build directory: ${INTEGRATION_BUILD_DIR}"
+
+    run_integration_container \
+        cmake \
+        -S "dmw" \
+        -B "${INTEGRATION_BUILD_DIR}" \
+        -G "Ninja" \
+        -DBUILD_TESTING=ON \
+        -DDMW_ENABLE_DDS_INTEGRATION_TESTS=ON
+}
+
+# Purpose:
+#     Compile the DMW integration-test build tree.
+# Arguments:
+#     None.
+# Returns:
+#     0 when compilation succeeds.
+# Exit codes:
+#     Propagates Docker or CMake build failures.
+# Side effects:
+#     Writes build artifacts under INTEGRATION_BUILD_DIR in the host repository.
+compile_dmw_integration() {
+    log_info "Compiling DMW integration tests for ROS 2 ${ROS_DISTRO}."
+
+    run_integration_container \
+        cmake \
+        --build "${INTEGRATION_BUILD_DIR}"
+}
+
+# Purpose:
+#     Run DMW tests carrying the integration label.
+# Arguments:
+#     None.
+# Returns:
+#     0 when all integration-labelled tests pass.
+# Exit codes:
+#     Propagates Docker or CTest failures.
+# Side effects:
+#     Executes integration tests and may update test result files under
+#     INTEGRATION_BUILD_DIR.
+run_dmw_integration_tests() {
+    log_info "Running DMW DDS/ROS 2 integration tests for ROS 2 ${ROS_DISTRO}."
+
+    run_integration_container \
+        ctest \
+        --test-dir "${INTEGRATION_BUILD_DIR}" \
+        --output-on-failure \
+        --label-regex "integration"
 }
 
 # Purpose:
@@ -732,6 +873,23 @@ test_dmw() {
 }
 
 # Purpose:
+#     Perform a self-contained DMW DDS/ROS 2 integration-test operation.
+# Arguments:
+#     None.
+# Returns:
+#     0 when configuration, compilation, and integration tests all succeed.
+# Exit codes:
+#     Propagates configuration, compilation, or test failures.
+# Side effects:
+#     Creates or updates integration build/test artifacts under
+#     INTEGRATION_BUILD_DIR.
+integration_test_dmw() {
+    configure_dmw_integration
+    compile_dmw_integration
+    run_dmw_integration_tests
+}
+
+# Purpose:
 #     Dispatch the validated public command.
 # Arguments:
 #     None.
@@ -756,6 +914,11 @@ execute_command() {
         test)
             ensure_image
             test_dmw
+            ;;
+
+        integration-test)
+            ensure_image
+            integration_test_dmw
             ;;
 
         rebuild)

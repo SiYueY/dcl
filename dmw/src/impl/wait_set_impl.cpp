@@ -124,7 +124,7 @@ Result<WaitResult> WaitSet::Impl::wait(WaitTimeout timeout) {
         const auto wake = context->wait_for_notification(
             std::chrono::duration_cast<std::chrono::nanoseconds>(remaining));
         if (!wake) {
-            return Result<WaitResult>::failure(std::move(wake.error()));
+            return Result<WaitResult>::failure(wake.error());
         }
     }
 }

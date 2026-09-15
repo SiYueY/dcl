@@ -183,6 +183,9 @@ if(BUILD_TESTING)
     add_test(NAME dmw.name COMMAND dmw_name_test)
     set_tests_properties(dmw.name PROPERTIES LABELS "unit")
     if(DMW_ENABLE_DDS_INTEGRATION_TESTS)
+        add_executable(dmw_interop_peer test/interop_peer.cpp)
+        target_link_libraries(dmw_interop_peer PRIVATE dmw::fastdds_binding)
+
         set_tests_properties(
             dmw.message_type
             PROPERTIES
