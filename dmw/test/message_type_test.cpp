@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstring>
 #include <cstdlib>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -782,6 +783,19 @@ int main() {
 
     auto shutdown_wait_set = context.value()->create_wait_set();
     assert(shutdown_wait_set);
+    dmw::ServiceType unavailable_service_type(generated.value(), generated.value());
+    auto unavailable_client = node.value()->create_client(
+        unavailable_service_type, "service_that_is_not_created", dmw::Qos{});
+    assert(unavailable_client);
+    auto unavailable_timeout = dmw::WaitTimeout::finite(std::chrono::milliseconds(20));
+    assert(unavailable_timeout);
+    auto unavailable = unavailable_client.value()->wait_for_service(unavailable_timeout.value());
+    assert(unavailable);
+    assert(!unavailable.value());
+
+    auto service_shutdown_wait = std::async(std::launch::async, [&] {
+        return unavailable_client.value()->wait_for_service(dmw::WaitTimeout::infinite());
+    });
     std::optional<dmw::Result<dmw::WaitResult>> shutdown_wait_result;
     std::thread shutdown_wait_thread([&] {
         shutdown_wait_result.emplace(shutdown_wait_set.value()->wait(dmw::WaitTimeout::infinite()));
@@ -789,6 +803,10 @@ int main() {
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     assert(context.value()->shutdown());
     shutdown_wait_thread.join();
+    assert(service_shutdown_wait.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    auto service_shutdown_result = service_shutdown_wait.get();
+    assert(!service_shutdown_result);
+    assert(service_shutdown_result.error().code() == dmw::ErrorCode::ContextShutdown);
     assert(shutdown_wait_result);
     assert(!*shutdown_wait_result);
     assert(shutdown_wait_result->error().code() == dmw::ErrorCode::ContextShutdown);
