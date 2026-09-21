@@ -28,7 +28,7 @@ public:
         std::shared_ptr<impl::ResponseState> response_state,
         std::unique_ptr<impl::ResponseWriterListener> response_listener, impl::Topic request_topic,
         impl::Topic response_topic, impl::LocalEndpointRegistration request_metadata,
-        impl::LocalEndpointRegistration response_metadata) noexcept
+        impl::LocalEndpointRegistration response_metadata)
     : context_(context),
       request_reader_(request_reader),
       response_writer_(response_writer),
