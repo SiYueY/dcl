@@ -62,6 +62,13 @@ public:
 
     Result<ParameterChangeSet> set_atomically(const std::vector<Parameter>& parameters);
 
+    /// Validate request syntax that is independent of Context/store state.
+    Result<void> validate_name_and_duplicates(
+        const std::vector<Parameter>& parameters) const;
+
+    static Result<void> validate_descriptor(
+        const ParameterDescriptor& descriptor, const ParameterValue& direct_value);
+
     /// Return and clear the accumulated delta, including undeclared
     /// parameters, so a language layer can publish a complete typed
     /// parameter event.
@@ -73,13 +80,8 @@ private:
         ParameterDescriptor descriptor;
     };
 
-    Result<void> validate_name_and_duplicates(const std::vector<Parameter>& parameters) const;
-
     Result<void> validate_assignment_locked(
         const std::string& name, const ParameterValue& value, bool implicit_declare) const;
-
-    static Result<void> validate_descriptor(
-        const ParameterDescriptor& descriptor, const ParameterValue& direct_value);
 
     static Result<void> validate_value_against_descriptor(
         const ParameterValue& value, const ParameterDescriptor& descriptor);

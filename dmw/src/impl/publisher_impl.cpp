@@ -7,6 +7,7 @@
 
 #include "dmw/error.hpp"
 #include "impl/event_impl.hpp"
+#include "impl/deadline.hpp"
 #include "impl/process_lifetime.hpp"
 #include "impl/qos.hpp"
 #include "impl/return_code.hpp"
@@ -80,9 +81,7 @@ Result<bool> Publisher::Impl::wait_for_all_acked(WaitTimeout timeout) {
     const auto operation = context_->try_acquire_operation();
     if (!operation)
         return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
-    const auto deadline = timeout.kind() == WaitTimeout::Kind::Finite
-                              ? std::chrono::steady_clock::now() + timeout.duration()
-                              : std::chrono::steady_clock::time_point::max();
+    const auto deadline = impl::steady_deadline(timeout);
     const auto shutdown_check_interval =
         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
             std::chrono::milliseconds(20));

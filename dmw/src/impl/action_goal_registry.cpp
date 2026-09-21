@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "dmw/error.hpp"
+#include "impl/deadline.hpp"
 
 namespace dmw::impl {
 
@@ -211,7 +212,8 @@ Result<std::optional<std::chrono::steady_clock::time_point>> ActionGoalRegistry:
     std::optional<std::chrono::steady_clock::time_point> earliest;
     for (const auto& entry : goals_) {
         if (!entry.second.committed || !entry.second.expiry_scheduled) continue;
-        const auto deadline = entry.second.terminal_time + result_timeout_;
+        const auto deadline =
+            saturating_steady_add(entry.second.terminal_time, result_timeout_);
         if (!earliest || deadline < *earliest) earliest = deadline;
     }
     return Result<std::optional<std::chrono::steady_clock::time_point>>::success(earliest);

@@ -104,9 +104,7 @@ Result<WaitResult> WaitSet::Impl::wait(WaitTimeout timeout) {
     auto begin = context->begin_wait();
     if (!begin) return Result<WaitResult>::failure(std::move(begin.error()));
     const impl::WaitActivityGuard active_wait(context);
-    const auto deadline = timeout.kind() == WaitTimeout::Kind::Finite
-                              ? std::chrono::steady_clock::now() + timeout.duration()
-                              : std::chrono::steady_clock::time_point::max();
+    const auto deadline = impl::steady_deadline(timeout);
 
     while (true) {
         auto repaired = context->repair_control_guard_if_needed();
@@ -179,9 +177,7 @@ Result<WaitResult> WaitSet::Impl::wait(WaitTimeout timeout) {
                 // deadline; the next iteration recomputes it from the clock.
                 continue;
             }
-            wake = context->wait_for_notification(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(remaining),
-                observed_wake_generation);
+            wake = context->wait_for_notification(remaining, observed_wake_generation);
         } else {
             wake = context->wait_for_notification(observed_wake_generation);
         }

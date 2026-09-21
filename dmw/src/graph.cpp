@@ -255,6 +255,10 @@ Result<std::unique_ptr<GraphEvent>> Context::Impl::create_graph_event() {
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
     auto event_impl = std::make_unique<GraphEvent::Impl>(context_);
+    auto initialized = event_impl->initialize();
+    if (!initialized) {
+        return Result<std::unique_ptr<GraphEvent>>::failure(std::move(initialized.error()));
+    }
     return Result<std::unique_ptr<GraphEvent>>::success(
         std::unique_ptr<GraphEvent>(new GraphEvent(std::move(event_impl))));
 }

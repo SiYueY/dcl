@@ -172,45 +172,128 @@ Node::Impl::~Impl() noexcept {
 Result<Parameter> Node::Impl::declare_parameter(
     std::string_view name, const ParameterValue& default_value,
     const ParameterDescriptor& descriptor, bool ignore_override) {
+    auto valid_name = impl::validate_parameter_name(name);
+    if (!valid_name) return Result<Parameter>::failure(std::move(valid_name.error()));
+    auto valid_descriptor =
+        impl::ParameterStoreState::validate_descriptor(descriptor, default_value);
+    if (!valid_descriptor) {
+        return Result<Parameter>::failure(std::move(valid_descriptor.error()));
+    }
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<Parameter>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->declare(name, default_value, descriptor, ignore_override);
 }
 
 Result<void> Node::Impl::undeclare_parameter(std::string_view name) {
+    auto valid_name = impl::validate_parameter_name(name);
+    if (!valid_name) return valid_name;
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->undeclare(name);
 }
 
 Result<bool> Node::Impl::has_parameter(std::string_view name) const {
+    auto valid_name = impl::validate_parameter_name(name);
+    if (!valid_name) return Result<bool>::failure(std::move(valid_name.error()));
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->has(name);
 }
 
 Result<Parameter> Node::Impl::get_parameter(std::string_view name) const {
+    auto valid_name = impl::validate_parameter_name(name);
+    if (!valid_name) return Result<Parameter>::failure(std::move(valid_name.error()));
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<Parameter>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->get(name);
 }
 
 Result<std::vector<Parameter>> Node::Impl::get_parameters(
     const std::vector<std::string>& names) const {
+    for (const auto& name : names) {
+        auto valid_name = impl::validate_parameter_name(name);
+        if (!valid_name) {
+            return Result<std::vector<Parameter>>::failure(std::move(valid_name.error()));
+        }
+    }
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::vector<Parameter>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->get_many(names);
 }
 
 Result<ParameterDescriptor> Node::Impl::describe_parameter(std::string_view name) const {
+    auto valid_name = impl::validate_parameter_name(name);
+    if (!valid_name) {
+        return Result<ParameterDescriptor>::failure(std::move(valid_name.error()));
+    }
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<ParameterDescriptor>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->describe(name);
 }
 
 Result<ParameterListResult> Node::Impl::list_parameters(
     const std::vector<std::string>& prefixes, std::size_t depth) const {
+    for (const auto& prefix : prefixes) {
+        if (prefix.empty()) continue;
+        auto valid_name = impl::validate_parameter_name(prefix);
+        if (!valid_name) {
+            return Result<ParameterListResult>::failure(std::move(valid_name.error()));
+        }
+    }
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<ParameterListResult>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->list(prefixes, depth);
 }
 
 Result<void> Node::Impl::validate_parameters(const std::vector<Parameter>& parameters) const {
+    auto shape = parameters_->validate_name_and_duplicates(parameters);
+    if (!shape) return shape;
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->validate(parameters);
 }
 
 Result<ParameterChangeSet> Node::Impl::set_parameters_atomically(
     const std::vector<Parameter>& parameters) {
+    auto shape = parameters_->validate_name_and_duplicates(parameters);
+    if (!shape) {
+        return Result<ParameterChangeSet>::failure(std::move(shape.error()));
+    }
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<ParameterChangeSet>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->set_atomically(parameters);
 }
 
 Result<ParameterChangeSet> Node::Impl::take_parameter_changes() {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<ParameterChangeSet>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->take_changes();
 }
 
@@ -380,6 +463,14 @@ Result<std::unique_ptr<Client>> Node::Impl::create_client(
         delete_writer_listener_noexcept(*impl_->context_, writer, request_listener);
         throw;
     }
+    if (!client_impl->initialized()) {
+        if (impl_->context_->is_shutdown()) {
+            return Result<std::unique_ptr<Client>>::failure(
+                Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        }
+        return Result<std::unique_ptr<Client>>::failure(
+            Error(ErrorCode::DDSError, "Client discovery wait registration failed"));
+    }
     return Result<std::unique_ptr<Client>>::success(
         std::unique_ptr<Client>(new Client(std::move(client_impl))));
 }
@@ -416,7 +507,10 @@ Result<std::unique_ptr<Server>> Node::Impl::create_server(
     if (!response_topic)
         return Result<std::unique_ptr<Server>>::failure(std::move(response_topic.error()));
     auto response_state = std::make_shared<impl::ResponseState>(impl_->context_->discovery_graph());
-    response_state->subscribe_to_graph();
+    if (!response_state->subscribe_to_graph()) {
+        return Result<std::unique_ptr<Server>>::failure(
+            Error(ErrorCode::DDSError, "Server response discovery subscription failed"));
+    }
     auto response_listener =
         std::make_unique<impl::ResponseWriterListener>(std::weak_ptr(response_state));
     auto* reader = impl_->context_->subscriber()->create_datareader(
@@ -466,6 +560,11 @@ Result<std::unique_ptr<ActionClient>> Node::Impl::create_action_client(
         return Result<std::unique_ptr<ActionClient>>::failure(
             Error(ErrorCode::InvalidName, "Action name is not a valid fully qualified name"));
     }
+    const auto operation = impl_->context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::unique_ptr<ActionClient>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
 
     // Five endpoints are created as one transaction: any failure destroys the
     // already-created constituents, so no partial Action is ever exposed.
@@ -492,6 +591,18 @@ Result<std::unique_ptr<ActionClient>> Node::Impl::create_action_client(
         impl_->context_, std::move(logical_name.value()), *names, impl::action_endpoint_types(type),
         std::move(goal.value()), std::move(cancel.value()), std::move(result.value()),
         std::move(feedback.value()), std::move(status.value()));
+    if (!client_impl->initialized()) {
+        if (impl_->context_->is_shutdown()) {
+            return Result<std::unique_ptr<ActionClient>>::failure(
+                Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        }
+        return Result<std::unique_ptr<ActionClient>>::failure(
+            Error(ErrorCode::DDSError, "ActionClient availability registration failed"));
+    }
+    if (impl_->context_->is_shutdown()) {
+        return Result<std::unique_ptr<ActionClient>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return Result<std::unique_ptr<ActionClient>>::success(
         std::unique_ptr<ActionClient>(new ActionClient(std::move(client_impl))));
 }
@@ -509,6 +620,11 @@ Result<std::unique_ptr<ActionServer>> Node::Impl::create_action_server(
     if (!names) {
         return Result<std::unique_ptr<ActionServer>>::failure(
             Error(ErrorCode::InvalidName, "Action name is not a valid fully qualified name"));
+    }
+    const auto operation = impl_->context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::unique_ptr<ActionServer>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
 
     auto goal = impl_->create_server(
@@ -534,6 +650,10 @@ Result<std::unique_ptr<ActionServer>> Node::Impl::create_action_server(
         impl_->context_, std::move(logical_name.value()), std::move(goal.value()),
         std::move(cancel.value()), std::move(result.value()), std::move(feedback.value()),
         std::move(status.value()), options.result_timeout);
+    if (impl_->context_->is_shutdown()) {
+        return Result<std::unique_ptr<ActionServer>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return Result<std::unique_ptr<ActionServer>>::success(
         std::unique_ptr<ActionServer>(new ActionServer(std::move(server_impl))));
 }

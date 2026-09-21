@@ -35,12 +35,17 @@ public:
 
     /// Cursor starts at the creation-time revision, so pre-creation history is
     /// never replayed.
-    void initialize() {
+    Result<void> initialize() {
         cursor_ = context_->discovery_graph()->revision();
         const std::weak_ptr<GraphEventState> weak = weak_from_this();
         subscription_ = context_->discovery_graph()->subscribe([weak](std::uint64_t) {
             if (const auto state = weak.lock()) state->notify_wait_set_noexcept();
         });
+        if (!subscription_) {
+            return Result<void>::failure(
+                Error(ErrorCode::ResourceExhausted, "GraphEvent subscription IDs are exhausted"));
+        }
+        return Result<void>::success();
     }
 
     bool logically_ready() const noexcept {
@@ -122,11 +127,11 @@ class GraphEvent::Impl {
 public:
     explicit Impl(std::shared_ptr<impl::Context> context) {
         state_ = std::make_shared<impl::GraphEventState>(std::move(context));
-        state_->initialize();
     }
 
     ~Impl() noexcept { state_->close(); }
 
+    Result<void> initialize() { return state_->initialize(); }
     Result<bool> take(GraphChangeInfo& info) { return state_->take(info); }
 
     const std::shared_ptr<impl::GraphEventState>& wait_state() const noexcept { return state_; }

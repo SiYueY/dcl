@@ -25,6 +25,7 @@ public:
     std::string_view fully_qualified_name() const noexcept { return fully_qualified_name_; }
     const impl::ParameterStoreState& parameters() const noexcept { return *parameters_; }
     impl::ParameterStoreState& parameters() noexcept { return *parameters_; }
+    bool graph_registered() const noexcept { return node_id_ != 0; }
     Result<std::unique_ptr<Publisher>> create_publisher(
         const MessageType&, std::string_view, const Qos&, const PublisherOptions&);
     Result<std::unique_ptr<Subscriber>> create_subscriber(

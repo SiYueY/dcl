@@ -70,6 +70,9 @@ public:
     std::string_view action_name() const noexcept { return action_name_; }
 
     std::vector<std::shared_ptr<impl::ReaderWaitState>> wait_states() const;
+    bool initialized() const noexcept {
+        return static_cast<bool>(availability_subscription_) && shutdown_callback_id_ != 0;
+    }
 
 private:
     Result<bool> check_availability() const;

@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <string_view>
@@ -176,6 +177,7 @@ Result<bool> Server::Impl::read_request(void* request, RequestId& request_id) {
         }
 
         bool inserted = false;
+        std::exception_ptr insertion_error;
         {
             std::lock_guard lock(pending_mutex_);
             try {
@@ -183,12 +185,18 @@ Result<bool> Server::Impl::read_request(void* request, RequestId& request_id) {
                     pending_.emplace(*id, PendingRequest{response_identity, PendingPhase::Pending})
                         .second;
             } catch (...) {
-                --reservations_;
-                throw;
+                insertion_error = std::current_exception();
             }
             --reservations_;
         }
-        if (!inserted) continue;
+        if (insertion_error) {
+            if (became_full) request_wait_state_->set_blocking_enabled(true);
+            std::rethrow_exception(insertion_error);
+        }
+        if (!inserted) {
+            if (became_full) request_wait_state_->set_blocking_enabled(true);
+            continue;
+        }
 
         try {
             auto committed = request_scratch_->commit_to(request);

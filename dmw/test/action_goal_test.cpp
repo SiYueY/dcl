@@ -224,6 +224,19 @@ void test_result_requests_and_expiry() {
     assert(registry.take_pending_result_requests(terminal).value().empty());
 }
 
+void test_expiry_deadline_saturates() {
+    dmw::impl::ActionGoalRegistry registry(std::chrono::nanoseconds::max());
+    const auto goal = goal_id(4);
+    assert(registry.reserve(goal));
+    assert(registry.commit(goal_info(4, 4), GoalAcceptMode::Execute));
+    assert(registry.update_state(goal, GoalEvent::Succeed));
+
+    const auto expiry = registry.earliest_expiry();
+    assert(expiry);
+    assert(expiry.value().has_value());
+    assert(*expiry.value() == std::chrono::steady_clock::time_point::max());
+}
+
 void test_concurrent_accept_is_exactly_once() {
     dmw::impl::ActionGoalRegistry registry(10s);
     const auto shared = goal_id(5);
@@ -304,6 +317,7 @@ int main() {
     test_state_machine();
     test_cancel_selection();
     test_result_requests_and_expiry();
+    test_expiry_deadline_saturates();
     test_concurrent_accept_is_exactly_once();
     test_action_endpoint_naming();
     return 0;

@@ -43,12 +43,13 @@ public:
     explicit ResponseState(std::weak_ptr<DiscoveryGraph> graph = {}) noexcept
     : graph_(std::move(graph)) {}
 
-    void subscribe_to_graph() {
+    bool subscribe_to_graph() {
         if (const auto graph = graph_.lock()) {
             subscription_ = graph->subscribe([state = weak_from_this()](std::uint64_t) {
                 if (const auto value = state.lock()) value->notify_dependency_change();
             });
         }
+        return static_cast<bool>(subscription_);
     }
 
     void observe_reader(

@@ -91,6 +91,18 @@ int main() {
     assert(guard.value()->trigger());
     assert_ready_for(guard_wait, registration.value());
 
+    // A public timeout can be much larger than Fast DDS Duration_t.  The
+    // implementation must preserve the absolute deadline and clamp only the
+    // individual native wait slice instead of narrowing int32 seconds.
+    const auto huge_timeout = dmw::WaitTimeout::finite(std::chrono::nanoseconds::max());
+    assert(huge_timeout);
+    auto huge_wait = std::async(std::launch::async, [&] {
+        return wait_set.value()->wait(huge_timeout.value());
+    });
+    std::this_thread::sleep_for(20ms);
+    assert(guard.value()->trigger());
+    assert_ready_for(huge_wait, registration.value());
+
     // A WaitSet blocks while empty. Adding a waitable and triggering it must
     // wake that wait without requiring a polling interval.
     auto topology_wait_set = context.value()->create_wait_set();

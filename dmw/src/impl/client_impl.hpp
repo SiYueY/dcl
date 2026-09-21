@@ -78,6 +78,9 @@ public:
     const std::shared_ptr<impl::ReaderWaitState>& wait_state() const noexcept {
         return response_wait_state_;
     }
+    bool initialized() const noexcept {
+        return static_cast<bool>(service_subscription_) && shutdown_callback_id_ != 0;
+    }
 
 private:
     std::shared_ptr<impl::Context> context_;

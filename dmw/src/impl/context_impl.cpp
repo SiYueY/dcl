@@ -30,23 +30,40 @@ class ParticipantCreationGuard {
 public:
     ParticipantCreationGuard(
         eprosima::fastdds::dds::DomainParticipantFactory* factory,
-        eprosima::fastdds::dds::DomainParticipant* participant) noexcept
-    : factory_(factory), participant_(participant) {}
+        eprosima::fastdds::dds::DomainParticipant* participant,
+        std::unique_ptr<impl::DiscoveryListener>& listener) noexcept
+    : factory_(factory), participant_(participant), listener_(&listener) {}
 
     ~ParticipantCreationGuard() noexcept {
-        if (participant_ != nullptr) {
-            bool deleted = false;
-            try {
-                const auto contained = participant_->delete_contained_entities();
-                const auto participant =
-                    contained == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK
-                        ? factory_->delete_participant(participant_)
-                        : contained;
-                deleted = participant == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
-            } catch (...) {
-                deleted = false;
+        if (participant_ == nullptr) return;
+
+        bool listener_detached = false;
+        try {
+            listener_detached = participant_->set_listener(nullptr) ==
+                                eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
+            if (listener_detached && listener_ != nullptr && *listener_) {
+                (*listener_)->close_and_drain();
             }
-            if (!deleted) {
+        } catch (...) {
+            listener_detached = false;
+        }
+
+        bool deleted = false;
+        try {
+            const auto contained = participant_->delete_contained_entities();
+            const auto participant =
+                contained == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK
+                    ? factory_->delete_participant(participant_)
+                    : contained;
+            deleted = participant == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
+        } catch (...) {
+            deleted = false;
+        }
+        if (!deleted) {
+            if (!listener_detached && listener_ != nullptr) {
+                impl::ProcessLifetime::instance().retain_participant(
+                    participant_, std::move(*listener_));
+            } else {
                 impl::ProcessLifetime::instance().retain_participant(participant_);
             }
         }
@@ -55,11 +72,15 @@ public:
     ParticipantCreationGuard(const ParticipantCreationGuard&) = delete;
     ParticipantCreationGuard& operator=(const ParticipantCreationGuard&) = delete;
 
-    void release() noexcept { participant_ = nullptr; }
+    void release() noexcept {
+        participant_ = nullptr;
+        listener_ = nullptr;
+    }
 
 private:
     eprosima::fastdds::dds::DomainParticipantFactory* factory_;
     eprosima::fastdds::dds::DomainParticipant* participant_;
+    std::unique_ptr<impl::DiscoveryListener>* listener_;
 };
 
 }  // namespace
@@ -70,7 +91,7 @@ Context::Context(
     eprosima::fastdds::dds::DomainParticipantFactory* factory,
     eprosima::fastdds::dds::DomainParticipant* participant,
     eprosima::fastdds::dds::Publisher* publisher, eprosima::fastdds::dds::Subscriber* subscriber,
-    std::uint32_t domain_id, RuntimeMode runtime_mode) noexcept
+    std::uint32_t domain_id, RuntimeMode runtime_mode)
 : Context(
       factory, participant, publisher, subscriber, domain_id, runtime_mode,
       eprosima::fastdds::dds::DATAWRITER_QOS_DEFAULT,
@@ -82,7 +103,20 @@ Context::Context(
     eprosima::fastdds::dds::Publisher* publisher, eprosima::fastdds::dds::Subscriber* subscriber,
     std::uint32_t domain_id, RuntimeMode runtime_mode,
     eprosima::fastdds::dds::DataWriterQos writer_qos_baseline,
-    eprosima::fastdds::dds::DataReaderQos reader_qos_baseline) noexcept
+    eprosima::fastdds::dds::DataReaderQos reader_qos_baseline)
+: Context(
+      factory, participant, publisher, subscriber, domain_id, runtime_mode,
+      std::move(writer_qos_baseline), std::move(reader_qos_baseline),
+      std::make_shared<DiscoveryGraph>()) {}
+
+Context::Context(
+    eprosima::fastdds::dds::DomainParticipantFactory* factory,
+    eprosima::fastdds::dds::DomainParticipant* participant,
+    eprosima::fastdds::dds::Publisher* publisher, eprosima::fastdds::dds::Subscriber* subscriber,
+    std::uint32_t domain_id, RuntimeMode runtime_mode,
+    eprosima::fastdds::dds::DataWriterQos writer_qos_baseline,
+    eprosima::fastdds::dds::DataReaderQos reader_qos_baseline,
+    std::shared_ptr<DiscoveryGraph> discovery_graph)
 : factory_(factory),
   participant_(participant),
   publisher_(publisher),
@@ -90,7 +124,8 @@ Context::Context(
   domain_id_(domain_id),
   runtime_mode_(runtime_mode),
   writer_qos_baseline_(std::move(writer_qos_baseline)),
-  reader_qos_baseline_(std::move(reader_qos_baseline)) {}
+  reader_qos_baseline_(std::move(reader_qos_baseline)),
+  discovery_graph_(std::move(discovery_graph)) {}
 
 Context::~Context() noexcept {
     if (participant_ != nullptr) {
@@ -136,29 +171,6 @@ Context::~Context() noexcept {
         participant_ = nullptr;
         publisher_ = nullptr;
         subscriber_ = nullptr;
-    }
-}
-
-Result<void> Context::install_discovery_listener() noexcept {
-    std::unique_ptr<DiscoveryListener> listener;
-    try {
-        listener = std::make_unique<DiscoveryListener>(discovery_graph_);
-        listener->activate();
-        const auto result = participant_->set_listener(listener.get());
-        if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
-            ProcessLifetime::instance().retain_participant_listener(std::move(listener));
-            return Result<void>::failure(
-                to_error(result, "Fast DDS failed to install discovery listener"));
-        }
-        participant_listener_ = std::move(listener);
-        return Result<void>::success();
-    } catch (...) {
-        // A throwing listener install has no reliable attachment evidence.
-        // Keep any already-created listener alive for the Fast DDS process
-        // barrier.  If construction threw, listener is simply null.
-        ProcessLifetime::instance().retain_participant_listener(std::move(listener));
-        return Result<void>::failure(
-            Error(ErrorCode::DDSError, "Fast DDS discovery listener setup failed"));
     }
 }
 
@@ -622,12 +634,17 @@ Result<std::unique_ptr<Context>> Context::Impl::create(const ContextOptions& opt
         qos.name(options.participant_name);
     }
 
-    auto* participant = factory->create_participant(options.domain_id, qos);
+    auto discovery_graph = std::make_shared<impl::DiscoveryGraph>();
+    auto participant_listener = std::make_unique<impl::DiscoveryListener>(discovery_graph);
+    participant_listener->activate();
+
+    auto* participant =
+        factory->create_participant(options.domain_id, qos, participant_listener.get());
     if (participant == nullptr) {
         return Result<std::unique_ptr<Context>>::failure(
             Error(ErrorCode::DDSError, "Fast DDS failed to create a DomainParticipant"));
     }
-    ParticipantCreationGuard participant_guard(factory, participant);
+    ParticipantCreationGuard participant_guard(factory, participant, participant_listener);
 
     auto* publisher = participant->create_publisher(eprosima::fastdds::dds::PUBLISHER_QOS_DEFAULT);
     auto* subscriber =
@@ -649,12 +666,12 @@ Result<std::unique_ptr<Context>> Context::Impl::create(const ContextOptions& opt
 
     auto context = std::make_shared<impl::Context>(
         factory, participant, publisher, subscriber, options.domain_id, options.runtime_mode,
-        std::move(writer_qos_baseline), std::move(reader_qos_baseline));
-    // From this point Context is the sole owner, including listener
-    // installation failure paths.
+        std::move(writer_qos_baseline), std::move(reader_qos_baseline),
+        std::move(discovery_graph));
+    // The listener was installed atomically with participant creation.  Only
+    // after Context allocation succeeds do we transfer callback ownership.
+    context->adopt_discovery_listener(std::move(participant_listener));
     participant_guard.release();
-    auto discovery = context->install_discovery_listener();
-    if (!discovery) return Result<std::unique_ptr<Context>>::failure(std::move(discovery.error()));
     auto metadata = context->install_graph_metadata_transport();
     if (!metadata) {
         return Result<std::unique_ptr<Context>>::failure(std::move(metadata.error()));
@@ -712,6 +729,10 @@ Result<std::unique_ptr<Node>> Context::Impl::create_node(const NodeOptions& opti
     auto node_impl = std::make_unique<Node::Impl>(
         context_, std::move(node_name), std::move(normalized_namespace.value()), std::move(remaps),
         std::move(parameter_overrides), options.allow_undeclared_parameters);
+    if (!node_impl->graph_registered()) {
+        return Result<std::unique_ptr<Node>>::failure(
+            Error(ErrorCode::DDSError, "Failed to register Node in the discovery graph"));
+    }
     return Result<std::unique_ptr<Node>>::success(
         std::unique_ptr<Node>(new Node(std::move(node_impl))));
 }
