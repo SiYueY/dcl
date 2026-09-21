@@ -373,7 +373,31 @@ int main() {
         assert(server.value()->status_snapshot().value().empty());
     }
 
+    assert(server_context.value()->shutdown());
+    const auto state_after_shutdown = server.value()->goal_state(goal_id);
+    assert(!state_after_shutdown);
+    assert(state_after_shutdown.error().code() == dmw::ErrorCode::ContextShutdown);
+    const auto status_after_shutdown = server.value()->status_snapshot();
+    assert(!status_after_shutdown);
+    assert(status_after_shutdown.error().code() == dmw::ErrorCode::ContextShutdown);
+    const auto readiness_after_shutdown = server.value()->readiness();
+    assert(!readiness_after_shutdown);
+    assert(readiness_after_shutdown.error().code() == dmw::ErrorCode::ContextShutdown);
+    dmw::CancelGoalCriteria invalid_cancel;
+    invalid_cancel.stamp = -1ns;
+    const auto invalid_cancel_after_shutdown =
+        server.value()->select_cancel_goals(invalid_cancel);
+    assert(!invalid_cancel_after_shutdown);
+    assert(invalid_cancel_after_shutdown.error().code() == dmw::ErrorCode::InvalidArgument);
+    const auto cancel_after_shutdown =
+        server.value()->select_cancel_goals(dmw::CancelGoalCriteria{});
+    assert(!cancel_after_shutdown);
+    assert(cancel_after_shutdown.error().code() == dmw::ErrorCode::ContextShutdown);
+
     assert(client_context.value()->shutdown());
     assert(!client.value()->write_goal_request(&goal_payload));
+    const auto client_readiness_after_shutdown = client.value()->readiness();
+    assert(!client_readiness_after_shutdown);
+    assert(client_readiness_after_shutdown.error().code() == dmw::ErrorCode::ContextShutdown);
     return 0;
 }
