@@ -729,6 +729,10 @@ Result<std::unique_ptr<Node>> Context::Impl::create_node(const NodeOptions& opti
     auto node_impl = std::make_unique<Node::Impl>(
         context_, std::move(node_name), std::move(normalized_namespace.value()), std::move(remaps),
         std::move(parameter_overrides), options.allow_undeclared_parameters);
+    if (!node_impl->graph_registered()) {
+        return Result<std::unique_ptr<Node>>::failure(
+            Error(ErrorCode::DDSError, "Failed to register Node in the discovery graph"));
+    }
     return Result<std::unique_ptr<Node>>::success(
         std::unique_ptr<Node>(new Node(std::move(node_impl))));
 }
