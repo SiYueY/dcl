@@ -17,7 +17,7 @@ public:
     Impl(
         std::shared_ptr<impl::Context> context, eprosima::fastdds::dds::DataWriter* writer,
         std::string topic_name, MessageType type, impl::Topic topic,
-        impl::LocalEndpointRegistration metadata) noexcept
+        impl::LocalEndpointRegistration metadata)
     : context_(std::move(context)),
       writer_(writer),
       topic_name_(std::move(topic_name)),
