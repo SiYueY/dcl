@@ -20,7 +20,7 @@ public:
     Impl(
         std::shared_ptr<impl::Context> context, eprosima::fastdds::dds::DataReader* reader,
         std::string topic_name, MessageType type, impl::Topic topic,
-        impl::LocalEndpointRegistration metadata) noexcept
+        impl::LocalEndpointRegistration metadata)
     : context_(context),
       reader_(reader),
       topic_name_(std::move(topic_name)),
