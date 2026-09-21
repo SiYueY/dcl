@@ -364,6 +364,16 @@ void test_node_parameter_api_and_overrides() {
         {dmw::Parameter{"gain", real(3.0)}});
     assert(!mutation_after_shutdown);
     assert(mutation_after_shutdown.error().code() == ErrorCode::ContextShutdown);
+
+    const auto invalid_after_shutdown = node.value()->get_parameter("invalid-name");
+    assert(!invalid_after_shutdown);
+    assert(invalid_after_shutdown.error().code() == ErrorCode::InvalidName);
+    const auto duplicate_after_shutdown = node.value()->set_parameters_atomically({
+        dmw::Parameter{"gain", real(3.0)},
+        dmw::Parameter{"gain", real(4.0)},
+    });
+    assert(!duplicate_after_shutdown);
+    assert(duplicate_after_shutdown.error().code() == ErrorCode::InvalidArgument);
 }
 
 }  // namespace
