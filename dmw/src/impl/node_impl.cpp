@@ -172,45 +172,92 @@ Node::Impl::~Impl() noexcept {
 Result<Parameter> Node::Impl::declare_parameter(
     std::string_view name, const ParameterValue& default_value,
     const ParameterDescriptor& descriptor, bool ignore_override) {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<Parameter>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->declare(name, default_value, descriptor, ignore_override);
 }
 
 Result<void> Node::Impl::undeclare_parameter(std::string_view name) {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->undeclare(name);
 }
 
 Result<bool> Node::Impl::has_parameter(std::string_view name) const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->has(name);
 }
 
 Result<Parameter> Node::Impl::get_parameter(std::string_view name) const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<Parameter>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->get(name);
 }
 
 Result<std::vector<Parameter>> Node::Impl::get_parameters(
     const std::vector<std::string>& names) const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::vector<Parameter>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->get_many(names);
 }
 
 Result<ParameterDescriptor> Node::Impl::describe_parameter(std::string_view name) const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<ParameterDescriptor>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->describe(name);
 }
 
 Result<ParameterListResult> Node::Impl::list_parameters(
     const std::vector<std::string>& prefixes, std::size_t depth) const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<ParameterListResult>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->list(prefixes, depth);
 }
 
 Result<void> Node::Impl::validate_parameters(const std::vector<Parameter>& parameters) const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->validate(parameters);
 }
 
 Result<ParameterChangeSet> Node::Impl::set_parameters_atomically(
     const std::vector<Parameter>& parameters) {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<ParameterChangeSet>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->set_atomically(parameters);
 }
 
 Result<ParameterChangeSet> Node::Impl::take_parameter_changes() {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<ParameterChangeSet>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return parameters_->take_changes();
 }
 
@@ -466,6 +513,11 @@ Result<std::unique_ptr<ActionClient>> Node::Impl::create_action_client(
         return Result<std::unique_ptr<ActionClient>>::failure(
             Error(ErrorCode::InvalidName, "Action name is not a valid fully qualified name"));
     }
+    const auto operation = impl_->context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::unique_ptr<ActionClient>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
 
     // Five endpoints are created as one transaction: any failure destroys the
     // already-created constituents, so no partial Action is ever exposed.
@@ -509,6 +561,11 @@ Result<std::unique_ptr<ActionServer>> Node::Impl::create_action_server(
     if (!names) {
         return Result<std::unique_ptr<ActionServer>>::failure(
             Error(ErrorCode::InvalidName, "Action name is not a valid fully qualified name"));
+    }
+    const auto operation = impl_->context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::unique_ptr<ActionServer>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
 
     auto goal = impl_->create_server(
