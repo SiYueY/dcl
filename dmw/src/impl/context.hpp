@@ -69,6 +69,14 @@ public:
         eprosima::fastdds::dds::Subscriber* subscriber, std::uint32_t domain_id,
         RuntimeMode runtime_mode, eprosima::fastdds::dds::DataWriterQos writer_qos_baseline,
         eprosima::fastdds::dds::DataReaderQos reader_qos_baseline) noexcept;
+    Context(
+        eprosima::fastdds::dds::DomainParticipantFactory* factory,
+        eprosima::fastdds::dds::DomainParticipant* participant,
+        eprosima::fastdds::dds::Publisher* publisher,
+        eprosima::fastdds::dds::Subscriber* subscriber, std::uint32_t domain_id,
+        RuntimeMode runtime_mode, eprosima::fastdds::dds::DataWriterQos writer_qos_baseline,
+        eprosima::fastdds::dds::DataReaderQos reader_qos_baseline,
+        std::shared_ptr<DiscoveryGraph> discovery_graph) noexcept;
     ~Context() noexcept;
 
     Context(const Context&) = delete;
@@ -86,7 +94,9 @@ public:
     void shutdown() noexcept;
     std::uint64_t register_shutdown_callback(std::function<void()> callback);
     void unregister_shutdown_callback(std::uint64_t id) noexcept;
-    Result<void> install_discovery_listener() noexcept;
+    void adopt_discovery_listener(std::unique_ptr<DiscoveryListener> listener) noexcept {
+        participant_listener_ = std::move(listener);
+    }
     std::shared_ptr<DiscoveryGraph> discovery_graph() const noexcept { return discovery_graph_; }
 
     /// Create the ROS 2 graph metadata transport; no-op in DDS mode.
