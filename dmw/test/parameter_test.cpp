@@ -163,11 +163,35 @@ void test_ranges_and_steps() {
     assert(!store.set_atomically({dmw::Parameter{"gain", real(1.5)}}));
     assert(store.get("gain").value().value.as_double() == 0.5);
 
+    // Extreme signed endpoints must not overflow while computing the step offset.
+    ParameterDescriptor extreme;
+    extreme.integer_ranges.push_back(dmw::IntegerRange{
+        std::numeric_limits<std::int64_t>::min(),
+        std::numeric_limits<std::int64_t>::max(),
+        std::numeric_limits<std::uint64_t>::max()});
+    assert(store.declare(
+        "extreme", integer(std::numeric_limits<std::int64_t>::min()), extreme, false));
+    assert(store.set_atomically(
+        {dmw::Parameter{"extreme", integer(std::numeric_limits<std::int64_t>::max())}}));
+
+    const auto nan = std::numeric_limits<double>::quiet_NaN();
+    const auto rejected_nan =
+        store.set_atomically({dmw::Parameter{"gain", real(nan)}});
+    assert(!rejected_nan);
+    assert(rejected_nan.error().code() == ErrorCode::InvalidArgument);
+
     ParameterDescriptor invalid;
     invalid.integer_ranges.push_back(dmw::IntegerRange{10, 0, 0});
     const auto rejected = store.declare("broken", integer(1), invalid, false);
     assert(!rejected);
     assert(rejected.error().code() == ErrorCode::InvalidArgument);
+
+    ParameterDescriptor invalid_step;
+    invalid_step.floating_point_ranges.push_back(
+        dmw::FloatingPointRange{0.0, 1.0, nan});
+    const auto rejected_step = store.declare("broken_step", real(0.0), invalid_step, false);
+    assert(!rejected_step);
+    assert(rejected_step.error().code() == ErrorCode::InvalidArgument);
 }
 
 void test_atomic_set_and_change_set() {
@@ -331,6 +355,15 @@ void test_node_parameter_api_and_overrides() {
     assert(created);
     assert(created.value().new_parameters.size() == 1);
     assert(permissive_node.value()->get_parameter("unknown").value().value.as_integer() == 9);
+
+    assert(context.value()->shutdown());
+    const auto after_shutdown = node.value()->get_parameter("gain");
+    assert(!after_shutdown);
+    assert(after_shutdown.error().code() == ErrorCode::ContextShutdown);
+    const auto mutation_after_shutdown = node.value()->set_parameters_atomically(
+        {dmw::Parameter{"gain", real(3.0)}});
+    assert(!mutation_after_shutdown);
+    assert(mutation_after_shutdown.error().code() == ErrorCode::ContextShutdown);
 }
 
 }  // namespace
