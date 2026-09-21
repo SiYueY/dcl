@@ -81,13 +81,15 @@ bool integer_value_is_acceptable(std::int64_t value, const IntegerRange& range) 
     if (range.from_value > range.to_value) return false;
     if (value < range.from_value || value > range.to_value) return false;
     if (range.step != 0) {
-        const auto offset = static_cast<std::uint64_t>(value - range.from_value);
+        const auto offset =
+            static_cast<std::uint64_t>(value) - static_cast<std::uint64_t>(range.from_value);
         if (offset % range.step != 0) return false;
     }
     return true;
 }
 
 bool double_value_is_acceptable(double value, const FloatingPointRange& range) noexcept {
+    if (std::isnan(value)) return false;
     if (range.from_value > range.to_value) return false;
     if (value < range.from_value - kFloatingEpsilon ||
         value > range.to_value + kFloatingEpsilon) {
@@ -206,9 +208,10 @@ Result<void> ParameterStoreState::validate_descriptor(
             return Result<void>::failure(
                 Error(ErrorCode::InvalidArgument, "Floating point range has from_value > to_value"));
         }
-        if (range.step < 0.0) {
-            return Result<void>::failure(
-                Error(ErrorCode::InvalidArgument, "Floating point range has a negative step"));
+        if (range.step < 0.0 || (!std::isfinite(range.step) && range.step != 0.0)) {
+            return Result<void>::failure(Error(
+                ErrorCode::InvalidArgument,
+                "Floating point range step must be zero or a finite positive value"));
         }
     }
     if (!descriptor.dynamic_typing && !direct_value.is_set()) {
@@ -332,7 +335,14 @@ Result<Parameter> ParameterStoreState::declare(
     }
     auto declared = declare_locked(key, default_value, descriptor, ignore_override);
     if (!declared) return declared;
-    pending_changes_.new_parameters.push_back(declared.value());
+    try {
+        pending_changes_.new_parameters.push_back(declared.value());
+    } catch (...) {
+        // The public declare operation is transactional: if recording the
+        // change-set allocation fails, undo the already-inserted store entry.
+        parameters_.erase(key);
+        throw;
+    }
     return declared;
 }
 
