@@ -172,6 +172,13 @@ Node::Impl::~Impl() noexcept {
 Result<Parameter> Node::Impl::declare_parameter(
     std::string_view name, const ParameterValue& default_value,
     const ParameterDescriptor& descriptor, bool ignore_override) {
+    auto valid_name = impl::validate_parameter_name(name);
+    if (!valid_name) return Result<Parameter>::failure(std::move(valid_name.error()));
+    auto valid_descriptor =
+        impl::ParameterStoreState::validate_descriptor(descriptor, default_value);
+    if (!valid_descriptor) {
+        return Result<Parameter>::failure(std::move(valid_descriptor.error()));
+    }
     const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<Parameter>::failure(
@@ -181,6 +188,8 @@ Result<Parameter> Node::Impl::declare_parameter(
 }
 
 Result<void> Node::Impl::undeclare_parameter(std::string_view name) {
+    auto valid_name = impl::validate_parameter_name(name);
+    if (!valid_name) return valid_name;
     const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
@@ -189,6 +198,8 @@ Result<void> Node::Impl::undeclare_parameter(std::string_view name) {
 }
 
 Result<bool> Node::Impl::has_parameter(std::string_view name) const {
+    auto valid_name = impl::validate_parameter_name(name);
+    if (!valid_name) return Result<bool>::failure(std::move(valid_name.error()));
     const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
@@ -197,6 +208,8 @@ Result<bool> Node::Impl::has_parameter(std::string_view name) const {
 }
 
 Result<Parameter> Node::Impl::get_parameter(std::string_view name) const {
+    auto valid_name = impl::validate_parameter_name(name);
+    if (!valid_name) return Result<Parameter>::failure(std::move(valid_name.error()));
     const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<Parameter>::failure(
@@ -207,6 +220,12 @@ Result<Parameter> Node::Impl::get_parameter(std::string_view name) const {
 
 Result<std::vector<Parameter>> Node::Impl::get_parameters(
     const std::vector<std::string>& names) const {
+    for (const auto& name : names) {
+        auto valid_name = impl::validate_parameter_name(name);
+        if (!valid_name) {
+            return Result<std::vector<Parameter>>::failure(std::move(valid_name.error()));
+        }
+    }
     const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<std::vector<Parameter>>::failure(
@@ -216,6 +235,10 @@ Result<std::vector<Parameter>> Node::Impl::get_parameters(
 }
 
 Result<ParameterDescriptor> Node::Impl::describe_parameter(std::string_view name) const {
+    auto valid_name = impl::validate_parameter_name(name);
+    if (!valid_name) {
+        return Result<ParameterDescriptor>::failure(std::move(valid_name.error()));
+    }
     const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<ParameterDescriptor>::failure(
@@ -226,6 +249,13 @@ Result<ParameterDescriptor> Node::Impl::describe_parameter(std::string_view name
 
 Result<ParameterListResult> Node::Impl::list_parameters(
     const std::vector<std::string>& prefixes, std::size_t depth) const {
+    for (const auto& prefix : prefixes) {
+        if (prefix.empty()) continue;
+        auto valid_name = impl::validate_parameter_name(prefix);
+        if (!valid_name) {
+            return Result<ParameterListResult>::failure(std::move(valid_name.error()));
+        }
+    }
     const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<ParameterListResult>::failure(
@@ -235,6 +265,8 @@ Result<ParameterListResult> Node::Impl::list_parameters(
 }
 
 Result<void> Node::Impl::validate_parameters(const std::vector<Parameter>& parameters) const {
+    auto shape = parameters_->validate_name_and_duplicates(parameters);
+    if (!shape) return shape;
     const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
@@ -244,6 +276,10 @@ Result<void> Node::Impl::validate_parameters(const std::vector<Parameter>& param
 
 Result<ParameterChangeSet> Node::Impl::set_parameters_atomically(
     const std::vector<Parameter>& parameters) {
+    auto shape = parameters_->validate_name_and_duplicates(parameters);
+    if (!shape) {
+        return Result<ParameterChangeSet>::failure(std::move(shape.error()));
+    }
     const auto operation = context_->try_acquire_operation();
     if (!operation) {
         return Result<ParameterChangeSet>::failure(
