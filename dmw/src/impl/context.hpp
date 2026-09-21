@@ -61,14 +61,14 @@ public:
         eprosima::fastdds::dds::DomainParticipant* participant,
         eprosima::fastdds::dds::Publisher* publisher,
         eprosima::fastdds::dds::Subscriber* subscriber, std::uint32_t domain_id,
-        RuntimeMode runtime_mode) noexcept;
+        RuntimeMode runtime_mode);
     Context(
         eprosima::fastdds::dds::DomainParticipantFactory* factory,
         eprosima::fastdds::dds::DomainParticipant* participant,
         eprosima::fastdds::dds::Publisher* publisher,
         eprosima::fastdds::dds::Subscriber* subscriber, std::uint32_t domain_id,
         RuntimeMode runtime_mode, eprosima::fastdds::dds::DataWriterQos writer_qos_baseline,
-        eprosima::fastdds::dds::DataReaderQos reader_qos_baseline) noexcept;
+        eprosima::fastdds::dds::DataReaderQos reader_qos_baseline);
     Context(
         eprosima::fastdds::dds::DomainParticipantFactory* factory,
         eprosima::fastdds::dds::DomainParticipant* participant,
@@ -76,7 +76,7 @@ public:
         eprosima::fastdds::dds::Subscriber* subscriber, std::uint32_t domain_id,
         RuntimeMode runtime_mode, eprosima::fastdds::dds::DataWriterQos writer_qos_baseline,
         eprosima::fastdds::dds::DataReaderQos reader_qos_baseline,
-        std::shared_ptr<DiscoveryGraph> discovery_graph) noexcept;
+        std::shared_ptr<DiscoveryGraph> discovery_graph);
     ~Context() noexcept;
 
     Context(const Context&) = delete;
