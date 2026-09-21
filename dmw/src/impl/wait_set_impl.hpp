@@ -3,6 +3,7 @@
 
 #include "dmw/wait_set.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -33,6 +34,7 @@
 #include "impl/subscriber_impl.hpp"
 #include "impl/event_impl.hpp"
 #include "impl/context.hpp"
+#include "impl/deadline.hpp"
 #include "impl/return_code.hpp"
 #include "impl/guard_condition_impl.hpp"
 #include "impl/graph_impl.hpp"
@@ -642,13 +644,28 @@ public:
     }
 
     Result<void> wait_for_notification(
-        std::chrono::nanoseconds timeout, std::uint64_t observed_wake_generation) {
-        constexpr auto kNanosecondsPerSecond = std::chrono::nanoseconds::period::den;
-        const auto count = timeout.count();
-        const auto seconds = count / kNanosecondsPerSecond;
-        const auto nanoseconds = count % kNanosecondsPerSecond;
+        std::chrono::steady_clock::duration timeout,
+        std::uint64_t observed_wake_generation) {
+        if (timeout <= std::chrono::steady_clock::duration::zero()) {
+            return wait_for_notification(
+                eprosima::fastrtps::Duration_t(0, 0), observed_wake_generation);
+        }
+
+        // Fast DDS Duration_t stores seconds in int32_t.  Clamp one native
+        // wait slice instead of narrowing a larger public timeout; the caller
+        // keeps the original absolute deadline and re-enters this function if
+        // the slice expires.
+        const auto max_native_wait = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::seconds(std::numeric_limits<std::int32_t>::max()) +
+            std::chrono::nanoseconds(999999999));
+        const auto clamped = std::min(timeout, max_native_wait);
+        const auto nanoseconds =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(clamped);
+        constexpr std::int64_t kNanosecondsPerSecond = 1000000000LL;
+        const auto seconds = nanoseconds.count() / kNanosecondsPerSecond;
+        const auto subsecond = nanoseconds.count() % kNanosecondsPerSecond;
         const eprosima::fastrtps::Duration_t duration(
-            static_cast<std::int32_t>(seconds), static_cast<std::uint32_t>(nanoseconds));
+            static_cast<std::int32_t>(seconds), static_cast<std::uint32_t>(subsecond));
         return wait_for_notification(duration, observed_wake_generation);
     }
 
