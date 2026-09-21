@@ -37,7 +37,7 @@ public:
         eprosima::fastdds::dds::DataReader* response_reader,
         std::unique_ptr<impl::ResponseReaderListener> response_listener,
         impl::LocalEndpointRegistration request_metadata,
-        impl::LocalEndpointRegistration response_metadata)
+        impl::LocalEndpointRegistration response_metadata) noexcept
     : context_(context),
       service_name_(std::move(service_name)),
       response_type_(std::move(response_type)),
