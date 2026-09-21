@@ -427,6 +427,14 @@ Result<std::unique_ptr<Client>> Node::Impl::create_client(
         delete_writer_listener_noexcept(*impl_->context_, writer, request_listener);
         throw;
     }
+    if (!client_impl->initialized()) {
+        if (impl_->context_->is_shutdown()) {
+            return Result<std::unique_ptr<Client>>::failure(
+                Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        }
+        return Result<std::unique_ptr<Client>>::failure(
+            Error(ErrorCode::DDSError, "Client discovery wait registration failed"));
+    }
     return Result<std::unique_ptr<Client>>::success(
         std::unique_ptr<Client>(new Client(std::move(client_impl))));
 }
@@ -463,7 +471,10 @@ Result<std::unique_ptr<Server>> Node::Impl::create_server(
     if (!response_topic)
         return Result<std::unique_ptr<Server>>::failure(std::move(response_topic.error()));
     auto response_state = std::make_shared<impl::ResponseState>(impl_->context_->discovery_graph());
-    response_state->subscribe_to_graph();
+    if (!response_state->subscribe_to_graph()) {
+        return Result<std::unique_ptr<Server>>::failure(
+            Error(ErrorCode::DDSError, "Server response discovery subscription failed"));
+    }
     auto response_listener =
         std::make_unique<impl::ResponseWriterListener>(std::weak_ptr(response_state));
     auto* reader = impl_->context_->subscriber()->create_datareader(
@@ -544,6 +555,18 @@ Result<std::unique_ptr<ActionClient>> Node::Impl::create_action_client(
         impl_->context_, std::move(logical_name.value()), *names, impl::action_endpoint_types(type),
         std::move(goal.value()), std::move(cancel.value()), std::move(result.value()),
         std::move(feedback.value()), std::move(status.value()));
+    if (!client_impl->initialized()) {
+        if (impl_->context_->is_shutdown()) {
+            return Result<std::unique_ptr<ActionClient>>::failure(
+                Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        }
+        return Result<std::unique_ptr<ActionClient>>::failure(
+            Error(ErrorCode::DDSError, "ActionClient availability registration failed"));
+    }
+    if (impl_->context_->is_shutdown()) {
+        return Result<std::unique_ptr<ActionClient>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return Result<std::unique_ptr<ActionClient>>::success(
         std::unique_ptr<ActionClient>(new ActionClient(std::move(client_impl))));
 }
@@ -591,6 +614,10 @@ Result<std::unique_ptr<ActionServer>> Node::Impl::create_action_server(
         impl_->context_, std::move(logical_name.value()), std::move(goal.value()),
         std::move(cancel.value()), std::move(result.value()), std::move(feedback.value()),
         std::move(status.value()), options.result_timeout);
+    if (impl_->context_->is_shutdown()) {
+        return Result<std::unique_ptr<ActionServer>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return Result<std::unique_ptr<ActionServer>>::success(
         std::unique_ptr<ActionServer>(new ActionServer(std::move(server_impl))));
 }
