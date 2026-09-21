@@ -9,6 +9,7 @@
 
 #include "dmw/error.hpp"
 #include "impl/identity.hpp"
+#include "impl/deadline.hpp"
 #include "impl/process_lifetime.hpp"
 #include "impl/qos.hpp"
 #include "impl/return_code.hpp"
@@ -170,9 +171,7 @@ Result<bool> Client::Impl::wait_for_service(WaitTimeout timeout) const {
     if (!operation)
         return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
 
-    const auto deadline = timeout.kind() == WaitTimeout::Kind::Finite
-                              ? std::chrono::steady_clock::now() + timeout.duration()
-                              : std::chrono::steady_clock::time_point::max();
+    const auto deadline = impl::steady_deadline(timeout);
     auto state = service_wait_state_;
     std::unique_lock lock(state->mutex);
     while (true) {
