@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "dmw/request_id.hpp"
+#include "dmw/qos.hpp"
 #include "dmw/result.hpp"
 #include "dmw/visibility_control.hpp"
 
@@ -35,11 +36,15 @@ public:
     /// Respond only to a RequestId currently pending on this Server.
     Result<void> write_response(const RequestId& request_id, const void* response);
 
+    Result<Qos> request_actual_qos() const;
+    Result<Qos> response_actual_qos() const;
+
     std::string_view service_name() const noexcept;
 
 private:
     friend class Node;
     friend class WaitSet;
+    friend class ActionServer;
 
     class Impl;
 

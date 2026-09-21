@@ -1,8 +1,14 @@
 #include "impl/publisher_impl.hpp"
 
+#include <cstdint>
+#include <limits>
+
+#include <fastdds/rtps/common/Time_t.h>
+
 #include "dmw/error.hpp"
 #include "impl/event_impl.hpp"
 #include "impl/process_lifetime.hpp"
+#include "impl/qos.hpp"
 #include "impl/return_code.hpp"
 
 namespace dmw {
@@ -36,8 +42,8 @@ Result<void> Publisher::Impl::write(const void* message) {
     const auto operation = context_->try_acquire_operation();
     if (!operation)
         return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
-    const auto result = writer_->write(
-        const_cast<void*>(message), eprosima::fastdds::dds::HANDLE_NIL);
+    const auto result =
+        writer_->write(const_cast<void*>(message), eprosima::fastdds::dds::HANDLE_NIL);
     if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
         return Result<void>::failure(impl::to_error(result, "Fast DDS DataWriter write failed"));
     return Result<void>::success();
@@ -56,6 +62,80 @@ Result<std::size_t> Publisher::Impl::matched_subscriber_count() const {
             impl::to_error(result, "Fast DDS matched subscription query failed"));
     }
     return Result<std::size_t>::success(static_cast<std::size_t>(status.current_count));
+}
+
+Result<Qos> Publisher::Impl::actual_qos() const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation)
+        return Result<Qos>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    eprosima::fastdds::dds::DataWriterQos qos;
+    const auto result = writer_->get_qos(qos);
+    if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+        return Result<Qos>::failure(impl::to_error(result, "Fast DDS writer QoS query failed"));
+    }
+    return impl::from_neutral_qos(qos);
+}
+
+Result<bool> Publisher::Impl::wait_for_all_acked(WaitTimeout timeout) {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation)
+        return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    const auto deadline = timeout.kind() == WaitTimeout::Kind::Finite
+                              ? std::chrono::steady_clock::now() + timeout.duration()
+                              : std::chrono::steady_clock::time_point::max();
+    const auto shutdown_check_interval =
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::milliseconds(20));
+    while (true) {
+        if (context_->is_shutdown()) {
+            return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        }
+        const auto remaining = timeout.kind() == WaitTimeout::Kind::Finite
+                                   ? deadline - std::chrono::steady_clock::now()
+                                   : shutdown_check_interval;
+        if (timeout.kind() == WaitTimeout::Kind::Finite &&
+            remaining <= std::chrono::steady_clock::duration::zero()) {
+            return Result<bool>::success(false);
+        }
+        const auto wait_duration = timeout.kind() == WaitTimeout::Kind::Poll
+                                       ? std::chrono::nanoseconds::zero()
+                                       : std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                             std::min(remaining, shutdown_check_interval));
+        constexpr std::int64_t kNanosecondsPerSecond = 1000000000LL;
+        const auto seconds = wait_duration.count() / kNanosecondsPerSecond;
+        const auto nanoseconds = wait_duration.count() % kNanosecondsPerSecond;
+        if (seconds > std::numeric_limits<std::int32_t>::max()) {
+            return Result<bool>::failure(
+                Error(ErrorCode::Unsupported, "Acknowledgment timeout exceeds Fast DDS range"));
+        }
+        const auto duration = eprosima::fastrtps::Duration_t(
+            static_cast<std::int32_t>(seconds), static_cast<std::uint32_t>(nanoseconds));
+        const auto result = writer_->wait_for_acknowledgments(duration);
+        if (result == eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
+            return Result<bool>::success(true);
+        if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_TIMEOUT) {
+            return Result<bool>::failure(
+                impl::to_error(result, "Fast DDS acknowledgment wait failed"));
+        }
+        if (timeout.kind() == WaitTimeout::Kind::Poll) return Result<bool>::success(false);
+    }
+}
+
+Result<void> Publisher::Impl::assert_liveliness() {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation)
+        return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    auto qos = actual_qos();
+    if (!qos) return Result<void>::failure(std::move(qos.error()));
+    if (qos.value().liveliness() != LivelinessPolicy::ManualByTopic) {
+        return Result<void>::failure(
+            Error(ErrorCode::InvalidState, "Liveliness assertion requires ManualByTopic QoS"));
+    }
+    const auto result = writer_->assert_liveliness();
+    if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK)
+        return Result<void>::failure(
+            impl::to_error(result, "Fast DDS liveliness assertion failed"));
+    return Result<void>::success();
 }
 
 Result<std::unique_ptr<Event>> Publisher::Impl::create_event(EventType type) {

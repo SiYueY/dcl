@@ -8,6 +8,7 @@
 #include <future>
 #include <thread>
 #include <typeindex>
+#include <unistd.h>
 
 #include "fastdds/dds/topic/TopicDataType.hpp"
 
@@ -56,9 +57,16 @@ int main() {
     assert(message_type);
     const dmw::ServiceType service_type(message_type.value(), message_type.value());
 
+    // Partition the DDS domain space into disjoint 21-wide slots keyed by
+    // process id, so two concurrent instances of this test (for example two
+    // build trees running in parallel) never share a domain.  Without this the
+    // infinite shutdown wait could legitimately observe a foreign sample and
+    // return Ready, which is indistinguishable from a spurious wakeup.
+    const std::uint32_t domain_base =
+        1U + (static_cast<std::uint32_t>(::getpid()) % 11U) * 21U;
     for (std::uint32_t iteration = 0; iteration < 20; ++iteration) {
         dmw::ContextOptions context_options;
-        context_options.domain_id = 100U + iteration;
+        context_options.domain_id = domain_base + iteration;
         context_options.participant_name = "dmw-lifecycle-stress";
         auto context = dmw::Context::create(context_options);
         assert(context);

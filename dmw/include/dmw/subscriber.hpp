@@ -9,6 +9,7 @@
 #include "dmw/event.hpp"
 #include "dmw/message_info.hpp"
 #include "dmw/message_type.hpp"
+#include "dmw/qos.hpp"
 #include "dmw/result.hpp"
 #include "dmw/visibility_control.hpp"
 
@@ -35,6 +36,7 @@ public:
 
     std::string_view topic_name() const noexcept;
     const MessageType& message_type() const noexcept;
+    Result<Qos> actual_qos() const;
     Result<std::size_t> matched_publisher_count() const;
 
     /// Create one of the subscriber EventType values defined by the DMW contract.
@@ -43,6 +45,8 @@ public:
 private:
     friend class Node;
     friend class WaitSet;
+    friend class ActionClient;
+    friend class ActionServer;
 
     class Impl;
 

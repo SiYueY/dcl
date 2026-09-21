@@ -35,7 +35,9 @@ public:
         eprosima::fastdds::dds::DataWriter* request_writer,
         std::unique_ptr<impl::RequestWriterListener> request_listener, impl::Topic response_topic,
         eprosima::fastdds::dds::DataReader* response_reader,
-        std::unique_ptr<impl::ResponseReaderListener> response_listener) noexcept
+        std::unique_ptr<impl::ResponseReaderListener> response_listener,
+        impl::LocalEndpointRegistration request_metadata,
+        impl::LocalEndpointRegistration response_metadata) noexcept
     : context_(context),
       service_name_(std::move(service_name)),
       response_type_(std::move(response_type)),
@@ -46,8 +48,9 @@ public:
       response_topic_(std::move(response_topic)),
       response_reader_(response_reader),
       response_listener_(std::move(response_listener)),
-      response_wait_state_(
-          std::make_shared<impl::ReaderWaitState>(context_, response_reader)),
+      response_wait_state_(std::make_shared<impl::ReaderWaitState>(context_, response_reader)),
+      request_metadata_(std::move(request_metadata)),
+      response_metadata_(std::move(response_metadata)),
       service_wait_state_(std::make_shared<ServiceWaitState>()) {
         const std::weak_ptr<ServiceWaitState> weak_state = service_wait_state_;
         service_subscription_ = context_->discovery_graph()->subscribe([weak_state](std::uint64_t) {
@@ -70,6 +73,8 @@ public:
     Result<bool> read_response(void* response, RequestId& request_id);
     Result<bool> service_is_available() const;
     Result<bool> wait_for_service(WaitTimeout timeout) const;
+    Result<Qos> request_actual_qos() const;
+    Result<Qos> response_actual_qos() const;
     const std::shared_ptr<impl::ReaderWaitState>& wait_state() const noexcept {
         return response_wait_state_;
     }
@@ -86,6 +91,8 @@ private:
     eprosima::fastdds::dds::DataReader* response_reader_;
     std::unique_ptr<impl::ResponseReaderListener> response_listener_;
     std::shared_ptr<impl::ReaderWaitState> response_wait_state_;
+    impl::LocalEndpointRegistration request_metadata_;
+    impl::LocalEndpointRegistration response_metadata_;
     std::shared_ptr<ServiceWaitState> service_wait_state_;
     impl::DiscoveryGraph::Subscription service_subscription_;
     std::uint64_t shutdown_callback_id_{0};

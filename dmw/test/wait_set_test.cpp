@@ -65,7 +65,7 @@ void assert_ready_for(
     assert(wait_result);
     assert(wait_result.value().status() == dmw::WaitStatus::Ready);
     assert(wait_result.value().ready().size() == 1);
-    assert(wait_result.value().ready().front() == registration);
+    assert(wait_result.value().ready().front().registration == registration);
 }
 
 }  // namespace
@@ -85,9 +85,8 @@ int main() {
     auto registration = wait_set.value()->add(*guard.value());
     assert(registration);
 
-    auto guard_wait = std::async(std::launch::async, [&] {
-        return wait_set.value()->wait(dmw::WaitTimeout::infinite());
-    });
+    auto guard_wait = std::async(
+        std::launch::async, [&] { return wait_set.value()->wait(dmw::WaitTimeout::infinite()); });
     std::this_thread::sleep_for(20ms);
     assert(guard.value()->trigger());
     assert_ready_for(guard_wait, registration.value());
@@ -120,6 +119,12 @@ int main() {
         auto subscriber = node.value()->create_subscriber(type.value(), topic, dmw::Qos{});
         auto reader_wait_set = context.value()->create_wait_set();
         assert(publisher && subscriber && reader_wait_set);
+        const auto publisher_qos = publisher.value()->actual_qos();
+        const auto subscriber_qos = subscriber.value()->actual_qos();
+        assert(publisher_qos && subscriber_qos);
+        const auto automatic_liveliness = publisher.value()->assert_liveliness();
+        assert(!automatic_liveliness);
+        assert(automatic_liveliness.error().code() == dmw::ErrorCode::InvalidState);
         assert(wait_until([&] {
             const auto matched = publisher.value()->matched_subscriber_count();
             return matched && matched.value() != 0;
@@ -168,6 +173,10 @@ int main() {
     auto client = node.value()->create_client(service_type, "wait_set_client", dmw::Qos{});
     auto server = node.value()->create_server(service_type, "wait_set_server", dmw::Qos{});
     assert(client && server);
+    assert(client.value()->request_actual_qos());
+    assert(client.value()->response_actual_qos());
+    assert(server.value()->request_actual_qos());
+    assert(server.value()->response_actual_qos());
     for (int iteration = 0; iteration < 8; ++iteration) {
         auto endpoint_wait_set = context.value()->create_wait_set();
         auto endpoint_guard = context.value()->create_guard_condition();
@@ -186,15 +195,32 @@ int main() {
         assert(endpoint_wait_set.value()->remove(endpoint_token.value()));
     }
 
-    auto active_wait = std::async(std::launch::async, [&] {
-        return wait_set.value()->wait(dmw::WaitTimeout::infinite());
-    });
+    auto active_wait = std::async(
+        std::launch::async, [&] { return wait_set.value()->wait(dmw::WaitTimeout::infinite()); });
     std::this_thread::sleep_for(20ms);
     auto concurrent_wait = wait_set.value()->wait(dmw::WaitTimeout::poll());
     assert(!concurrent_wait);
     assert(concurrent_wait.error().code() == dmw::ErrorCode::Busy);
     assert(guard.value()->trigger());
     assert_ready_for(active_wait, registration.value());
+
+    // A waitable may belong to at most one WaitSet at a time.
+    auto exclusive_wait_set = context.value()->create_wait_set();
+    auto exclusive_guard = context.value()->create_guard_condition();
+    assert(exclusive_wait_set && exclusive_guard);
+    auto exclusive_token = exclusive_wait_set.value()->add(*exclusive_guard.value());
+    assert(exclusive_token);
+    auto duplicate_in_same = exclusive_wait_set.value()->add(*exclusive_guard.value());
+    assert(!duplicate_in_same);
+    assert(duplicate_in_same.error().code() == dmw::ErrorCode::AlreadyRegistered);
+    auto duplicate_in_other = wait_set.value()->add(*exclusive_guard.value());
+    assert(!duplicate_in_other);
+    assert(duplicate_in_other.error().code() == dmw::ErrorCode::AlreadyRegistered);
+    assert(exclusive_wait_set.value()->remove(exclusive_token.value()));
+    // Once released it can be registered elsewhere.
+    auto reused_token = wait_set.value()->add(*exclusive_guard.value());
+    assert(reused_token);
+    assert(wait_set.value()->remove(reused_token.value()));
 
     auto shutdown_wait_set = context.value()->create_wait_set();
     assert(shutdown_wait_set);

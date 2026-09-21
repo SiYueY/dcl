@@ -10,6 +10,7 @@
 #include "dmw/error.hpp"
 #include "impl/identity.hpp"
 #include "impl/process_lifetime.hpp"
+#include "impl/qos.hpp"
 #include "impl/return_code.hpp"
 #include "impl/temporary_sample.hpp"
 
@@ -135,14 +136,33 @@ Result<bool> Client::Impl::service_is_available() const {
         return Result<bool>::failure(
             Error(ErrorCode::DDSError, "Service discovery context is unavailable"));
     }
-    try {
-        return Result<bool>::success(request_state_->is_available());
-    } catch (const std::bad_alloc&) {
-        // The service context is snapshotted before lower-ranked discovery
-        // registries are inspected.  Keep allocation failure inside Result.
-        return Result<bool>::failure(
-            Error(ErrorCode::ResourceExhausted, "Service availability snapshot allocation failed"));
+    return Result<bool>::success(request_state_->is_available());
+}
+
+Result<Qos> Client::Impl::request_actual_qos() const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation)
+        return Result<Qos>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    eprosima::fastdds::dds::DataWriterQos qos;
+    const auto result = request_writer_->get_qos(qos);
+    if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+        return Result<Qos>::failure(
+            impl::to_error(result, "Fast DDS client request writer QoS query failed"));
     }
+    return impl::from_neutral_qos(qos);
+}
+
+Result<Qos> Client::Impl::response_actual_qos() const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation)
+        return Result<Qos>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    eprosima::fastdds::dds::DataReaderQos qos;
+    const auto result = response_reader_->get_qos(qos);
+    if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+        return Result<Qos>::failure(
+            impl::to_error(result, "Fast DDS client response reader QoS query failed"));
+    }
+    return impl::from_neutral_qos(qos);
 }
 
 Result<bool> Client::Impl::wait_for_service(WaitTimeout timeout) const {
@@ -161,8 +181,7 @@ Result<bool> Client::Impl::wait_for_service(WaitTimeout timeout) const {
         if (!available || available.value() || timeout.kind() == WaitTimeout::Kind::Poll)
             return available;
         if (context_->is_shutdown()) {
-            return Result<bool>::failure(
-                Error(ErrorCode::ContextShutdown, "Context is shut down"));
+            return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
         }
         if (timeout.kind() == WaitTimeout::Kind::Finite) {
             if (std::chrono::steady_clock::now() >= deadline) return Result<bool>::success(false);

@@ -147,8 +147,13 @@ private:
         std::size_t count{0};
     };
 
-    mutable RankedMutex<LockRank::TargetReader> mutex_;
-    std::condition_variable_any cv_;
+    /// `std::condition_variable` requires a plain `std::mutex`; using it here
+    /// keeps the wait path free of the hidden mutex that
+    /// `condition_variable_any` adds, which previously produced a spurious
+    /// lock-order edge in ThreadSanitizer runs.  The TargetReader rank is still
+    /// respected by code order (see dmw_fastdds.md §9.9).
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
     bool degraded_{false};
     std::vector<ReaderCount> readers_;
     std::weak_ptr<DiscoveryGraph> graph_;

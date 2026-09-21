@@ -39,6 +39,44 @@ Result<WaitableRegistration> WaitSet::Impl::add(
         WaitableRegistration(context_->wait_set_id_, registration.value(), kind));
 }
 
+Result<WaitableRegistration> WaitSet::Impl::add(
+    const std::shared_ptr<impl::TimerState>& timer, WaitableKind kind) {
+    if (kind != WaitableKind::Timer) {
+        return Result<WaitableRegistration>::failure(
+            Error(ErrorCode::InvalidArgument, "Timer registration requires the Timer waitable kind"));
+    }
+    auto registration = impl::add_timer(context_, timer);
+    if (!registration)
+        return Result<WaitableRegistration>::failure(std::move(registration.error()));
+    return Result<WaitableRegistration>::success(
+        WaitableRegistration(context_->wait_set_id_, registration.value(), kind));
+}
+
+Result<WaitableRegistration> WaitSet::Impl::add(
+    const std::shared_ptr<impl::GraphEventState>& graph_event, WaitableKind kind) {
+    if (kind != WaitableKind::GraphEvent) {
+        return Result<WaitableRegistration>::failure(Error(
+            ErrorCode::InvalidArgument, "GraphEvent registration requires the GraphEvent kind"));
+    }
+    auto registration = impl::add_graph_event(context_, graph_event);
+    if (!registration)
+        return Result<WaitableRegistration>::failure(std::move(registration.error()));
+    return Result<WaitableRegistration>::success(
+        WaitableRegistration(context_->wait_set_id_, registration.value(), kind));
+}
+
+Result<WaitableRegistration> WaitSet::Impl::add_composite(
+    const std::vector<std::shared_ptr<impl::ReaderWaitState>>& readers, WaitableKind kind,
+    std::function<std::uint32_t()> logical_detail,
+    std::function<std::optional<std::chrono::steady_clock::time_point>()> runtime_deadline) {
+    auto registration = impl::add_readers(
+        context_, readers, kind, std::move(logical_detail), std::move(runtime_deadline));
+    if (!registration)
+        return Result<WaitableRegistration>::failure(std::move(registration.error()));
+    return Result<WaitableRegistration>::success(
+        WaitableRegistration(context_->wait_set_id_, registration.value(), kind));
+}
+
 Result<void> WaitSet::Impl::remove(WaitableRegistration registration) {
     const auto context = context_;
     if (!registration.valid() || registration.wait_set_id_ != context->wait_set_id_) {
@@ -88,17 +126,18 @@ Result<WaitResult> WaitSet::Impl::wait(WaitTimeout timeout) {
         // window for logical GuardConditions, which have no native condition.
         const auto observed_wake_generation =
             context->wake_->generation.load(std::memory_order_acquire);
-        std::vector<WaitableRegistration> registrations;
-        for (const auto& registration : context->snapshot()) {
+        const auto snapshot = context->snapshot();
+        std::vector<ReadyWaitable> registrations;
+        for (const auto& registration : snapshot) {
             if (registration->is_closing()) {
                 context->detach(registration);
                 continue;
             }
-            if (registration->ready()) {
-                const WaitableRegistration ready_registration(
-                    context->wait_set_id_, registration->id, registration->kind);
-                registrations.push_back(ready_registration);
-            }
+            const auto detail = registration->ready_mask();
+            if (detail == 0) continue;
+            registrations.push_back(ReadyWaitable{
+                WaitableRegistration(context->wait_set_id_, registration->id, registration->kind),
+                registration->kind, detail});
         }
         // Do not expose a readiness set assembled across a topology change
         // (notably Server available↔full reader detach/reattach).
@@ -114,12 +153,31 @@ Result<WaitResult> WaitSet::Impl::wait(WaitTimeout timeout) {
             return Result<WaitResult>::success(WaitResult::timeout());
         }
 
+        // Fold the earliest Clock-bound Timer deadline into the native wait so
+        // a timer wakes an otherwise infinite wait without a polling slice.
+        auto native_deadline = deadline;
+        for (const auto& registration : snapshot) {
+            if (registration->timer) {
+                const auto timer_deadline = registration->timer->steady_deadline();
+                if (timer_deadline && *timer_deadline < native_deadline) {
+                    native_deadline = *timer_deadline;
+                }
+            }
+            if (registration->runtime_deadline) {
+                const auto runtime = registration->runtime_deadline();
+                if (runtime && *runtime < native_deadline) native_deadline = *runtime;
+            }
+        }
+
         if (context->topology_generation() != observed_topology) continue;
         Result<void> wake = Result<void>::success();
-        if (timeout.kind() == WaitTimeout::Kind::Finite) {
-            const auto remaining = deadline - std::chrono::steady_clock::now();
+        if (native_deadline != std::chrono::steady_clock::time_point::max()) {
+            const auto remaining = native_deadline - std::chrono::steady_clock::now();
             if (remaining <= std::chrono::steady_clock::duration::zero()) {
-                return Result<WaitResult>::success(WaitResult::timeout());
+                // A ROS/System clock jump moved the runtime deadline after it
+                // was computed.  Re-evaluate instead of blocking on a stale
+                // deadline; the next iteration recomputes it from the clock.
+                continue;
             }
             wake = context->wait_for_notification(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(remaining),

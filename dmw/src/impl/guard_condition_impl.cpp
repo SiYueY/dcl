@@ -27,8 +27,7 @@ Result<void> GuardConditionState::trigger() {
         }
     }
     pending.store(true, std::memory_order_release);
-    notify_wait_set();
-    return Result<void>::success();
+    return notify_wait_set();
 }
 
 }  // namespace dmw

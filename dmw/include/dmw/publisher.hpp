@@ -8,8 +8,10 @@
 
 #include "dmw/event.hpp"
 #include "dmw/message_type.hpp"
+#include "dmw/qos.hpp"
 #include "dmw/result.hpp"
 #include "dmw/visibility_control.hpp"
+#include "dmw/wait_timeout.hpp"
 
 namespace dmw {
 
@@ -33,13 +35,17 @@ public:
 
     std::string_view topic_name() const noexcept;
     const MessageType& message_type() const noexcept;
+    Result<Qos> actual_qos() const;
     Result<std::size_t> matched_subscriber_count() const;
+    Result<bool> wait_for_all_acked(WaitTimeout timeout);
+    Result<void> assert_liveliness();
 
     /// Create one of the publisher EventType values defined by the DMW contract.
     Result<std::unique_ptr<Event>> create_event(EventType type);
 
 private:
     friend class Node;
+    friend class ActionServer;
 
     class Impl;
 

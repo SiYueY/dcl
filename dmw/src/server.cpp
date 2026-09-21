@@ -20,4 +20,8 @@ Result<void> Server::write_response(const RequestId& request_id, const void* res
     return impl_->write_response(request_id, response);
 }
 
+Result<Qos> Server::request_actual_qos() const { return impl_->request_actual_qos(); }
+
+Result<Qos> Server::response_actual_qos() const { return impl_->response_actual_qos(); }
+
 }  // namespace dmw

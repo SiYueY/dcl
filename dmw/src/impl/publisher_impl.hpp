@@ -16,19 +16,24 @@ class Publisher::Impl {
 public:
     Impl(
         std::shared_ptr<impl::Context> context, eprosima::fastdds::dds::DataWriter* writer,
-        std::string topic_name, MessageType type, impl::Topic topic) noexcept
+        std::string topic_name, MessageType type, impl::Topic topic,
+        impl::LocalEndpointRegistration metadata) noexcept
     : context_(std::move(context)),
       writer_(writer),
       topic_name_(std::move(topic_name)),
       type_(std::move(type)),
       event_parent_(std::make_shared<impl::EventParentState>(context_)),
-      topic_(std::move(topic)) {}
+      topic_(std::move(topic)),
+      metadata_(std::move(metadata)) {}
     ~Impl() noexcept;
 
     Result<void> write(const void* message);
     std::string_view topic_name() const noexcept { return topic_name_; }
     const MessageType& message_type() const noexcept { return type_; }
+    Result<Qos> actual_qos() const;
     Result<std::size_t> matched_subscriber_count() const;
+    Result<bool> wait_for_all_acked(WaitTimeout timeout);
+    Result<void> assert_liveliness();
     Result<std::unique_ptr<Event>> create_event(EventType type);
 
 private:
@@ -38,6 +43,7 @@ private:
     MessageType type_;
     std::shared_ptr<impl::EventParentState> event_parent_;
     impl::Topic topic_;
+    impl::LocalEndpointRegistration metadata_;
 };
 
 }  // namespace dmw

@@ -1,0 +1,20 @@
+# ThreadSanitizer suppressions for the DMW targeted TSan suite.
+#
+# Fast DDS and Fast CDR are consumed as uninstrumented shared libraries, so
+# ThreadSanitizer cannot observe their internal synchronization and reports
+# races / lock-order cycles rooted in the middleware.  DMW's own code is in
+# scope; middleware internals are not.
+#
+# Usage (kernels with 32-bit mmap randomization also need ASLR disabled,
+# otherwise TSan aborts before main with "unexpected memory mapping"):
+#
+#   cmake -S dmw -B dmw/build-tsan -DDMW_ENABLE_TSAN=ON -DDMW_ENABLE_DDS_INTEGRATION_TESTS=ON
+#   cmake --build dmw/build-tsan -j
+#   TSAN_OPTIONS=suppressions=<repo>/dmw/cmake/tsan_suppressions.txt \
+#     setarch "$(uname -m)" -R ctest --test-dir dmw/build-tsan -E ros2
+race:libfastrtps*
+deadlock:libfastrtps*
+mutex:libfastrtps*
+race:libfastcdr*
+deadlock:libfastcdr*
+mutex:libfastcdr*

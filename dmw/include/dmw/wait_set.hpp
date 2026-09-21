@@ -12,12 +12,16 @@
 
 namespace dmw {
 
+class ActionClient;
+class ActionServer;
 class Client;
 class Context;
 class Event;
+class GraphEvent;
 class GuardCondition;
 class Server;
 class Subscriber;
+class Timer;
 
 /// Reserved extension point for WaitSet creation.
 struct WaitSetOptions {};
@@ -37,7 +41,12 @@ public:
     Result<WaitableRegistration> add(Subscriber& subscriber);
     Result<WaitableRegistration> add(Client& client);
     Result<WaitableRegistration> add(Server& server);
+    Result<WaitableRegistration> add(Timer& timer);
+    /// One aggregate token covering every constituent channel of the Action.
+    Result<WaitableRegistration> add(ActionClient& action_client);
+    Result<WaitableRegistration> add(ActionServer& action_server);
     Result<WaitableRegistration> add(Event& event);
+    Result<WaitableRegistration> add(GraphEvent& graph_event);
     Result<WaitableRegistration> add(GuardCondition& guard_condition);
 
     /// Remove a registration created by this WaitSet.

@@ -16,7 +16,9 @@
 #include <fastdds/dds/domain/DomainParticipant.hpp>
 #include <fastdds/dds/domain/DomainParticipantFactory.hpp>
 #include <fastdds/dds/publisher/Publisher.hpp>
+#include <fastdds/dds/publisher/qos/DataWriterQos.hpp>
 #include <fastdds/dds/subscriber/Subscriber.hpp>
+#include <fastdds/dds/subscriber/qos/DataReaderQos.hpp>
 
 #include "dmw/runtime_mode.hpp"
 #include "dmw/message_type.hpp"
@@ -24,6 +26,7 @@
 #include "dmw/result.hpp"
 #include "impl/lock_rank.hpp"
 #include "impl/discovery_graph.hpp"
+#include "impl/graph_metadata.hpp"
 #include "impl/topic.hpp"
 
 namespace dmw {
@@ -59,6 +62,13 @@ public:
         eprosima::fastdds::dds::Publisher* publisher,
         eprosima::fastdds::dds::Subscriber* subscriber, std::uint32_t domain_id,
         RuntimeMode runtime_mode) noexcept;
+    Context(
+        eprosima::fastdds::dds::DomainParticipantFactory* factory,
+        eprosima::fastdds::dds::DomainParticipant* participant,
+        eprosima::fastdds::dds::Publisher* publisher,
+        eprosima::fastdds::dds::Subscriber* subscriber, std::uint32_t domain_id,
+        RuntimeMode runtime_mode, eprosima::fastdds::dds::DataWriterQos writer_qos_baseline,
+        eprosima::fastdds::dds::DataReaderQos reader_qos_baseline) noexcept;
     ~Context() noexcept;
 
     Context(const Context&) = delete;
@@ -69,6 +79,8 @@ public:
     eprosima::fastdds::dds::Subscriber* subscriber() const noexcept;
     std::uint32_t domain_id() const noexcept;
     RuntimeMode runtime_mode() const noexcept;
+    const eprosima::fastdds::dds::DataWriterQos& writer_qos_baseline() const noexcept;
+    const eprosima::fastdds::dds::DataReaderQos& reader_qos_baseline() const noexcept;
     bool is_shutdown() const noexcept;
     OperationGuard try_acquire_operation() noexcept;
     void shutdown() noexcept;
@@ -76,6 +88,14 @@ public:
     void unregister_shutdown_callback(std::uint64_t id) noexcept;
     Result<void> install_discovery_listener() noexcept;
     std::shared_ptr<DiscoveryGraph> discovery_graph() const noexcept { return discovery_graph_; }
+
+    /// Create the ROS 2 graph metadata transport; no-op in DDS mode.
+    Result<void> install_graph_metadata_transport() noexcept;
+    const std::shared_ptr<GraphMetadataTransport>& graph_metadata() const noexcept {
+        return graph_metadata_;
+    }
+    /// Unsubscribe and release the metadata transport before entity teardown.
+    void close_graph_metadata_transport() noexcept;
 
     Result<Topic> acquire_topic(
         const MessageType& type, const std::string& dds_topic_name, const Qos& qos);
@@ -122,6 +142,8 @@ private:
     eprosima::fastdds::dds::Subscriber* subscriber_;
     const std::uint32_t domain_id_;
     const RuntimeMode runtime_mode_;
+    const eprosima::fastdds::dds::DataWriterQos writer_qos_baseline_;
+    const eprosima::fastdds::dds::DataReaderQos reader_qos_baseline_;
     std::atomic<bool> shutdown_{false};
     bool shutdown_complete_{false};
     RankedMutex<LockRank::ContextRuntime> operation_mutex_;
@@ -140,6 +162,8 @@ private:
     std::unordered_map<std::string, RegisteredTopic> topics_;
     std::shared_ptr<DiscoveryGraph> discovery_graph_{std::make_shared<DiscoveryGraph>()};
     std::unique_ptr<DiscoveryListener> participant_listener_;
+    std::shared_ptr<GraphMetadataTransport> graph_metadata_;
+    DiscoveryGraph::Subscription graph_metadata_subscription_;
 };
 
 }  // namespace impl

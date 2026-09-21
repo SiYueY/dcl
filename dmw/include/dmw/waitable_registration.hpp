@@ -7,7 +7,17 @@ namespace dmw {
 
 class WaitSet;
 
-enum class WaitableKind { Subscriber, Client, Server, Event, GuardCondition };
+enum class WaitableKind {
+    Subscriber,
+    Client,
+    Server,
+    Timer,
+    ActionClient,
+    ActionServer,
+    Event,
+    GraphEvent,
+    GuardCondition
+};
 
 /// Opaque identity of a registration in one WaitSet.
 class WaitableRegistration {

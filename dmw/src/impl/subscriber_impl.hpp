@@ -19,19 +19,22 @@ class Subscriber::Impl {
 public:
     Impl(
         std::shared_ptr<impl::Context> context, eprosima::fastdds::dds::DataReader* reader,
-        std::string topic_name, MessageType type, impl::Topic topic) noexcept
+        std::string topic_name, MessageType type, impl::Topic topic,
+        impl::LocalEndpointRegistration metadata) noexcept
     : context_(context),
       reader_(reader),
       topic_name_(std::move(topic_name)),
       type_(std::move(type)),
       wait_state_(std::make_shared<impl::ReaderWaitState>(std::move(context), reader)),
       event_parent_(std::make_shared<impl::EventParentState>(context_)),
-      topic_(std::move(topic)) {}
+      topic_(std::move(topic)),
+      metadata_(std::move(metadata)) {}
     ~Impl() noexcept;
 
     Result<bool> read(void* message, MessageInfo& info);
     std::string_view topic_name() const noexcept { return topic_name_; }
     const MessageType& message_type() const noexcept { return type_; }
+    Result<Qos> actual_qos() const;
     Result<std::size_t> matched_publisher_count() const;
     Result<std::unique_ptr<Event>> create_event(EventType type);
     const std::shared_ptr<impl::ReaderWaitState>& wait_state() const noexcept {
@@ -46,6 +49,7 @@ private:
     std::shared_ptr<impl::ReaderWaitState> wait_state_;
     std::shared_ptr<impl::EventParentState> event_parent_;
     impl::Topic topic_;
+    impl::LocalEndpointRegistration metadata_;
     std::mutex read_mutex_;
     std::unique_ptr<impl::TemporarySample> receive_scratch_;
 };

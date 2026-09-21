@@ -27,7 +27,8 @@ public:
         std::size_t max_pending_requests, MessageType request_type,
         std::shared_ptr<impl::ResponseState> response_state,
         std::unique_ptr<impl::ResponseWriterListener> response_listener, impl::Topic request_topic,
-        impl::Topic response_topic) noexcept
+        impl::Topic response_topic, impl::LocalEndpointRegistration request_metadata,
+        impl::LocalEndpointRegistration response_metadata) noexcept
     : context_(context),
       request_reader_(request_reader),
       response_writer_(response_writer),
@@ -39,12 +40,16 @@ public:
       request_wait_state_(
           std::make_shared<impl::ReaderWaitState>(std::move(context), request_reader)),
       request_topic_(std::move(request_topic)),
-      response_topic_(std::move(response_topic)) {}
+      response_topic_(std::move(response_topic)),
+      request_metadata_(std::move(request_metadata)),
+      response_metadata_(std::move(response_metadata)) {}
     ~Impl() noexcept;
 
     std::string_view service_name() const noexcept { return service_name_; }
     Result<bool> read_request(void* request, RequestId& request_id);
     Result<void> write_response(const RequestId& request_id, const void* response);
+    Result<Qos> request_actual_qos() const;
+    Result<Qos> response_actual_qos() const;
     const std::shared_ptr<impl::ReaderWaitState>& wait_state() const noexcept {
         return request_wait_state_;
     }
@@ -91,6 +96,8 @@ private:
     std::unique_ptr<impl::TemporarySample> request_scratch_;
     impl::Topic request_topic_;
     impl::Topic response_topic_;
+    impl::LocalEndpointRegistration request_metadata_;
+    impl::LocalEndpointRegistration response_metadata_;
     impl::RankedMutex<impl::LockRank::PendingRequest> pending_mutex_;
     std::size_t reservations_{0};
     std::unordered_map<RequestId, PendingRequest, RequestIdHash> pending_;

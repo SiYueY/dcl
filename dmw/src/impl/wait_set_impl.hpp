@@ -7,9 +7,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <limits>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -22,6 +24,7 @@
 #include "dmw/client.hpp"
 #include "dmw/error.hpp"
 #include "dmw/event.hpp"
+#include "dmw/graph_event.hpp"
 #include "dmw/guard_condition.hpp"
 #include "dmw/server.hpp"
 #include "dmw/subscriber.hpp"
@@ -32,10 +35,12 @@
 #include "impl/context.hpp"
 #include "impl/return_code.hpp"
 #include "impl/guard_condition_impl.hpp"
+#include "impl/graph_impl.hpp"
 #include "impl/lock_rank.hpp"
 #include "impl/reader_wait_state.hpp"
 #include "impl/client_impl.hpp"
 #include "impl/server_impl.hpp"
+#include "impl/timer_impl.hpp"
 
 namespace dmw {
 
@@ -44,17 +49,22 @@ namespace impl {
 inline std::atomic<std::uint64_t> next_wait_set_id{1};
 
 struct WaitSetWake {
-    void notify() noexcept {
+    Result<void> notify() {
         generation.fetch_add(1, std::memory_order_acq_rel);
         std::lock_guard<std::mutex> lock(mutex);
         try {
             if (control_condition->set_trigger_value(true) !=
                 eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
                 broken.store(true, std::memory_order_release);
+                return Result<void>::failure(
+                    Error(ErrorCode::DDSError, "Fast DDS control condition trigger failed"));
             }
         } catch (...) {
             broken.store(true, std::memory_order_release);
+            return Result<void>::failure(
+                Error(ErrorCode::DDSError, "Fast DDS control condition trigger failed"));
         }
+        return Result<void>::success();
     }
 
     bool clear_if_unchanged(std::uint64_t observed_generation) noexcept {
@@ -113,13 +123,28 @@ struct Registration {
     std::uint64_t id{0};
     WaitableKind kind{WaitableKind::Subscriber};
     std::shared_ptr<GuardConditionState> guard;
-    std::shared_ptr<impl::ReaderWaitState> reader;
-    eprosima::fastdds::dds::StatusCondition* reader_condition{nullptr};
+    std::shared_ptr<impl::TimerState> timer;
+    std::shared_ptr<impl::GraphEventState> graph_event;
+    /// One constituent reader for a single-endpoint waitable, or the whole set
+    /// of channels behind one Action aggregate token.
+    std::vector<std::shared_ptr<impl::ReaderWaitState>> readers;
+    /// Native conditions attached for `readers`, parallel and possibly null.
+    std::vector<eprosima::fastdds::dds::StatusCondition*> reader_conditions;
+    /// Optional logical sub-channel provider used by aggregates whose
+    /// readiness is not limited to reader data availability.
+    std::function<std::uint32_t()> logical_detail;
+    /// Optional absolute steady deadline that must shorten a native wait.
+    std::function<std::optional<std::chrono::steady_clock::time_point>()> runtime_deadline;
     std::atomic<RegistrationPhase> phase{RegistrationPhase::Attached};
 
     bool is_closing() const noexcept {
-        return guard ? guard->closing.load(std::memory_order_acquire)
-                     : reader->closing.load(std::memory_order_acquire);
+        if (guard) return guard->closing.load(std::memory_order_acquire);
+        if (timer) return timer->closing.load(std::memory_order_acquire);
+        if (graph_event) return graph_event->closing.load(std::memory_order_acquire);
+        for (const auto& reader : readers) {
+            if (reader->closing.load(std::memory_order_acquire)) return true;
+        }
+        return false;
     }
 
     template <typename AttachCallback, typename DetachCallback>
@@ -127,42 +152,56 @@ struct Registration {
         std::uint64_t wait_set_id, const std::shared_ptr<WaitSetWake>& wake,
         AttachCallback&& attach_callback, DetachCallback&& detach_callback) noexcept {
         if (guard) {
-            std::lock_guard lock(guard->callback_mutex);
-            if (guard->closing.load(std::memory_order_acquire)) return AttachResult::Closing;
-            if (guard->wait_set_id.load(std::memory_order_acquire) != 0)
-                return AttachResult::AlreadyRegistered;
-            const auto attached = attach_callback();
-            if (attached != AttachResult::Attached) return attached;
-            guard->wait_set_id.store(wait_set_id, std::memory_order_release);
-            guard->registration_id.store(id, std::memory_order_release);
-            guard->wake_callback = [wake] { wake->notify(); };
-            guard->detach_callback = std::forward<DetachCallback>(detach_callback);
-            return AttachResult::Attached;
+            return claim_logical_waitable(
+                *guard, wait_set_id, wake, std::forward<AttachCallback>(attach_callback),
+                std::forward<DetachCallback>(detach_callback));
+        }
+        if (timer) {
+            return claim_logical_waitable(
+                *timer, wait_set_id, wake, std::forward<AttachCallback>(attach_callback),
+                std::forward<DetachCallback>(detach_callback));
+        }
+        if (graph_event) {
+            return claim_logical_waitable(
+                *graph_event, wait_set_id, wake, std::forward<AttachCallback>(attach_callback),
+                std::forward<DetachCallback>(detach_callback));
         }
 
-        {
+        // Every constituent reader is claimed under the same public token.  A
+        // reader is claimed one lock at a time because same-rank nesting is
+        // forbidden by the lock hierarchy.
+        for (const auto& reader : readers) {
             std::lock_guard lock(reader->callback_mutex);
-            if (reader->closing.load(std::memory_order_acquire)) return AttachResult::Closing;
+            if (reader->closing.load(std::memory_order_acquire)) {
+                clear_reader_claims();
+                return AttachResult::Closing;
+            }
             if (reader->wait_set_id.load(std::memory_order_acquire) != 0 ||
                 reader->claim_in_progress) {
+                clear_reader_claims();
                 return AttachResult::AlreadyRegistered;
             }
             reader->claim_in_progress = true;
         }
         const auto attached = attach_callback();
-        std::function<bool()> rollback;
+        if (attached != AttachResult::Attached) {
+            clear_reader_claims();
+            return attached;
+        }
         bool closed_during_claim = false;
-        {
+        std::function<bool()> rollback;
+        for (const auto& reader : readers) {
             std::lock_guard lock(reader->callback_mutex);
             reader->claim_in_progress = false;
             reader->callback_cv.notify_all();
-            if (attached != AttachResult::Attached) return attached;
             reader->wait_set_id.store(wait_set_id, std::memory_order_release);
             reader->registration_id.store(id, std::memory_order_release);
-            reader->wake_callback = [wake] { wake->notify(); };
-            reader->detach_callback = std::forward<DetachCallback>(detach_callback);
-            closed_during_claim = reader->closing.load(std::memory_order_acquire);
-            if (closed_during_claim) rollback = reader->detach_callback;
+            reader->wake_callback = [wake] { return wake->notify(); };
+            reader->detach_callback = detach_callback;
+            if (reader->closing.load(std::memory_order_acquire)) {
+                closed_during_claim = true;
+                rollback = detach_callback;
+            }
         }
         if (closed_during_claim) {
             if (rollback) (void)rollback();
@@ -173,57 +212,125 @@ struct Registration {
 
     template <typename DetachCallback>
     bool release(std::uint64_t wait_set_id, DetachCallback&& detach_callback) noexcept {
-        if (guard) {
-            std::lock_guard lock(guard->callback_mutex);
-            if (guard->wait_set_id.load(std::memory_order_acquire) != wait_set_id ||
-                guard->registration_id.load(std::memory_order_acquire) != id) {
-                return true;
-            }
-            guard->wake_callback = {};
-            guard->detach_callback = {};
-            guard->registration_id.store(0, std::memory_order_release);
-            guard->wait_set_id.store(0, std::memory_order_release);
-            return true;
-        }
+        if (guard) return release_logical_waitable(*guard, wait_set_id);
+        if (timer) return release_logical_waitable(*timer, wait_set_id);
+        if (graph_event) return release_logical_waitable(*graph_event, wait_set_id);
 
-        eprosima::fastdds::dds::StatusCondition* condition = nullptr;
-        {
-            std::lock_guard lock(reader->callback_mutex);
-            if (reader->wait_set_id.load(std::memory_order_acquire) != wait_set_id ||
-                reader->registration_id.load(std::memory_order_acquire) != id) {
-                return true;
+        for (std::size_t index = 0; index < readers.size(); ++index) {
+            const auto& reader = readers[index];
+            eprosima::fastdds::dds::StatusCondition* condition = nullptr;
+            {
+                std::lock_guard lock(reader->callback_mutex);
+                if (reader->wait_set_id.load(std::memory_order_acquire) != wait_set_id ||
+                    reader->registration_id.load(std::memory_order_acquire) != id) {
+                    continue;  // a concurrent close already cleaned this reader
+                }
+                condition = reader_conditions[index];
             }
-            condition = reader_condition;
-        }
-        // Native WaitSet reconciliation (rank 13) must not occur while the
-        // waitable-local callback lock (rank 15) is held.
-        if (condition != nullptr && !detach_callback(*condition)) return false;
-        {
-            std::lock_guard lock(reader->callback_mutex);
-            // Detach owns the registration phase, so any changed identity
-            // means a concurrent close already completed the cleanup.
-            if (reader->wait_set_id.load(std::memory_order_acquire) != wait_set_id ||
-                reader->registration_id.load(std::memory_order_acquire) != id) {
-                return true;
+            // Native WaitSet reconciliation (rank 13) must not occur while the
+            // waitable-local callback lock (rank 15) is held.
+            if (condition != nullptr && !detach_callback(*condition)) return false;
+            {
+                std::lock_guard lock(reader->callback_mutex);
+                // Detach owns the registration phase, so any changed identity
+                // means a concurrent close already completed the cleanup.
+                if (reader->wait_set_id.load(std::memory_order_acquire) != wait_set_id ||
+                    reader->registration_id.load(std::memory_order_acquire) != id) {
+                    continue;
+                }
+                reader->wake_callback = {};
+                reader->detach_callback = {};
+                reader->topology_callback = {};
+                reader->quarantined_wait_set.reset();
+                reader->registration_id.store(0, std::memory_order_release);
+                reader->wait_set_id.store(0, std::memory_order_release);
+                reader_conditions[index] = nullptr;
             }
-            reader->wake_callback = {};
-            reader->detach_callback = {};
-            reader->topology_callback = {};
-            reader->quarantined_wait_set.reset();
-            reader->registration_id.store(0, std::memory_order_release);
-            reader->wait_set_id.store(0, std::memory_order_release);
-            reader_condition = nullptr;
+            reader->complete_deferred_delete();
         }
-        reader->complete_deferred_delete();
         return true;
     }
 
-    bool ready() const noexcept {
+    /// Sub-channels ready right now; 0 means "not ready".  Consuming
+    /// waitables (GuardCondition) commit their trigger here.
+    std::uint32_t ready_mask() noexcept {
         if (guard) {
-            if (kind == WaitableKind::Event) return guard->pending.load(std::memory_order_acquire);
-            return guard->consume_trigger();
+            if (kind == WaitableKind::Event) {
+                return guard->pending.load(std::memory_order_acquire) ? kWaitableReadyBit : 0U;
+            }
+            return guard->consume_trigger() ? kWaitableReadyBit : 0U;
         }
-        return reader->is_ready();
+        if (timer) return timer->logically_ready() ? kWaitableReadyBit : 0U;
+        if (graph_event) return graph_event->logically_ready() ? kWaitableReadyBit : 0U;
+        std::uint32_t mask = 0;
+        for (std::size_t index = 0; index < readers.size(); ++index) {
+            if (!readers[index]->is_ready()) continue;
+            mask |= reader_detail_bit(kind, index);
+        }
+        if (logical_detail) mask |= logical_detail();
+        return mask;
+    }
+
+private:
+    /// Map one constituent reader index to its aggregate sub-channel bit.
+    static std::uint32_t reader_detail_bit(WaitableKind kind, std::size_t index) noexcept {
+        if (kind == WaitableKind::ActionClient) {
+            static constexpr std::uint32_t kBits[] = {
+                kActionGoalResponseBit, kActionCancelResponseBit, kActionResultResponseBit,
+                kActionFeedbackBit, kActionStatusBit};
+            return index < 5 ? kBits[index] : kWaitableReadyBit;
+        }
+        if (kind == WaitableKind::ActionServer) {
+            static constexpr std::uint32_t kBits[] = {
+                kActionGoalRequestBit, kActionCancelRequestBit, kActionResultRequestBit};
+            return index < 3 ? kBits[index] : kWaitableReadyBit;
+        }
+        return kWaitableReadyBit;
+    }
+
+    /// Drop claim markers taken by a claim attempt that did not commit.
+    void clear_reader_claims() noexcept {
+        for (const auto& reader : readers) {
+            std::lock_guard lock(reader->callback_mutex);
+            if (!reader->claim_in_progress) continue;
+            reader->claim_in_progress = false;
+            reader->callback_cv.notify_all();
+        }
+    }
+
+    /// GuardCondition and Timer share one non-native registration protocol:
+    /// both are logical waitables with a clock/trigger wake path and no native
+    /// condition of their own.
+    template <typename State, typename AttachCallback, typename DetachCallback>
+    AttachResult claim_logical_waitable(
+        State& state, std::uint64_t wait_set_id, const std::shared_ptr<WaitSetWake>& wake,
+        AttachCallback&& attach_callback, DetachCallback&& detach_callback) noexcept {
+        std::lock_guard lock(state.callback_mutex);
+        if (state.closing.load(std::memory_order_acquire)) return AttachResult::Closing;
+        if (state.wait_set_id.load(std::memory_order_acquire) != 0) {
+            return AttachResult::AlreadyRegistered;
+        }
+        const auto attached = attach_callback();
+        if (attached != AttachResult::Attached) return attached;
+        state.wait_set_id.store(wait_set_id, std::memory_order_release);
+        state.registration_id.store(id, std::memory_order_release);
+        state.wake_callback = [wake] { return wake->notify(); };
+        state.detach_callback = std::forward<DetachCallback>(detach_callback);
+        return AttachResult::Attached;
+    }
+
+    template <typename State>
+    bool release_logical_waitable(State& state, std::uint64_t wait_set_id) noexcept {
+        std::lock_guard lock(state.callback_mutex);
+        if (state.wait_set_id.load(std::memory_order_acquire) != wait_set_id ||
+            state.registration_id.load(std::memory_order_acquire) != id) {
+            return true;
+        }
+        state.wake_callback = {};
+        state.detach_callback = {};
+        state.registration_id.store(0, std::memory_order_release);
+        state.wait_set_id.store(0, std::memory_order_release);
+        return true;
     }
 };
 
@@ -271,8 +378,13 @@ public:
     }
 
     Result<std::uint64_t> add(
-        std::shared_ptr<GuardConditionState> guard, std::shared_ptr<impl::ReaderWaitState> reader,
-        WaitableKind kind) {
+        std::shared_ptr<GuardConditionState> guard,
+        std::vector<std::shared_ptr<impl::ReaderWaitState>> readers,
+        std::shared_ptr<impl::TimerState> timer,
+        std::shared_ptr<impl::GraphEventState> graph_event, WaitableKind kind,
+        std::function<std::uint32_t()> logical_detail = {},
+        std::function<std::optional<std::chrono::steady_clock::time_point>()> runtime_deadline =
+            {}) {
         std::lock_guard lock(mutex_);
         if (closing_) {
             return Result<std::uint64_t>::failure(
@@ -291,7 +403,12 @@ public:
         registration->id = next_registration_id_;
         registration->kind = kind;
         registration->guard = std::move(guard);
-        registration->reader = std::move(reader);
+        registration->timer = std::move(timer);
+        registration->graph_event = std::move(graph_event);
+        registration->readers = std::move(readers);
+        registration->reader_conditions.assign(registration->readers.size(), nullptr);
+        registration->logical_detail = std::move(logical_detail);
+        registration->runtime_deadline = std::move(runtime_deadline);
 
         // Publish a mutation before waking a native wait.  wait_for_notification()
         // will not clear the control condition and re-enter an infinite wait
@@ -303,7 +420,7 @@ public:
         const std::weak_ptr<Registration> weak_registration = registration;
         const auto attach = registration->claim(
             wait_set_id_, wake_,
-            [this, registration] { return attach_reader_condition(*registration); },
+            [this, registration] { return attach_reader_conditions(*registration); },
             [weak_state, weak_registration] {
                 const auto context = weak_state.lock();
                 const auto detached_registration = weak_registration.lock();
@@ -330,14 +447,14 @@ public:
                 Error(ErrorCode::ParentDestroyed, "Waitable is closing"));
         }
 
-        if (registration->reader) {
-            std::lock_guard reader_lock(registration->reader->callback_mutex);
-            registration->reader->topology_callback = [weak_state,
-                                                       weak_registration](bool enabled) {
-                const auto context = weak_state.lock();
-                const auto current = weak_registration.lock();
-                if (context && current) context->set_reader_blocking(*current, enabled);
-            };
+        for (std::size_t index = 0; index < registration->readers.size(); ++index) {
+            std::lock_guard reader_lock(registration->readers[index]->callback_mutex);
+            registration->readers[index]->topology_callback =
+                [weak_state, weak_registration, index](bool enabled) {
+                    const auto context = weak_state.lock();
+                    const auto current = weak_registration.lock();
+                    if (context && current) context->set_reader_blocking(*current, index, enabled);
+                };
         }
 
         const auto id = next_registration_id_;
@@ -383,8 +500,8 @@ public:
                 wait_set_id_, [this](eprosima::fastdds::dds::Condition& condition) {
                     return detach_native_condition(condition);
                 })) {
-            if (registration->reader) {
-                registration->reader->quarantine_wait_set(shared_from_this());
+            for (const auto& reader : registration->readers) {
+                reader->quarantine_wait_set(shared_from_this());
             }
             registration->phase.store(RegistrationPhase::Attached, std::memory_order_release);
             {
@@ -404,28 +521,30 @@ public:
         return true;
     }
 
-    void set_reader_blocking(Registration& registration, bool enabled) noexcept {
-        if (!registration.reader ||
+    /// Attach or detach one constituent reader of a registration.  A Server
+    /// uses this to drop an unread request reader while its capacity is full.
+    void set_reader_blocking(
+        Registration& registration, std::size_t index, bool enabled) noexcept {
+        if (index >= registration.readers.size() ||
             registration.phase.load(std::memory_order_acquire) != RegistrationPhase::Attached) {
             return;
         }
-        if (registration.reader->closing.load(std::memory_order_acquire) ||
-            registration.reader->reader == nullptr)
-            return;
+        const auto& reader = registration.readers[index];
+        if (reader->closing.load(std::memory_order_acquire) || reader->reader == nullptr) return;
         // Attaching or detaching a reader StatusCondition reconciles the
         // native WaitSet.  The guard supplies a strict handoff with an
         // infinite native wait.
         const TopologyMutationGuard topology_mutation(*this);
         if (!enabled) {
-            if (registration.reader_condition != nullptr &&
-                !detach_native_condition(*registration.reader_condition)) {
+            auto* condition = registration.reader_conditions[index];
+            if (condition != nullptr && !detach_native_condition(*condition)) {
                 std::lock_guard lock(mutex_);
                 poisoned_ = true;
                 return;
             }
-            registration.reader_condition = nullptr;
-        } else if (registration.reader_condition == nullptr) {
-            if (attach_reader_condition(registration) != AttachResult::Attached) {
+            registration.reader_conditions[index] = nullptr;
+        } else if (registration.reader_conditions[index] == nullptr) {
+            if (attach_single_reader_condition(registration, index) != AttachResult::Attached) {
                 std::lock_guard lock(mutex_);
                 poisoned_ = true;
                 return;
@@ -595,31 +714,57 @@ private:
         }
     }
 
-    AttachResult attach_reader_condition(Registration& registration) noexcept {
-        if (!registration.reader) return AttachResult::Attached;
-        if (!registration.reader->blocking_enabled.load(std::memory_order_acquire))
+    /// Attach one constituent reader's StatusCondition to the native WaitSet.
+    AttachResult attach_single_reader_condition(
+        Registration& registration, std::size_t index) noexcept {
+        const auto& reader = registration.readers[index];
+        if (!reader->blocking_enabled.load(std::memory_order_acquire)) {
             return AttachResult::Attached;
-        std::lock_guard<std::mutex> reader_lock(registration.reader->reader_mutex);
-        if (registration.reader->closing.load(std::memory_order_acquire) ||
-            registration.reader->reader == nullptr) {
+        }
+        std::unique_lock<std::mutex> reader_lock(reader->reader_mutex);
+        if (reader->closing.load(std::memory_order_acquire) || reader->reader == nullptr) {
             return AttachResult::Closing;
         }
-        auto& condition = registration.reader->reader->get_statuscondition();
-        std::lock_guard lock(native_mutex_);
-        try {
-            if (condition.set_enabled_statuses(
-                    eprosima::fastdds::dds::StatusMask::data_available()) !=
-                eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
-                return AttachResult::DDSError;
+        auto* condition = &reader->reader->get_statuscondition();
+        bool attached = false;
+        {
+            std::lock_guard lock(native_mutex_);
+            try {
+                attached =
+                    condition->set_enabled_statuses(
+                        eprosima::fastdds::dds::StatusMask::data_available()) ==
+                        eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK &&
+                    native_wait_set_.attach_condition(*condition) ==
+                        eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK;
+            } catch (...) {
+                attached = false;
             }
-            const auto result = native_wait_set_.attach_condition(condition);
-            if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
-                return AttachResult::DDSError;
-            }
-            registration.reader_condition = &condition;
-            return AttachResult::Attached;
-        } catch (...) {
-            return AttachResult::DDSError;
+        }
+        reader_lock.unlock();
+        if (!attached) return AttachResult::DDSError;
+        registration.reader_conditions[index] = condition;
+        return AttachResult::Attached;
+    }
+
+    /// Attach every constituent reader that currently blocks on data.
+    AttachResult attach_reader_conditions(Registration& registration) noexcept {
+        AttachResult outcome = AttachResult::Attached;
+        for (std::size_t index = 0; index < registration.readers.size(); ++index) {
+            const auto result = attach_single_reader_condition(registration, index);
+            if (result == AttachResult::Attached) continue;
+            outcome = result;
+            break;
+        }
+        if (outcome != AttachResult::Attached) detach_attached_reader_conditions(registration);
+        return outcome;
+    }
+
+    /// Roll back partially attached conditions without touching waitable state.
+    void detach_attached_reader_conditions(Registration& registration) noexcept {
+        for (auto& condition : registration.reader_conditions) {
+            if (condition == nullptr) continue;
+            (void)detach_native_condition(*condition);
+            condition = nullptr;
         }
     }
 
@@ -695,15 +840,15 @@ inline Result<std::uint64_t> add_guard(
         return Result<std::uint64_t>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
-    auto registration = context->add(guard, nullptr, kind);
+    auto registration = context->add(guard, {}, nullptr, nullptr, kind);
     if (!registration) return Result<std::uint64_t>::failure(std::move(registration.error()));
     return registration;
 }
 
-inline Result<std::uint64_t> add_reader(
+inline Result<std::uint64_t> add_timer(
     const std::shared_ptr<WaitSetState>& context,
-    const std::shared_ptr<impl::ReaderWaitState>& reader, WaitableKind kind) {
-    if (reader->context() != context->context_) {
+    const std::shared_ptr<impl::TimerState>& timer) {
+    if (timer->context() != context->context_) {
         return Result<std::uint64_t>::failure(
             Error(ErrorCode::InvalidArgument, "Waitable belongs to another Context"));
     }
@@ -712,9 +857,61 @@ inline Result<std::uint64_t> add_reader(
         return Result<std::uint64_t>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
-    auto registration = context->add(nullptr, reader, kind);
+    auto registration = context->add(nullptr, {}, timer, nullptr, WaitableKind::Timer);
     if (!registration) return Result<std::uint64_t>::failure(std::move(registration.error()));
     return registration;
+}
+
+inline Result<std::uint64_t> add_graph_event(
+    const std::shared_ptr<WaitSetState>& context,
+    const std::shared_ptr<impl::GraphEventState>& graph_event) {
+    if (graph_event->context() != context->context_) {
+        return Result<std::uint64_t>::failure(
+            Error(ErrorCode::InvalidArgument, "Waitable belongs to another Context"));
+    }
+    const auto operation = context->context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::uint64_t>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
+    auto registration = context->add(nullptr, {}, nullptr, graph_event, WaitableKind::GraphEvent);
+    if (!registration) return Result<std::uint64_t>::failure(std::move(registration.error()));
+    return registration;
+}
+
+/// Register one composite token backed by one or more reader channels.
+inline Result<std::uint64_t> add_readers(
+    const std::shared_ptr<WaitSetState>& context,
+    std::vector<std::shared_ptr<impl::ReaderWaitState>> readers, WaitableKind kind,
+    std::function<std::uint32_t()> logical_detail = {},
+    std::function<std::optional<std::chrono::steady_clock::time_point>()> runtime_deadline = {}) {
+    if (readers.empty()) {
+        return Result<std::uint64_t>::failure(
+            Error(ErrorCode::InvalidArgument, "Waitable has no readable channel"));
+    }
+    for (const auto& reader : readers) {
+        if (reader->context() != context->context_) {
+            return Result<std::uint64_t>::failure(
+                Error(ErrorCode::InvalidArgument, "Waitable belongs to another Context"));
+        }
+    }
+    const auto operation = context->context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::uint64_t>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
+    auto registration =
+        context->add(
+            nullptr, std::move(readers), nullptr, nullptr, kind, std::move(logical_detail),
+            std::move(runtime_deadline));
+    if (!registration) return Result<std::uint64_t>::failure(std::move(registration.error()));
+    return registration;
+}
+
+inline Result<std::uint64_t> add_reader(
+    const std::shared_ptr<WaitSetState>& context,
+    const std::shared_ptr<impl::ReaderWaitState>& reader, WaitableKind kind) {
+    return add_readers(context, {reader}, kind);
 }
 
 }  // namespace impl
@@ -727,6 +924,14 @@ public:
     ~Impl() noexcept { context_->close(); }
     Result<WaitableRegistration> add(const std::shared_ptr<GuardConditionState>&, WaitableKind);
     Result<WaitableRegistration> add(const std::shared_ptr<impl::ReaderWaitState>&, WaitableKind);
+    Result<WaitableRegistration> add(const std::shared_ptr<impl::TimerState>&, WaitableKind);
+    Result<WaitableRegistration> add(const std::shared_ptr<impl::GraphEventState>&, WaitableKind);
+    /// Register one Action aggregate token backed by several reader channels.
+    Result<WaitableRegistration> add_composite(
+        const std::vector<std::shared_ptr<impl::ReaderWaitState>>&, WaitableKind,
+        std::function<std::uint32_t()> logical_detail = {},
+        std::function<std::optional<std::chrono::steady_clock::time_point>()> runtime_deadline =
+            {});
     Result<void> remove(WaitableRegistration registration);
     Result<WaitResult> wait(WaitTimeout);
 

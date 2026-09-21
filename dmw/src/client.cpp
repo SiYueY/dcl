@@ -26,4 +26,8 @@ Result<bool> Client::wait_for_service(WaitTimeout timeout) const {
     return impl_->wait_for_service(timeout);
 }
 
+Result<Qos> Client::request_actual_qos() const { return impl_->request_actual_qos(); }
+
+Result<Qos> Client::response_actual_qos() const { return impl_->response_actual_qos(); }
+
 }  // namespace dmw

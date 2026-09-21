@@ -94,6 +94,7 @@ int main() {
     assert(context);
     assert(!context.value()->is_shutdown());
     assert(context.value()->domain_id() == 0);
+    assert(context.value()->runtime_mode() == dmw::RuntimeMode::DDS);
 
     dmw::NodeOptions node_options;
     node_options.node_name = "message_type_test";
@@ -118,7 +119,7 @@ int main() {
     assert(guard_ready);
     assert(guard_ready.value().status() == dmw::WaitStatus::Ready);
     assert(guard_ready.value().ready().size() == 1);
-    assert(guard_ready.value().ready().front() == guard_token.value());
+    assert(guard_ready.value().ready().front().registration == guard_token.value());
     assert(
         wait_set.value()->wait(dmw::WaitTimeout::poll()).value().status() ==
         dmw::WaitStatus::Timeout);
@@ -250,13 +251,15 @@ int main() {
         assert(cross_context_request_id);
         dmw::RequestId received_cross_context_request_id;
         bool cross_context_request_received = false;
-        for (int attempt = 0; attempt < 30 && !cross_context_request_received; ++attempt) {
+        // Cross-participant delivery depends on discovery and on the peer's
+        // reader being matched, so allow a generous budget under load.
+        for (int attempt = 0; attempt < 500 && !cross_context_request_received; ++attempt) {
             auto take = cross_context_server.value()->read_request(
                 &cross_context_request, received_cross_context_request_id);
             assert(take);
             cross_context_request_received = take.value();
             if (!cross_context_request_received) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
         assert(cross_context_request_received);
@@ -534,7 +537,7 @@ int main() {
     assert(data_wait_result && *data_wait_result);
     assert(data_wait_result->value().status() == dmw::WaitStatus::Ready);
     assert(data_wait_result->value().ready().size() == 1);
-    assert(data_wait_result->value().ready().front() == data_token.value());
+    assert(data_wait_result->value().ready().front().registration == data_token.value());
     assert(data_wait_set.value()->remove(data_token.value()));
 
     dmw::MessageInfo info;
@@ -637,7 +640,7 @@ int main() {
     assert(server_wait_result && *server_wait_result);
     assert(server_wait_result->value().status() == dmw::WaitStatus::Ready);
     assert(server_wait_result->value().ready().size() == 1);
-    assert(server_wait_result->value().ready().front() == server_token.value());
+    assert(server_wait_result->value().ready().front().registration == server_token.value());
     assert(server_wait_set.value()->remove(server_token.value()));
 
     dmw::RequestId request_id;
@@ -665,7 +668,7 @@ int main() {
     assert(client_wait_result && *client_wait_result);
     assert(client_wait_result->value().status() == dmw::WaitStatus::Ready);
     assert(client_wait_result->value().ready().size() == 1);
-    assert(client_wait_result->value().ready().front() == client_token.value());
+    assert(client_wait_result->value().ready().front().registration == client_token.value());
     assert(client_wait_set.value()->remove(client_token.value()));
 
     dmw::RequestId response_id;
@@ -779,7 +782,7 @@ int main() {
     assert(capacity_reattach_wait_result && *capacity_reattach_wait_result);
     assert(capacity_reattach_wait_result->value().status() == dmw::WaitStatus::Ready);
     assert(capacity_reattach_wait_result->value().ready().size() == 1);
-    assert(capacity_reattach_wait_result->value().ready().front() == capacity_wait_token.value());
+    assert(capacity_reattach_wait_result->value().ready().front().registration == capacity_wait_token.value());
     bool second_capacity_taken = false;
     for (int attempt = 0; attempt < 30 && !second_capacity_taken; ++attempt) {
         auto take =

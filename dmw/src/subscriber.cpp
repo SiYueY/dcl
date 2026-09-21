@@ -19,6 +19,8 @@ std::string_view Subscriber::topic_name() const noexcept { return impl_->topic_n
 
 const MessageType& Subscriber::message_type() const noexcept { return impl_->message_type(); }
 
+Result<Qos> Subscriber::actual_qos() const { return impl_->actual_qos(); }
+
 Result<std::size_t> Subscriber::matched_publisher_count() const {
     return impl_->matched_publisher_count();
 }

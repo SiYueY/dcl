@@ -10,6 +10,7 @@
 #include "impl/event_impl.hpp"
 #include "impl/identity.hpp"
 #include "impl/process_lifetime.hpp"
+#include "impl/qos.hpp"
 #include "impl/return_code.hpp"
 #include "impl/temporary_sample.hpp"
 
@@ -110,6 +111,18 @@ Result<std::size_t> Subscriber::Impl::matched_publisher_count() const {
             impl::to_error(result, "Fast DDS matched publication query failed"));
     }
     return Result<std::size_t>::success(static_cast<std::size_t>(status.current_count));
+}
+
+Result<Qos> Subscriber::Impl::actual_qos() const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation)
+        return Result<Qos>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    eprosima::fastdds::dds::DataReaderQos qos;
+    const auto result = reader_->get_qos(qos);
+    if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+        return Result<Qos>::failure(impl::to_error(result, "Fast DDS reader QoS query failed"));
+    }
+    return impl::from_neutral_qos(qos);
 }
 
 Result<std::unique_ptr<Event>> Subscriber::Impl::create_event(EventType type) {

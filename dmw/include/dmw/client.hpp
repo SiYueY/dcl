@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "dmw/request_id.hpp"
+#include "dmw/qos.hpp"
 #include "dmw/result.hpp"
 #include "dmw/visibility_control.hpp"
 #include "dmw/wait_timeout.hpp"
@@ -38,11 +39,14 @@ public:
 
     /// Block until this service is available, the timeout expires, or Context shuts down.
     Result<bool> wait_for_service(WaitTimeout timeout) const;
+    Result<Qos> request_actual_qos() const;
+    Result<Qos> response_actual_qos() const;
     std::string_view service_name() const noexcept;
 
 private:
     friend class Node;
     friend class WaitSet;
+    friend class ActionClient;
 
     class Impl;
 

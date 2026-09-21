@@ -1,6 +1,7 @@
 #ifndef DMW_IMPL__FASTDDS__QOS_HPP_
 #define DMW_IMPL__FASTDDS__QOS_HPP_
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 
@@ -119,8 +120,7 @@ inline void apply_ros2_reader_implementation_policy(
 }
 
 inline Result<eprosima::fastdds::dds::DataWriterQos> to_writer_qos(
-    const Qos& source, RuntimeMode runtime_mode) {
-    auto qos = eprosima::fastdds::dds::DATAWRITER_QOS_DEFAULT;
+    const Qos& source, RuntimeMode runtime_mode, eprosima::fastdds::dds::DataWriterQos qos) {
     if (runtime_mode == RuntimeMode::ROS2) apply_ros2_compatibility_defaults(qos);
     auto result = apply_neutral_qos(source, qos);
     if (!result)
@@ -130,14 +130,157 @@ inline Result<eprosima::fastdds::dds::DataWriterQos> to_writer_qos(
 }
 
 inline Result<eprosima::fastdds::dds::DataReaderQos> to_reader_qos(
-    const Qos& source, RuntimeMode runtime_mode) {
-    auto qos = eprosima::fastdds::dds::DATAREADER_QOS_DEFAULT;
+    const Qos& source, RuntimeMode runtime_mode, eprosima::fastdds::dds::DataReaderQos qos) {
     if (runtime_mode == RuntimeMode::ROS2) apply_ros2_compatibility_defaults(qos);
     auto result = apply_neutral_qos(source, qos);
     if (!result)
         return Result<eprosima::fastdds::dds::DataReaderQos>::failure(std::move(result.error()));
     if (runtime_mode == RuntimeMode::ROS2) apply_ros2_reader_implementation_policy(qos);
     return Result<eprosima::fastdds::dds::DataReaderQos>::success(std::move(qos));
+}
+
+inline Result<QosDuration> from_duration(const eprosima::fastrtps::Duration_t& duration) {
+    if (duration.is_infinite()) return Result<QosDuration>::success(QosDuration::infinite());
+    if (duration.seconds < 0 || duration.nanosec >= 1000000000U) {
+        return Result<QosDuration>::failure(
+            Error(ErrorCode::DDSError, "Fast DDS returned an invalid QoS duration"));
+    }
+    constexpr std::int64_t kNanosecondsPerSecond = 1000000000LL;
+    if (duration.seconds > std::numeric_limits<std::int64_t>::max() / kNanosecondsPerSecond) {
+        return Result<QosDuration>::failure(
+            Error(ErrorCode::Unsupported, "Fast DDS QoS duration exceeds DMW range"));
+    }
+    return QosDuration::finite(std::chrono::nanoseconds(
+        static_cast<std::int64_t>(duration.seconds) * kNanosecondsPerSecond + duration.nanosec));
+}
+
+template <class QosT>
+Result<Qos> from_neutral_qos(const QosT& source) {
+    using namespace eprosima::fastdds::dds;
+    Qos qos;
+    switch (source.history().kind) {
+        case KEEP_LAST_HISTORY_QOS: {
+            if (source.history().depth <= 0) {
+                return Result<Qos>::failure(
+                    Error(ErrorCode::DDSError, "Fast DDS returned an invalid KeepLast depth"));
+            }
+            auto result = qos.keep_last(static_cast<std::size_t>(source.history().depth));
+            if (!result) return Result<Qos>::failure(std::move(result.error()));
+            break;
+        }
+        case KEEP_ALL_HISTORY_QOS:
+            qos.keep_all();
+            break;
+        default:
+            qos.history_system_default();
+            break;
+    }
+    switch (source.reliability().kind) {
+        case RELIABLE_RELIABILITY_QOS:
+            qos.reliable();
+            break;
+        case BEST_EFFORT_RELIABILITY_QOS:
+            qos.best_effort();
+            break;
+        default:
+            qos.reliability_system_default();
+            break;
+    }
+    switch (source.durability().kind) {
+        case VOLATILE_DURABILITY_QOS:
+            qos.volatile_();
+            break;
+        case TRANSIENT_LOCAL_DURABILITY_QOS:
+            qos.transient_local();
+            break;
+        default:
+            qos.durability_system_default();
+            break;
+    }
+    auto deadline = from_duration(source.deadline().period);
+    if (!deadline) return Result<Qos>::failure(std::move(deadline.error()));
+    auto lifespan = from_duration(source.lifespan().duration);
+    if (!lifespan) return Result<Qos>::failure(std::move(lifespan.error()));
+    auto lease_duration = from_duration(source.liveliness().lease_duration);
+    if (!lease_duration) return Result<Qos>::failure(std::move(lease_duration.error()));
+    qos.deadline(deadline.value())
+        .lifespan(lifespan.value())
+        .liveliness_lease_duration(lease_duration.value());
+    switch (source.liveliness().kind) {
+        case AUTOMATIC_LIVELINESS_QOS:
+            qos.liveliness(LivelinessPolicy::Automatic);
+            break;
+        case MANUAL_BY_TOPIC_LIVELINESS_QOS:
+            qos.liveliness(LivelinessPolicy::ManualByTopic);
+            break;
+        default:
+            break;
+    }
+    return Result<Qos>::success(std::move(qos));
+}
+
+/// Reverse map the discovery-visible subset of an RTPS WriterQos/ReaderQos.
+///
+/// History is a DDS-level policy that discovery metadata does not carry, so it
+/// stays SystemDefault/unknown rather than being guessed.
+template <class DiscoveryQosT>
+Result<Qos> from_discovery_qos(const DiscoveryQosT& source) {
+    using namespace eprosima::fastdds::dds;
+    Qos qos;
+    switch (source.m_reliability.kind) {
+        case RELIABLE_RELIABILITY_QOS:
+            qos.reliable();
+            break;
+        case BEST_EFFORT_RELIABILITY_QOS:
+            qos.best_effort();
+            break;
+        default:
+            qos.reliability_system_default();
+            break;
+    }
+    switch (source.m_durability.kind) {
+        case VOLATILE_DURABILITY_QOS:
+            qos.volatile_();
+            break;
+        case TRANSIENT_LOCAL_DURABILITY_QOS:
+            qos.transient_local();
+            break;
+        default:
+            qos.durability_system_default();
+            break;
+    }
+    const auto deadline = from_duration(source.m_deadline.period);
+    if (!deadline) return Result<Qos>::failure(std::move(deadline.error()));
+    const auto lifespan = from_duration(source.m_lifespan.duration);
+    if (!lifespan) return Result<Qos>::failure(std::move(lifespan.error()));
+    const auto lease_duration = from_duration(source.m_liveliness.lease_duration);
+    if (!lease_duration) return Result<Qos>::failure(std::move(lease_duration.error()));
+    qos.deadline(deadline.value())
+        .lifespan(lifespan.value())
+        .liveliness_lease_duration(lease_duration.value());
+    switch (source.m_liveliness.kind) {
+        case AUTOMATIC_LIVELINESS_QOS:
+            qos.liveliness(LivelinessPolicy::Automatic);
+            break;
+        case MANUAL_BY_TOPIC_LIVELINESS_QOS:
+            qos.liveliness(LivelinessPolicy::ManualByTopic);
+            break;
+        default:
+            break;
+    }
+    return Result<Qos>::success(std::move(qos));
+}
+
+/// Listener-path helper: a discovery QoS that cannot be reverse mapped falls
+/// back to the explicit unknown contract instead of reporting a fake value.
+template <class DiscoveryQosT>
+Qos discovery_qos_or_unknown(const DiscoveryQosT& source) noexcept {
+    try {
+        auto converted = from_discovery_qos(source);
+        if (converted) return converted.value();
+    } catch (...) {
+    }
+    return Qos{};
 }
 
 }  // namespace impl

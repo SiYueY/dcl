@@ -25,7 +25,9 @@ public:
 
 int main() {
     auto state = std::make_shared<dmw::impl::Context>(
-        nullptr, nullptr, nullptr, nullptr, 17U, dmw::RuntimeMode::DDS);
+        nullptr, nullptr, nullptr, nullptr, 17U, dmw::RuntimeMode::DDS,
+        eprosima::fastdds::dds::DATAWRITER_QOS_DEFAULT,
+        eprosima::fastdds::dds::DATAREADER_QOS_DEFAULT);
     int first_count = 0;
     int removed_count = 0;
     int last_count = 0;
@@ -54,7 +56,9 @@ int main() {
     assert(state->register_shutdown_callback([] {}) == 0);
 
     auto second_state = std::make_shared<dmw::impl::Context>(
-        nullptr, nullptr, nullptr, nullptr, 18U, dmw::RuntimeMode::DDS);
+        nullptr, nullptr, nullptr, nullptr, 18U, dmw::RuntimeMode::DDS,
+        eprosima::fastdds::dds::DATAWRITER_QOS_DEFAULT,
+        eprosima::fastdds::dds::DATAREADER_QOS_DEFAULT);
     auto operation = second_state->try_acquire_operation();
     assert(operation);
     std::atomic<bool> shutdown_complete{false};

@@ -2,16 +2,20 @@
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string_view>
 #include <utility>
 
 #include <fastdds/dds/subscriber/SampleInfo.hpp>
+#include <fastdds/dds/publisher/qos/DataWriterQos.hpp>
+#include <fastdds/rtps/common/Time_t.h>
 #include <fastdds/rtps/common/WriteParams.h>
 
 #include "dmw/error.hpp"
 #include "impl/identity.hpp"
 #include "impl/process_lifetime.hpp"
+#include "impl/qos.hpp"
 #include "impl/return_code.hpp"
 #include "impl/temporary_sample.hpp"
 
@@ -23,6 +27,40 @@ bool is_reader_guid(const eprosima::fastrtps::rtps::GUID_t& guid) noexcept {
     constexpr std::uint8_t kReaderEntityIdMask = 0x04U;
     return guid != eprosima::fastrtps::rtps::GUID_t::unknown() &&
            (guid.entityId.value[3] & kReaderEntityIdMask) != 0U;
+}
+
+Result<std::chrono::steady_clock::time_point> response_target_deadline(
+    eprosima::fastdds::dds::DataWriter& writer) {
+    eprosima::fastdds::dds::DataWriterQos qos;
+    const auto result = writer.get_qos(qos);
+    if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+        return Result<std::chrono::steady_clock::time_point>::failure(
+            impl::to_error(result, "Fast DDS response writer QoS query failed"));
+    }
+
+    const auto duration = qos.reliability().max_blocking_time;
+    if (duration.is_infinite()) {
+        return Result<std::chrono::steady_clock::time_point>::success(
+            std::chrono::steady_clock::time_point::max());
+    }
+    if (duration.seconds < 0 || duration.nanosec >= 1000000000U) {
+        return Result<std::chrono::steady_clock::time_point>::failure(Error(
+            ErrorCode::DDSError, "Fast DDS response writer has an invalid max blocking time"));
+    }
+    constexpr std::int64_t kNanosecondsPerSecond = 1000000000LL;
+    const auto seconds = static_cast<std::int64_t>(duration.seconds);
+    if (seconds > std::numeric_limits<std::int64_t>::max() / kNanosecondsPerSecond) {
+        return Result<std::chrono::steady_clock::time_point>::success(
+            std::chrono::steady_clock::time_point::max());
+    }
+    const auto wait_duration = std::chrono::nanoseconds(
+        seconds * kNanosecondsPerSecond + static_cast<std::int64_t>(duration.nanosec));
+    const auto now = std::chrono::steady_clock::now();
+    if (std::chrono::steady_clock::time_point::max() - now < wait_duration) {
+        return Result<std::chrono::steady_clock::time_point>::success(
+            std::chrono::steady_clock::time_point::max());
+    }
+    return Result<std::chrono::steady_clock::time_point>::success(now + wait_duration);
 }
 
 }  // namespace
@@ -58,6 +96,32 @@ Server::Impl::~Impl() noexcept {
         }
         request_reader_ = nullptr;
     }
+}
+
+Result<Qos> Server::Impl::request_actual_qos() const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation)
+        return Result<Qos>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    eprosima::fastdds::dds::DataReaderQos qos;
+    const auto result = request_reader_->get_qos(qos);
+    if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+        return Result<Qos>::failure(
+            impl::to_error(result, "Fast DDS server request reader QoS query failed"));
+    }
+    return impl::from_neutral_qos(qos);
+}
+
+Result<Qos> Server::Impl::response_actual_qos() const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation)
+        return Result<Qos>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    eprosima::fastdds::dds::DataWriterQos qos;
+    const auto result = response_writer_->get_qos(qos);
+    if (result != eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+        return Result<Qos>::failure(
+            impl::to_error(result, "Fast DDS server response writer QoS query failed"));
+    }
+    return impl::from_neutral_qos(qos);
 }
 
 Result<bool> Server::Impl::read_request(void* request, RequestId& request_id) {
@@ -164,8 +228,14 @@ Result<void> Server::Impl::write_response(const RequestId& request_id, const voi
     }
 
     const bool has_target_reader = is_reader_guid(sample_identity.writer_guid());
-    const auto response_deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    auto deadline = response_target_deadline(*response_writer_);
+    if (!deadline) {
+        std::lock_guard lock(pending_mutex_);
+        const auto pending = pending_.find(request_id);
+        if (pending != pending_.end()) pending->second.phase = PendingPhase::Pending;
+        return Result<void>::failure(std::move(deadline.error()));
+    }
+    const auto response_deadline = deadline.value();
     if (has_target_reader) {
         impl::ResponseState::TargetStatus target;
         try {

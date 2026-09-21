@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <exception>
+#include <string>
 
 #include "dmw/error.hpp"
 #include "dmw/result.hpp"
@@ -72,6 +73,35 @@ public:
     }
 
     static Qos ros2_services_default() { return ros2_default(); }
+
+    static Qos ros2_sensor_data() {
+        Qos qos;
+        qos.history_ = HistoryPolicy::KeepLast;
+        qos.depth_ = 5;
+        qos.reliability_ = ReliabilityPolicy::BestEffort;
+        qos.durability_ = DurabilityPolicy::Volatile;
+        return qos;
+    }
+
+    static Qos ros2_parameters() {
+        Qos qos;
+        qos.history_ = HistoryPolicy::KeepLast;
+        qos.depth_ = 1000;
+        qos.reliability_ = ReliabilityPolicy::Reliable;
+        qos.durability_ = DurabilityPolicy::Volatile;
+        return qos;
+    }
+
+    static Qos ros2_parameter_events() { return ros2_parameters(); }
+
+    static Qos ros2_action_status_default() {
+        Qos qos;
+        qos.history_ = HistoryPolicy::KeepLast;
+        qos.depth_ = 1;
+        qos.reliability_ = ReliabilityPolicy::Reliable;
+        qos.durability_ = DurabilityPolicy::TransientLocal;
+        return qos;
+    }
 
     Result<void> keep_last(std::size_t depth) {
         if (depth == 0) {
@@ -171,6 +201,38 @@ private:
     LivelinessPolicy liveliness_{LivelinessPolicy::SystemDefault};
     QosDuration liveliness_lease_duration_{QosDuration::system_default()};
 };
+
+enum class QosCompatibility { Compatible, Warning, Incompatible };
+
+struct QosCompatibilityResult {
+    QosCompatibility compatibility{QosCompatibility::Compatible};
+    std::string reason;
+};
+
+inline Result<QosCompatibilityResult> check_qos_compatibility(
+    const Qos& publisher_qos, const Qos& subscriber_qos) {
+    if (publisher_qos.reliability() == ReliabilityPolicy::BestEffort &&
+        subscriber_qos.reliability() == ReliabilityPolicy::Reliable) {
+        return Result<QosCompatibilityResult>::success(
+            {QosCompatibility::Incompatible,
+             "A best-effort publisher cannot satisfy a reliable subscriber"});
+    }
+    if (publisher_qos.durability() == DurabilityPolicy::Volatile &&
+        subscriber_qos.durability() == DurabilityPolicy::TransientLocal) {
+        return Result<QosCompatibilityResult>::success(
+            {QosCompatibility::Incompatible,
+             "A volatile publisher cannot satisfy a transient-local subscriber"});
+    }
+    if (publisher_qos.reliability() == ReliabilityPolicy::SystemDefault ||
+        subscriber_qos.reliability() == ReliabilityPolicy::SystemDefault ||
+        publisher_qos.durability() == DurabilityPolicy::SystemDefault ||
+        subscriber_qos.durability() == DurabilityPolicy::SystemDefault) {
+        return Result<QosCompatibilityResult>::success(
+            {QosCompatibility::Warning,
+             "Compatibility depends on middleware values selected for SystemDefault policies"});
+    }
+    return Result<QosCompatibilityResult>::success({QosCompatibility::Compatible, {}});
+}
 
 }  // namespace dmw
 

@@ -21,12 +21,22 @@ Context::~Context() noexcept {
 
 std::uint32_t Context::domain_id() const noexcept { return impl_->domain_id(); }
 
+RuntimeMode Context::runtime_mode() const noexcept { return impl_->runtime_mode(); }
+
 bool Context::is_shutdown() const noexcept { return impl_->is_shutdown(); }
 
 Result<void> Context::shutdown() { return impl_->shutdown(); }
 
 Result<std::unique_ptr<Node>> Context::create_node(const NodeOptions& options) {
     return impl_->create_node(options);
+}
+
+Result<std::unique_ptr<Clock>> Context::create_clock(ClockType type) {
+    return impl_->create_clock(type);
+}
+
+Result<std::unique_ptr<Timer>> Context::create_timer(Clock& clock, const TimerOptions& options) {
+    return impl_->create_timer(clock, options);
 }
 
 Result<std::unique_ptr<GuardCondition>> Context::create_guard_condition(

@@ -29,3 +29,21 @@ execute_process(
 if(NOT dmw_consumer_build_result EQUAL 0)
     message(FATAL_ERROR "Failed to build the installed DMW package consumer")
 endif()
+
+# Building is not enough: the installed package must actually run for a
+# runtime-only consumer and for a consumer that uses the Fast DDS binding.
+execute_process(
+    COMMAND "${DMW_CONSUMER_BINARY_DIR}/dmw_package_consumer"
+    RESULT_VARIABLE dmw_runtime_consumer_result
+)
+if(NOT dmw_runtime_consumer_result EQUAL 0)
+    message(FATAL_ERROR "Installed DMW runtime-only consumer failed to run")
+endif()
+
+execute_process(
+    COMMAND "${DMW_CONSUMER_BINARY_DIR}/dmw_binding_package_consumer"
+    RESULT_VARIABLE dmw_binding_consumer_result
+)
+if(NOT dmw_binding_consumer_result EQUAL 0)
+    message(FATAL_ERROR "Installed DMW binding consumer failed to run")
+endif()

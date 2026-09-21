@@ -16,9 +16,11 @@
 #include "impl/context.hpp"
 #include "impl/process_lifetime.hpp"
 #include "impl/return_code.hpp"
+#include "impl/clock_impl.hpp"
 #include "impl/guard_condition_impl.hpp"
 #include "impl/name.hpp"
 #include "impl/node_impl.hpp"
+#include "impl/timer_impl.hpp"
 
 namespace dmw {
 
@@ -69,15 +71,32 @@ Context::Context(
     eprosima::fastdds::dds::DomainParticipant* participant,
     eprosima::fastdds::dds::Publisher* publisher, eprosima::fastdds::dds::Subscriber* subscriber,
     std::uint32_t domain_id, RuntimeMode runtime_mode) noexcept
+: Context(
+      factory, participant, publisher, subscriber, domain_id, runtime_mode,
+      eprosima::fastdds::dds::DATAWRITER_QOS_DEFAULT,
+      eprosima::fastdds::dds::DATAREADER_QOS_DEFAULT) {}
+
+Context::Context(
+    eprosima::fastdds::dds::DomainParticipantFactory* factory,
+    eprosima::fastdds::dds::DomainParticipant* participant,
+    eprosima::fastdds::dds::Publisher* publisher, eprosima::fastdds::dds::Subscriber* subscriber,
+    std::uint32_t domain_id, RuntimeMode runtime_mode,
+    eprosima::fastdds::dds::DataWriterQos writer_qos_baseline,
+    eprosima::fastdds::dds::DataReaderQos reader_qos_baseline) noexcept
 : factory_(factory),
   participant_(participant),
   publisher_(publisher),
   subscriber_(subscriber),
   domain_id_(domain_id),
-  runtime_mode_(runtime_mode) {}
+  runtime_mode_(runtime_mode),
+  writer_qos_baseline_(std::move(writer_qos_baseline)),
+  reader_qos_baseline_(std::move(reader_qos_baseline)) {}
 
 Context::~Context() noexcept {
     if (participant_ != nullptr) {
+        // The graph metadata transport must stop publishing and drain its
+        // reader listener before any contained entity is deleted.
+        close_graph_metadata_transport();
         bool listener_safe_to_destroy = participant_listener_ == nullptr;
         if (participant_listener_) {
             try {
@@ -143,6 +162,40 @@ Result<void> Context::install_discovery_listener() noexcept {
     }
 }
 
+Result<void> Context::install_graph_metadata_transport() noexcept {
+    if (runtime_mode_ != RuntimeMode::ROS2) return Result<void>::success();
+    auto transport = GraphMetadataTransport::create(*this, discovery_graph_);
+    if (!transport) {
+        return Result<void>::failure(std::move(transport.error()));
+    }
+    graph_metadata_ = std::move(transport.value());
+    // Every committed local graph change republishes the complete participant
+    // snapshot; the payload is self-contained, so no delta replay is needed.
+    const std::weak_ptr<GraphMetadataTransport> weak_transport = graph_metadata_;
+    graph_metadata_subscription_ = discovery_graph_->subscribe(
+        [weak_transport](std::uint64_t) {
+            // A remote snapshot only changes remote state, so it must not
+            // trigger a republish of our own snapshot (and must never publish
+            // from the Fast DDS listener thread).
+            if (graph_metadata_remote_update_in_progress()) return;
+            if (const auto transport = weak_transport.lock()) {
+                transport->publish_local_snapshot();
+            }
+        });
+    if (!graph_metadata_subscription_) {
+        graph_metadata_.reset();
+        return Result<void>::failure(
+            Error(ErrorCode::ResourceExhausted, "DiscoveryGraph rejected the metadata subscription"));
+    }
+    graph_metadata_->publish_local_snapshot();
+    return Result<void>::success();
+}
+
+void Context::close_graph_metadata_transport() noexcept {
+    graph_metadata_subscription_ = DiscoveryGraph::Subscription{};
+    graph_metadata_.reset();
+}
+
 eprosima::fastdds::dds::DomainParticipant* Context::participant() const noexcept {
     return participant_;
 }
@@ -154,6 +207,14 @@ eprosima::fastdds::dds::Subscriber* Context::subscriber() const noexcept { retur
 std::uint32_t Context::domain_id() const noexcept { return domain_id_; }
 
 RuntimeMode Context::runtime_mode() const noexcept { return runtime_mode_; }
+
+const eprosima::fastdds::dds::DataWriterQos& Context::writer_qos_baseline() const noexcept {
+    return writer_qos_baseline_;
+}
+
+const eprosima::fastdds::dds::DataReaderQos& Context::reader_qos_baseline() const noexcept {
+    return reader_qos_baseline_;
+}
 
 Topic::~Topic() noexcept { reset(); }
 
@@ -576,19 +637,35 @@ Result<std::unique_ptr<Context>> Context::Impl::create(const ContextOptions& opt
             Error(ErrorCode::DDSError, "Fast DDS failed to create a Context container"));
     }
 
+    eprosima::fastdds::dds::DataWriterQos writer_qos_baseline;
+    eprosima::fastdds::dds::DataReaderQos reader_qos_baseline;
+    if (publisher->get_default_datawriter_qos(writer_qos_baseline) !=
+            eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK ||
+        subscriber->get_default_datareader_qos(reader_qos_baseline) !=
+            eprosima::fastrtps::types::ReturnCode_t::RETCODE_OK) {
+        return Result<std::unique_ptr<Context>>::failure(
+            Error(ErrorCode::DDSError, "Fast DDS failed to capture Context QoS baselines"));
+    }
+
     auto context = std::make_shared<impl::Context>(
-        factory, participant, publisher, subscriber, options.domain_id, options.runtime_mode);
+        factory, participant, publisher, subscriber, options.domain_id, options.runtime_mode,
+        std::move(writer_qos_baseline), std::move(reader_qos_baseline));
     // From this point Context is the sole owner, including listener
     // installation failure paths.
     participant_guard.release();
     auto discovery = context->install_discovery_listener();
     if (!discovery) return Result<std::unique_ptr<Context>>::failure(std::move(discovery.error()));
-    auto impl = std::make_unique<Impl>(std::move(context));
+    auto metadata = context->install_graph_metadata_transport();
+    if (!metadata) {
+        return Result<std::unique_ptr<Context>>::failure(std::move(metadata.error()));
+    }
+    auto impl = std::make_unique<Impl>(std::move(context), options.arguments);
     return Result<std::unique_ptr<Context>>::success(
         std::unique_ptr<Context>(new Context(std::move(impl))));
 }
 
 std::uint32_t Context::Impl::domain_id() const noexcept { return context_->domain_id(); }
+RuntimeMode Context::Impl::runtime_mode() const noexcept { return context_->runtime_mode(); }
 bool Context::Impl::is_shutdown() const noexcept { return context_->is_shutdown(); }
 Result<void> Context::Impl::shutdown() {
     context_->shutdown();
@@ -596,14 +673,35 @@ Result<void> Context::Impl::shutdown() {
 }
 
 Result<std::unique_ptr<Node>> Context::Impl::create_node(const NodeOptions& options) {
-    if (options.node_name.empty() || impl::has_invalid_name_syntax(options.node_name) ||
-        options.node_name.find('/') != std::string::npos) {
+    std::string node_name = options.node_name;
+    std::string node_namespace = options.node_namespace;
+    std::vector<RemapRule> remaps;
+    std::vector<ParameterOverride> parameter_overrides;
+    if (options.use_global_arguments) {
+        node_name = arguments_.node_name_remap().empty() ? node_name
+                                                          : std::string(arguments_.node_name_remap());
+        node_namespace = arguments_.namespace_remap().empty()
+                             ? node_namespace
+                             : std::string(arguments_.namespace_remap());
+        remaps = arguments_.remaps();
+        parameter_overrides = arguments_.parameter_overrides();
+    }
+    if (!options.arguments.node_name_remap().empty())
+        node_name = std::string(options.arguments.node_name_remap());
+    if (!options.arguments.namespace_remap().empty())
+        node_namespace = std::string(options.arguments.namespace_remap());
+    remaps.insert(remaps.end(), options.arguments.remaps().begin(), options.arguments.remaps().end());
+    parameter_overrides.insert(
+        parameter_overrides.end(), options.arguments.parameter_overrides().begin(),
+        options.arguments.parameter_overrides().end());
+    if (node_name.empty() || impl::has_invalid_name_syntax(node_name) ||
+        node_name.find('/') != std::string::npos) {
         return Result<std::unique_ptr<Node>>::failure(
             Error(ErrorCode::InvalidName, "Node name contains unsupported syntax"));
     }
-    auto node_namespace = impl::normalize_namespace(options.node_namespace);
-    if (!node_namespace) {
-        return Result<std::unique_ptr<Node>>::failure(std::move(node_namespace.error()));
+    auto normalized_namespace = impl::normalize_namespace(node_namespace);
+    if (!normalized_namespace) {
+        return Result<std::unique_ptr<Node>>::failure(std::move(normalized_namespace.error()));
     }
     const auto operation = context_->try_acquire_operation();
     if (!operation) {
@@ -612,9 +710,43 @@ Result<std::unique_ptr<Node>> Context::Impl::create_node(const NodeOptions& opti
     }
 
     auto node_impl = std::make_unique<Node::Impl>(
-        context_, options.node_name, std::move(node_namespace.value()));
+        context_, std::move(node_name), std::move(normalized_namespace.value()), std::move(remaps),
+        std::move(parameter_overrides), options.allow_undeclared_parameters);
     return Result<std::unique_ptr<Node>>::success(
         std::unique_ptr<Node>(new Node(std::move(node_impl))));
+}
+
+Result<std::unique_ptr<Clock>> Context::Impl::create_clock(ClockType type) {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::unique_ptr<Clock>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
+    auto clock_impl = std::make_unique<Clock::Impl>(context_, type);
+    return Result<std::unique_ptr<Clock>>::success(
+        std::unique_ptr<Clock>(new Clock(std::move(clock_impl))));
+}
+
+Result<std::unique_ptr<Timer>> Context::Impl::create_timer(
+    Clock& clock, const TimerOptions& options) {
+    if (options.period < std::chrono::nanoseconds::zero()) {
+        return Result<std::unique_ptr<Timer>>::failure(
+            Error(ErrorCode::InvalidArgument, "Timer period must not be negative"));
+    }
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::unique_ptr<Timer>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
+    auto clock_state = clock.impl_->state();
+    if (clock_state->context() != context_) {
+        return Result<std::unique_ptr<Timer>>::failure(
+            Error(ErrorCode::InvalidArgument, "Clock belongs to another Context"));
+    }
+    auto timer_impl = std::make_unique<Timer::Impl>(
+        context_, std::move(clock_state), options.period, options.autostart);
+    return Result<std::unique_ptr<Timer>>::success(
+        std::unique_ptr<Timer>(new Timer(std::move(timer_impl))));
 }
 
 Result<std::unique_ptr<GuardCondition>> Context::Impl::create_guard_condition(

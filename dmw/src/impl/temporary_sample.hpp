@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <new>
 
 #include <fastdds/rtps/common/SerializedPayload.h>
 
@@ -71,6 +72,8 @@ public:
             try {
                 payload_ = std::make_unique<eprosima::fastrtps::rtps::SerializedPayload_t>(
                     serialized_size);
+            } catch (const std::bad_alloc&) {
+                throw;
             } catch (...) {
                 return Result<void>::failure(Error(
                     ErrorCode::ResourceExhausted, "Fast DDS sample payload allocation failed"));

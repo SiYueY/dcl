@@ -40,11 +40,10 @@ public:
         }
     }
 
-    void notify_wait_set() noexcept {
+    Result<void> notify_wait_set() {
         std::lock_guard lock(callback_mutex);
-        if (wake_callback) {
-            wake_callback();
-        }
+        if (wake_callback) return wake_callback();
+        return Result<void>::success();
     }
 
     void detach_wait_set() noexcept {
@@ -62,9 +61,17 @@ public:
 
     bool is_pending() const noexcept { return pending.load(std::memory_order_acquire); }
 
-    void set_wake_callback(std::function<void()> callback) {
+    void set_wake_callback(std::function<Result<void>()> callback) {
         std::lock_guard lock(callback_mutex);
         wake_callback = std::move(callback);
+    }
+
+    void set_wake_callback(std::function<void()> callback) {
+        std::lock_guard lock(callback_mutex);
+        wake_callback = [callback = std::move(callback)]() mutable {
+            callback();
+            return Result<void>::success();
+        };
     }
 
     void close() noexcept {
@@ -86,7 +93,7 @@ private:
     std::atomic<std::uint64_t> wait_set_id{0};
     std::atomic<std::uint64_t> registration_id{0};
     impl::RankedMutex<impl::LockRank::WaitableLocal> callback_mutex;
-    std::function<void()> wake_callback;
+    std::function<Result<void>()> wake_callback;
     std::function<void()> detach_callback;
 };
 
