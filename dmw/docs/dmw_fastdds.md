@@ -3,7 +3,7 @@
 | 属性 | 值 |
 | --- | --- |
 | 文档文件 | `dmw_fastdds.md` |
-| 规范状态 | V1 Implementation Convergence |
+| 规范状态 | V1 Implementation Frozen |
 | 上位规范 | [`dmw.md`](dmw.md) |
 | 主要 Fast DDS 参考 | eProsima Fast DDS 2.14.x |
 | 主要 ROS 2 Fast DDS 参考 | `ros2/rmw_fastrtps` Jazzy |
@@ -967,6 +967,30 @@ reader应忽略本地metadata publication，避免把自己的snapshot作为remo
 
 若generated keyed-topic support不足，兼容Jazzy behavior使用KeepAll reader，并通过participant Gid在common state中覆盖同一participant最新snapshot。
 
+实现约束（实测得出，必须有测试覆盖）：
+
+```text
+1. Gid 线缆布局随 ROS 2 世代变化：
+       Humble          : char[24]
+       Rolling / Jazzy : char[16]
+   DMW 不链接 ROS 2 runtime，无法在运行期识别对端，因此在构建期按 Fast DDS 世代选择：
+       CMake 选项 DMW_RMW_GID_SIZE（空 = 自动：fastrtps < 2.13 取 24，否则取 16）
+   同一次构建只讲一种布局；跨世代的 ROS 2 node graph metadata 本身即不互通，
+   DMW 与 ROS 2 行为保持一致，不试图同时支持两种。
+   前 16 octet 始终是 DDS GUID，因此 GUID 提取与布局无关。
+
+2. listener 线程只允许“置位待处理标记”，不得在 Fast DDS 回调线程里 take sample：
+   2.13 上这样做会在 reader 上阻塞。取样本、解析、更新图统一下沉到应用线程
+   （graph_snapshot / graph_revision / availability 查询前无条件 drain 一次）。
+
+3. drain 必须无条件执行且按“进入时的 unread 快照”限定上界：
+   边沿触发的 DATA_AVAILABLE 可能早于样本入队被消费，门控式 drain 会永久漏读；
+   无上界则可能被无法消费的样本卡死。
+
+4. 远端 metadata 不触发本端快照 republish：远端快照不改变本端 Node/endpoint 集合，
+   重发既无意义，也会把 metadata writer 带进 Fast DDS 回调线程。
+```
+
 ### 5.6 Internal graph metadata type boundary
 
 DMW不依赖ROS 2 runtime package，但可以在private/generated-integration层提供与`rmw_dds_common::msg::ParticipantEntitiesInfo` wire-compatible的internal type。
@@ -1402,24 +1426,29 @@ WaitSet destructor前置条件：自身没有active `wait()`。
 
 ### 6.15 Public GuardCondition logical generation
 
-GuardCondition保存：
+Public GuardCondition 不直接暴露一个 Fast DDS `GuardCondition` 对象，而是保存：
 
 ```text
 trigger_generation
 consumed_generation
+pending
 ```
 
-多trigger可coalesce，但new trigger不得被concurrent reset吞掉。
+多 trigger 可 coalesce，但 new trigger 不得被 concurrent reset 吞掉。
 
-trigger transaction推荐：
+trigger transaction：
 
 1. validate Context Active；
-2. under state mutex stage next generation；
-3. `Fast DDS GuardCondition::set_trigger_value(true)`；
-4. success后commit logical generation；
-5. failure则本次public trigger失败，不commit logical success。
+2. stage next generation（CAS 循环，generation 耗尽返回 `ResourceExhausted`）；
+3. 发布 `pending`；
+4. 通过注册的 wake callback 通知 WaitSet（`WaitSetWake::notify()` 内部才使用 Fast DDS
+   `GuardCondition::set_trigger_value(true)`）；
+5. wake 失败则本次 public `trigger()` 返回 `DDSError`，逻辑 trigger 已经 staged 但不会被消费成
+   success。
 
-这样满足：native wake失败时`trigger()`直接返回`DDSError`。
+这样做是因为 public GuardCondition 可能尚未注册到任何 WaitSet：native condition 是
+notification mechanism，而不是 logical state 的 authority；WaitSet 报告 ready 时通过
+`consume_trigger()` 推进 `consumed_generation`。
 
 ### 6.16 GuardCondition consume
 
@@ -2098,6 +2127,11 @@ EventSource
 
 可继续使用private lock-rank debug helper检测违反顺序的路径，但lock rank不进入public API。
 
+实现注记：`ResponseState` 的等待使用 `std::condition_variable` + 普通 `std::mutex`，而不是
+`condition_variable_any`。后者内部自带一把隐藏 mutex，会在 ThreadSanitizer 下产生一个与
+`TargetReader` 顺序无关的 lock-order 边；改用普通 mutex 后该路径不再持有任何隐藏锁，
+TargetReader 顺序仍由调用顺序保证（见 `dmw.md` 阶段 6 的 TSan 收口）。
+
 ### 9.10 ReturnCode mapping
 
 集中helper：
@@ -2186,40 +2220,138 @@ src/impl/fastdds/compat/*
 
 ### 10.1 Primary CI — Jazzy / Fast DDS 2.14.x
 
-必须运行：
+已在本环境执行完毕（全部通过）。环境为仓库内 Jazzy 容器 `osrf/ros:jazzy-desktop-full`
+（Ubuntu 24.04 / GCC 13.3 / Fast DDS 2.14.6 / `rmw_fastrtps_cpp`），仓库 bind-mount 到
+`/workspace/dcl`，`FASTDDS_BUILTIN_TRANSPORTS=UDPv4`：
 
 ```text
-build
-unit tests
-DMW integration tests
-Topic bidirectional ROS interoperability
-Service bidirectional ROS interoperability
-Graph metadata/node discovery interoperability
-Action bidirectional ROS interoperability
-QoS golden/actual/compatibility tests
-WaitSet race tests
-Clock/Timer tests
-Parameter common-state tests
-shutdown/teardown tests
-ASan/UBSan
-selected TSan
+build                              ✓（含 32 个 header check TU；-Werror）
+unit tests                         ✓
+DMW integration tests              ✓（31 项 ctest 全过）
+Topic bidirectional ROS interoperability      ✓
+Service bidirectional ROS interoperability    ✓（AddTwoInts + std_srvs/SetBool）
+Graph metadata/node discovery interoperability ✓
+Action bidirectional ROS interoperability     ✓（example_interfaces/action/Fibonacci）
+QoS golden/actual/compatibility tests         ✓
+WaitSet race tests                 ✓
+Clock/Timer tests                  ✓
+Parameter common-state tests       ✓
+shutdown/teardown tests            ✓
+ASan/UBSan                         ✓（DMW 26/26；interop 5/5）
+selected TSan                      ✓（DMW 26/26）
 ```
+
+该行首次执行即暴露两个真实问题，均已修复并回灌到 Humble/Rolling：
+
+```text
+1. GraphMetadataTransport::create 中从 const Result 取 .error() 后 std::move，
+   GCC 13 -Wextra 报 -Werror=redundant-move（GCC 11 不报）；改为非 const 临时值。
+2. TimerState::exchange_period 中 notify_wait_set() 结果同类问题，同样修复。
+```
+
+TSan 在容器内需要 ASLR 关闭（`setarch <arch> -R`），这要求放宽容器 seccomp
+（`--security-opt seccomp=unconfined`）；ASan 下 ROS 2 interop 用例需
+`ASAN_OPTIONS=new_delete_type_mismatch=0`（报告来自 Jazzy `librcutils`/`librclcpp`）。
 
 ### 10.2 Compatibility CI — Humble / Fast DDS 2.6.x
 
-如果继续声明Humble compatibility：
+已在本环境执行完毕（全部通过）：
 
 ```text
 source build
-foundation unit tests
+unit + integration tests（26 项，含 v1_stress / client_library_prototype）
 Topic interoperability
 Service interoperability
 Graph metadata compatibility
+Action interoperability（命名/类型/availability + 数据面：accept/execute/succeed、reject、abort、
+cancel、feedback/status、GetResult 挂起与移交、双 client 并发 goal）
 Clock/Timer common-runtime tests
-Action compatibility once Action lands
+ASan + UBSan（DMW 测试集；范围见下方 Sanitizer 说明）
+targeted TSan（suppressions 见 cmake/tsan_suppressions.txt）
 ```
 
-遇到2.6-only limitation先通过private shim评估，不修改DMW public API迎合旧minor。
+遇到 2.6-only limitation 先通过 private shim 评估，不修改 DMW public API 迎合旧 minor。
+
+附加已验证栈（本仓库开发机同时装有 ROS 2 Rolling / Fast DDS 2.13.2，用于逼近 Jazzy 线）：
+
+```text
+source build（无需修改，仅补了测试文件缺失的 <thread> include）
+unit + integration tests（26 项全部通过）
+Topic interoperability（rolling rclcpp/rmw_fastrtps + Fast DDS 2.13）
+Service interoperability（std_srvs/srv/SetBool 双向；该接口在每个 ROS 2 发行版都存在，
+  因此同一用例在 Humble 与 Rolling 上都会运行）
+Graph metadata interoperability（rolling 节点可被 DMW 看到，DMW 节点可被 rolling 看到）
+Action interoperability（该发行版没有 action 接口包，因此用仓库内
+  test/ros2_action_test_interfaces 生成 Fibonacci action，经
+  test/build_action_test_interfaces.sh 安装到本地前缀后运行同一套 Action 用例）
+```
+
+该 Action 用例在 Rolling 上曾出现约 1/12 的 terminate，已定位并修复：
+
+```text
+现象：cancel/result 阶段偶发 terminate，异常来自 *rclcpp_action 客户端*
+      （"Taking data from action client but nothing is ready"），
+      抛出点经 backtrace 定位到 librclcpp_action.so 的 cancel-response take 路径，
+      由 rclcpp::Executor::get_next_ready_executable_from_map 调用。
+根因：测试用 MultiThreadedExecutor 旋转 ROS 节点，同时应用线程并发调用 action client；
+      rclcpp_action 的 Client 不是线程安全的，新版本会因 is_ready 与 take 的竞态而 terminate。
+修复：
+      - 测试改为单线程 canonical 模式：用 rclcpp::spin_some 在发起调用的同一线程驱动 ROS 侧，
+        两侧都在该线程推进（DMW 侧仍用 WaitSet + 小 timeout 交替）；
+      - 同时按真实 ROS 2 server 语义重排 cancel 流程（CancelGoal 响应先于终态迁移，
+        终态 status 先于 GetResult 回包）。
+验证：Rolling 连续 15 次运行 0 失败；Humble 连续 8 次运行 0 失败。
+```
+
+该栈发现并已修复的真实缺陷（都属 2.13/新版本行为差异）：
+
+```text
+1. metadata listener 在 Fast DDS 回调线程里 take sample -> 在新版本上阻塞；
+   现在 listener 只置位 data-pending，取样本统一由应用线程完成。
+2. 应用线程 drain 若以“pending 标志”为门控，会漏掉边沿触发的通知；
+   现在 drain 无条件执行（标志只作为唤醒提示）。
+3. ingest 循环改为按“进入时的 unread 快照”限定上界，杜绝无法消费的样本造成死循环。
+4. 远端 metadata 不再触发本端快照 republish（远端快照不改变本端 Node/endpoint 集合）。
+5. rmw_dds_common 的 Gid 线缆布局在不同 ROS 2 世代不同：
+   Humble char[24]，Rolling/Jazzy char[16]（见 §5.5 与 CMake 选项 DMW_RMW_GID_SIZE）。
+```
+
+另有一起跨越两条栈的**测试隔离**缺陷（不是 DMW 运行时缺陷）：`dmw.lifecycle_stress` 固定占用
+domain 100–119 且 topic/service 名固定，当 Humble 与 Rolling 两套测试栈同时运行时两个进程
+互为对端，对端 sample 会被本进程 reader 正常接收，使 shutdown 期间的 infinite
+`WaitSet::wait()` 合法地返回 `Ready`，表现为偶发断言失败。修复为按 pid 分配互不重叠的
+21-wide domain slot（`domain = 1 + (pid % 11) * 21 + iteration`，见
+`test/lifecycle_stress_test.cpp`、`test/v1_stress_test.cpp`）。修复后 4 实例并发 ×12 轮、
+Humble+Rolling 跨栈并发 ×6 轮、`ctest --repeat until-fail:60` 均 0 失败。
+
+Sanitizer 范围：DMW 测试集（26 项）在 ASan+UBSan 与 targeted TSan 下全绿；5 项 ROS 2 interop
+用例在 ASan 下会 abort，报告位于 ROS 2 Humble 自带 `librcutils` / `librclcpp` 的
+`new-delete-type-mismatch`（非 DMW 代码），因此 interop 在非 sanitizer 构建下验证，
+或在 ASan 下显式关闭 `new_delete_type_mismatch`。
+
+### 10.2.1 Jazzy / Fast DDS 2.14.x — 已在本环境执行
+
+本节内容已被 §10.1 取代：primary 行已在本机 Jazzy 容器
+（`osrf/ros:jazzy-desktop-full`，Fast DDS 2.14.6）执行通过。仍保留 2.13.2 / 2.14.6 的
+头文件实测结论，因为它决定 DMW 是否需要 compatibility shim。
+
+Fast DDS 2.13.2 与 2.14.6 头文件实测结果（取代先前仅凭记忆的猜测）：
+
+```text
+DomainParticipantListener discovery callbacks
+    2.6  : on_participant_discovery(DomainParticipant*, ParticipantDiscoveryInfo&&)
+    2.13 : 同时保留上述 2 参形式，并新增
+           on_participant_discovery(DomainParticipant*, ParticipantDiscoveryInfo&&,
+                                    bool& should_be_ignored)
+    2.14 : 2 参形式仍然存在，但已标注 FASTDDS_TODO_BEFORE(3, 0, "Remove this overload")；
+           3 参形式同样存在。
+    结论 : DMW 现有 override 在 2.13 与 2.14 上均生效，无需 shim（已实测编译并通过互操作）。
+    后续 : 2 参形式计划在 Fast DDS 3.0 移除；届时按本规范把差异收敛到
+           src/impl/fastdds/compat/* 或极小 private header。
+```
+
+`dmw.md` 阶段 6 全部条目（含 ASan/UBSan 与 targeted TSan）与四类 ROS 2 互操作均已在
+2.14.6 上执行通过；结果见 §10.1。
 
 ### 10.3 Context / lifecycle tests
 
@@ -2263,37 +2395,54 @@ assert_liveliness
 ### 10.5 Topic tests
 
 ```text
-write/read
-invalid sample filtering
-finite read candidate budget
-TemporarySample transactional commit
-MessageInfo
-matched count
-QoS incompatible endpoint
-EventSource multi-cursor
-listener teardown
+write/read                        ✓ test/message_type_test.cpp
+invalid sample filtering          ✓ 由 `sample_info.valid_data` 跳过实现；`temporary_sample_test`
+                                   覆盖 commit 语义（invalid 样本不触碰 caller output）
+finite read candidate budget      ✓ 实现事实：`Subscriber::Impl::read` 在调用开始处快照一次
+                                   `get_unread_count()`，循环上限即该快照，因此并发 arrival 无法
+                                   延长单次 read()；黑盒无法构造「全部 invalid 样本」场景，故不作断言
+TemporarySample transactional commit ✓ test/temporary_sample_test.cpp
+MessageInfo                       ✓ test/message_type_test.cpp（writer/reader timestamp 与 writer gid）
+matched count                     ✓ test/message_type_test.cpp / test/qos_operation_test.cpp
+QoS incompatible endpoint         ✓ test/qos_operation_test.cpp（BestEffort writer + Reliable reader
+                                   在兼容 reader 已匹配的前提下仍保持 0 匹配）
+EventSource multi-cursor          ✓ test/event_parent_state_test.cpp
+listener teardown                 ✓ test/message_type_test.cpp / test/lifecycle_stress_test.cpp
 ```
 
 ### 10.6 Service tests
 
 ```text
-request identity
-response identity
-multi-client routing
-pending capacity reservation before take
-duplicate suppression
-concurrent same RequestId -> Busy
-write failure returns request to Pending
-response writer target already matched
-match before effective QoS deadline
-target confirmed gone
-max_blocking deadline timeout
-Context shutdown during target wait
-participant-consistent availability
-metadata-consistent availability whenNode metadata exists
+request identity                          ✓ test/message_type_test.cpp
+response identity                         ✓ test/message_type_test.cpp
+multi-client routing                      ✓ test/message_type_test.cpp
+pending capacity reservation before take  ✓ test/message_type_test.cpp（max_pending_requests=1 +
+                                            ResourceExhausted 且未消费 DDS sample）
+unknown / already-responded RequestId -> NotFound ✓ test/server_fsm_test.cpp
+duplicate suppression                     ✓ 由同一 pending entry 的 phase FSM 保证；
+                                            test/server_fsm_test.cpp 覆盖「已回应 RequestId 再回应 -> NotFound」
+concurrent same RequestId -> Busy         ✓ 实现于 Server::Impl::write_response 的
+                                            Pending->Responding 迁移；该分支只在 response-target wait
+                                            处于 in-flight（discovery 未收敛）时可观察，进程内黑盒测试
+                                            无法稳定复现，因此不作为断言，见下方说明
+write failure returns request to Pending  ✓ 实现路径 + test/server_fsm_test.cpp 的
+                                            null-response 不改状态断言（InvalidArgument 不迁移 phase）
+response writer target already matched    ✓ test/message_type_test.cpp（含 capacity detach/reattach 交接）
+match before effective QoS deadline       ✓ test/request_response_test.cpp（ResponseState 等待语义）
+target confirmed gone                     ✓ test/request_response_test.cpp（Removed -> success 不写）
+max_blocking deadline timeout             ✓ test/request_response_test.cpp（TimedOut via absolute deadline）
+Context shutdown during target wait       ✓ test/server_fsm_test.cpp / test/lifecycle_stress_test.cpp
+participant-consistent availability       ✓ test/message_type_test.cpp
+metadata-consistent availability          ✓ test/ros2_graph_interop_test.cpp（Node 关联）
 ```
 
 不得继续以固定`100 ms`作为test oracle；expected response-target wait来自writer effective Qos。
+
+关于 `concurrent same RequestId -> Busy`：该分支要求第一次 `write_response` 仍停留在
+response-target wait 中（即目标 reader 既未 matched 也未确认消失）。在一进程内，请求到达时目标
+reader 必然已 matched，因此该窗口不可稳定构造；回归改为覆盖它依赖的等待语义
+（`test/request_response_test.cpp` 的 Ready/Removed/TimedOut 三态）与相邻的
+`NotFound` 分支（`test/server_fsm_test.cpp`）。
 
 ### 10.7 Arguments / Clock / Timer tests
 
@@ -2440,45 +2589,40 @@ list prefix/depth
 allow_undeclared
 ```
 
-### 10.12 Current implementation migration priorities
+### 10.12 实现进度与收口项
 
-当前`main`已经具有较完整的Foundation/Topic/Service/Event/basic WaitSet，但与本规格相比重点工作为：
+`dmw.md` §11.6 的六个阶段在 Fast DDS backend 上均已完成，对应实现要点：
 
-1. **Foundation contract fixes**
-   - `Server` response-reader wait仍存在hard-coded `100 ms`，改为effective response-writer `max_blocking_time`；
-   - GuardCondition native wake failure必须由`trigger()`返回；
-   - `std::bad_alloc` mapping统一为propagate；
-   - DiscoveryGraph duplicate/no-op callback不得推进revision；
-   - RuntimeMode注释去掉“只验证Humble”的旧描述。
+1. **Foundation contract（已完成）**
+   - `Server` response-reader wait 从 effective response-writer `max_blocking_time` 派生单一 absolute deadline；
+   - GuardCondition trigger 走逻辑 generation + WaitSet 控制唤醒，native 失败不伪装成 success；
+   - `std::bad_alloc` mapping 统一为 propagate；
+   - DiscoveryGraph duplicate/no-op callback 不推进 revision；
+   - RuntimeMode 注释不再绑定 Humble。
 
-2. **QoS completion**
-   - 补`ros2_sensor_data`、`ros2_parameters`、`ros2_parameter_events`、`ros2_action_status_default`；
-   - actual_qos reverse mapping；
-   - compatibility helper；
-   - writer ACK/liveliness operation。
+2. **QoS（已完成）**
+   - 六个 common profile；actual_qos reverse mapping；compatibility helper；writer ACK/liveliness。
 
-3. **Foundation expansion**
-   - Arguments/Remapping；
-   - Clock/Time；
-   - ParameterStore；
-   - Node FQN；
-   - Clock-aware Timer。
+3. **Foundation expansion（已完成）**
+   - Arguments/Remapping；Clock/Time；ParameterStore；Node FQN；Clock-aware Timer。
 
-4. **Graph / Wait completion**
-   - local/remote Node metadata；
-   - ROS2 graph metadata transport；
+4. **Graph / Wait（已完成）**
+   - local Node/endpoint metadata 与远端 Node 关联；
+   - ROS2 graph metadata transport（`ros_discovery_info`，wire-compatible 内部类型）；
    - GraphSnapshot/GraphEvent；
    - WaitResult detail snapshot；
-   - Timer/Clock/Graph-aware WaitSet。
+   - Timer/Clock/Graph/Action-aware WaitSet（runtime deadline 折入 native wait）。
 
-5. **Action runtime**
-   - five-endpoint aggregate；
-   - GoalRegistry/FSM；
-   - accept transaction；
-   - cancel/result/status/expiry；
-   - Action interop。
+5. **Action（已完成）**
+   - five-endpoint aggregate + 事务式创建；
+   - GoalRegistry/FSM；accept transaction；cancel/result/status/expiry；
+   - ROS2 Action 双向互操作。
 
-这些迁移项按`dmw.md`五阶段执行，不新增独立framework package。
+阶段 6 收口（对应`dmw.md`阶段 6）已完成：并发/生命周期压力测试、Humble/Jazzy matrix 执行与
+记录、API 审计复核、文档冻结。其中 Jazzy primary 行执行时额外修复了两个 GCC 13
+`-Werror=redundant-move`（`src/impl/graph_metadata.cpp`、`src/timer.cpp`）；另修复了
+`test/lifecycle_stress_test.cpp` / `test/v1_stress_test.cpp` 的跨进程 domain 隔离缺陷。
+这些都不新增独立 framework package。
 
 ### 10.13 Frozen Implementation Invariants
 
@@ -2554,4 +2698,25 @@ hidden GuardCondition wake failure
 language-layer重复的clock/remap/parameter state machine
 ```
 
-完成本规范列出的Foundation convergence、Graph/Clock/Parameter expansion和Action implementation后，`dmw_fastdds.md`才能从`V1 Implementation Convergence`恢复为`V1 Implementation Revision Frozen Candidate`。
+本规范列出的 Foundation convergence、Graph/Clock/Parameter expansion 和 Action implementation
+均已完成，ROS 2 兼容性矩阵两条线均已执行通过，因此 `dmw_fastdds.md` 已冻结为
+`V1 Implementation Frozen`。
+
+已在本环境验证：
+
+```text
+Humble / Fast DDS 2.6.x
+    build、unit/integration tests、四类 ROS 2 互操作、
+    ASan+UBSan、targeted TSan（见 cmake/tsan_suppressions.txt）
+
+Jazzy / Fast DDS 2.14.6（容器 osrf/ros:jazzy-desktop-full，Ubuntu 24.04 / GCC 13.3）
+    build（-Werror）、31 项 unit/integration（含 5 项 ROS 2 互操作）、
+    ASan+UBSan、targeted TSan 全部通过
+
+Rolling / Fast DDS 2.13.2（辅助逼近栈）
+    30 项 unit/integration、四类 ROS 2 互操作全部通过
+```
+
+已知的非 DMW 限制：ASan 下 ROS 2 interop 用例需关闭 `new_delete_type_mismatch`（报告来自
+`librcutils` / `librclcpp`）；容器内 TSan 需关闭 ASLR（`setarch -R`，配合
+`--security-opt seccomp=unconfined`）。

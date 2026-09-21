@@ -2,7 +2,7 @@
 
 | 属性 | 值 |
 | --- | --- |
-| 文档状态 | V1 Architecture Convergence |
+| 文档状态 | V1 Design Frozen |
 | 模块名称 | DMW — DDS Middleware / Language-Neutral Common Runtime |
 | 上层 | `dclcpp`、`dclpy` / `_dclpy` |
 | 下层 | Fast DDS |
@@ -151,27 +151,27 @@ ROS 2 Humble / Fast DDS 2.6.x 是持续兼容性验证目标，不反向决定�
 
 新的 V1 以“足以支撑 dclcpp/rclcpp-like 与 dclpy/rclpy-like 基础 Client Library，而不在两种语言层重复 common runtime”为标准。
 
-| 能力 | 归属 | V1 状态 |
+| 能力 | 归属 | 实现状态 |
 | --- | --- | --- |
-| Error / Result | DMW | 已实现 / 需收敛异常映射 |
-| Context / Node | DMW | 已实现 / 继续完善 |
-| MessageType / ServiceType | DMW | 已实现 |
-| ActionType | DMW | 设计冻结，待实现 |
-| Arguments / Remapping / name resolution | DMW | **新增，待实现** |
-| Clock / Time common runtime | DMW | **新增，待实现** |
-| QoS mapping / common profiles | DMW | 已实现基础 / 需补齐 |
-| actual QoS / compatibility / ACK / liveliness operation | DMW | **新增，待实现** |
-| Publisher / Subscriber | DMW | 已实现 / 持续完善 |
-| Client / Server | DMW | 已实现 / 持续完善 |
-| Service correlation / availability / wait | DMW | 已实现 / 持续完善 |
-| WaitSet | DMW | 已实现 foundation / 需扩展 |
-| GuardCondition / Event | DMW | 已实现 / 持续完善 |
-| Timer | DMW | 设计冻结，待实现；改为 Clock-aware |
-| DiscoveryGraph | DMW | internal foundation 已实现 / 需收敛 revision |
-| Graph public runtime | DMW | 设计冻结，待实现并扩展 Node/endpoint view |
-| ActionClient / ActionServer | DMW | 设计冻结，待实现 |
-| Goal FSM / cancel/result/status common state | DMW | 设计冻结，待实现 |
-| Parameter common runtime | DMW | **新增，待实现** |
+| Error / Result | DMW | 已实现 + 回归测试 |
+| Context / Node | DMW | 已实现 + 回归测试（含 `fully_qualified_name`） |
+| MessageType / ServiceType | DMW | 已实现 + 回归测试 |
+| ActionType | DMW | 已实现（`dmw/action_type.hpp`） |
+| Arguments / Remapping / name resolution | DMW | 已实现 + 回归测试 |
+| Clock / Time common runtime | DMW | 已实现 + 回归测试 |
+| QoS mapping / common profiles | DMW | 已实现；6 个 common profile 有 golden tests |
+| actual QoS / compatibility / ACK / liveliness operation | DMW | 已实现 + 回归测试 |
+| Publisher / Subscriber | DMW | 已实现 + ROS 2 topic 互操作 |
+| Client / Server | DMW | 已实现 + ROS 2 service 互操作 |
+| Service correlation / availability / wait | DMW | 已实现 + 回归测试 |
+| WaitSet | DMW | 已实现：9 类 waitable、composite token、detail mask、runtime deadline |
+| GuardCondition / Event | DMW | 已实现 + 回归测试 |
+| Timer | DMW | 已实现（Clock-aware）+ 回归测试 |
+| DiscoveryGraph | DMW | 已实现；revision 仅在可观察状态变化时推进 |
+| Graph public runtime | DMW | 已实现（`graph.hpp`/`graph_event.hpp`）+ ROS 2 graph metadata 互操作 |
+| ActionClient / ActionServer | DMW | 已实现（五端点聚合 + 事务式创建） |
+| Goal FSM / cancel/result/status common state | DMW | 已实现 + 回归测试 + ROS 2 action 互操作 |
+| Parameter common runtime | DMW | 已实现（store/validation/override/change set）+ 回归测试 |
 | Future / Promise / Task | Client Library | 不下沉 |
 | Pending Future registry | Client Library | 不下沉 |
 | user callback | Client Library | 不下沉 |
@@ -180,7 +180,10 @@ ROS 2 Humble / Fast DDS 2.6.x 是持续兼容性验证目标，不反向决定�
 | C++ template typed API | dclcpp | 不下沉 |
 | Component / Composition | 整个 DCL | **V1 明确不实现** |
 
-“设计冻结，待实现”表示本文已经冻结职责和主要 public contract，不表示当前源码已经具备实现。
+本表描述的是**当前实现状态**；本文仍然是 public contract 的唯一 authority。阶段性收口
+（API 审计、并发/生命周期压力、Humble/Jazzy matrix 执行与记录）见 §11.6，已全部完成：
+Jazzy / Fast DDS 2.14.6 与 Humble / Fast DDS 2.6.x 两行均已在本环境执行通过（见 §11.13），
+因此文档状态已冻结为 `V1 Design Frozen`。上表列出的能力均已有实现与测试支撑。
 
 ### 1.5 V1 非目标
 
@@ -465,7 +468,8 @@ public:
 };
 ```
 
-现有源码尚未包含 Clock/Timer/Graph public API；本文冻结的是 V1 目标。
+上述 surface 已全部实现（`dmw/include/dmw/context.hpp`）；`runtime_mode()` 返回创建后不可变的
+RuntimeMode。
 
 Context state machine：
 
@@ -617,7 +621,22 @@ normalized logical FQN
 RuntimeMode DDS wire mapping
 ```
 
-同一规则集合中多条匹配的优先顺序必须由 DMW 文档化并保持 dclcpp/dclpy 一致。V1 应与 ROS 2 常见 remapping 语义兼容，但 DMW 不依赖 `rcl` parser 实现。
+Remap 规则的应用语义（DMW 冻结，dclcpp/dclpy 必须一致）：
+
+```text
+1. 每条规则都与“namespace expansion 之后的原始请求名”比较；规则不链式生效
+   （即 A:=B 不会让 B:=C 继续命中）。
+2. 所有匹配规则中，最后一条决定结果。
+3. Node-local 规则追加在 Context global 规则之后，因此 node-local 覆盖 global。
+4. `<node>:` 前缀的规则只作用于 name 或 fully qualified name 匹配的 Node，
+   其余 Node 直接跳过该规则。
+5. `__node` / `__ns` 是 Context 级 identity remap，作用于该 Context 创建的所有 Node；
+   Node-local 的 `__node` / `__ns` 仍可覆盖。
+6. 非法规则（source 名语法非法）在创建 endpoint 时返回 `InvalidName`，不做静默忽略。
+```
+
+该语义与 ROS 2 常见 remapping 行为兼容（含 node-scoped 规则），但 DMW 不依赖 `rcl` parser 实现；
+回归覆盖见 `test/remapping_test.cpp`。
 
 Parameter override 只形成 DMW common override state；“是否自动声明 override 中未显式声明的参数”是 Client Library Node policy，不由 argument parser擅自改变 parameter store。
 
@@ -3072,84 +3091,117 @@ eprosima::fastcdr::*
 
 Fast DDS TypeSupport integration只允许出现在明确 `dmw/fastdds/*` boundary。
 
-推荐新增/整理 public files：
+当前 public files（保持扁平、按真实职责拆分；不要为每个小 value 创建深层 framework 目录）：
 
 ```text
 include/dmw/
 ├── arguments.hpp
-├── clock.hpp
-├── time.hpp
-├── timer.hpp
-├── timer_info.hpp
+├── client.hpp
+├── clock.hpp            # ClockType / TimePoint / Clock
+├── context.hpp
+├── error.hpp
+├── event.hpp
+├── event_info.hpp
+├── gid.hpp
+├── graph.hpp            # GraphRevision / GraphSnapshot / Graph 值类型
+├── graph_event.hpp
+├── guard_condition.hpp
+├── message_info.hpp
+├── message_type.hpp
+├── node.hpp
+├── parameter.hpp
+├── parameter_change_set.hpp
+├── parameter_descriptor.hpp
+├── publisher.hpp
+├── qos.hpp              # 含 common profiles 与 check_qos_compatibility
+├── request_id.hpp
+├── result.hpp
+├── runtime_mode.hpp
+├── server.hpp
+├── service_type.hpp
+├── subscriber.hpp
+├── timer.hpp            # TimerOptions / TimerInfo / Timer
+├── visibility_control.hpp
+├── wait_result.hpp
+├── wait_set.hpp
+├── wait_timeout.hpp
+├── waitable_registration.hpp   # WaitableKind / WaitableRegistration
+├── action_common.hpp    # Goal FSM 值类型 + Action readiness 集合
 ├── action_type.hpp
 ├── action_client.hpp
 ├── action_server.hpp
-├── action_common.hpp
-├── graph.hpp
-├── graph_event.hpp
-├── parameter.hpp
-├── parameter_descriptor.hpp
-├── parameter_change_set.hpp
-└── qos_compatibility.hpp
+└── fastdds/
+    └── message_type.hpp # Fast DDS TypeSupport binding boundary
 ```
 
-保持扁平、按真实职责拆分；不要为每个小 value创建深层framework目录。
+`TimePoint` 与 Clock 同处 `clock.hpp`，QoS compatibility helper 与 `Qos` 同处 `qos.hpp`，
+两者都不再单独拆文件，避免只为一个 value 建立额外头文件。
 
-### 11.6 当前实现到 V1 的收敛顺序
+### 11.6 实现进度与收口顺序
 
-为了避免同时大规模改动，建议按以下五个阶段实现：
+实现按六个阶段推进，当前进度：
 
-#### 阶段 1：Foundation contract convergence
-
-先修复已经实现部分与规范冲突：
+#### 阶段 1：Foundation contract convergence — 已完成
 
 - Result/Error `std::bad_alloc` 分类统一；
-- Server response-reader deadline删除 hard-coded `100 ms`，从 effective response-writer QoS 派生；
-- GuardCondition native trigger failure从 `trigger()` 正确返回；
-- DiscoveryGraph revision仅在真实 observable state change时增长；
-- 补齐 QoS common profiles；
-- 补 actual QoS / compatibility / ACK / liveliness基础API；
-- RuntimeMode public注释去掉只指向 Humble 的旧表述。
+- Server response-reader deadline 删除 hard-coded `100 ms`，从 effective response-writer QoS 派生；
+- GuardCondition trigger failure 从 `trigger()` 正确返回；
+- DiscoveryGraph revision 仅在真实 observable state change 时增长；
+- QoS common profiles 补齐（6 个 profile golden tests）；
+- actual QoS / compatibility / ACK / liveliness 基础 API；
+- RuntimeMode public 注释去掉只指向 Humble 的旧表述。
 
-#### 阶段 2：Foundation expansion
+#### 阶段 2：Foundation expansion — 已完成
 
-实现：
+- Arguments / Remapping / Node FQN / resolved naming；
+- Clock / Time common runtime；
+- Clock-aware Timer（含 missed-cycle 网格对齐、ROS override 语义）；
+- Parameter common store / validation / overrides / change set。
 
-- Arguments / Remapping；
-- Clock / Time；
-- Node FQN / resolved naming；
-- Timer改为Clock-aware；
-- Parameter common store / validation / overrides。
+#### 阶段 3：Graph runtime — 已完成
 
-#### 阶段 3：Graph runtime
-
-- DiscoveryGraph record/revision收敛；
-- DCL node/entity metadata；
-- ROS2 `ros_discovery_info` compatibility path；
+- DiscoveryGraph record/revision 收敛 + local Node/endpoint metadata；
+- ROS2 `ros_discovery_info` graph metadata transport（writer/reader + wire-compatible type）；
 - Node/Topic/Endpoint/Service/Action GraphSnapshot；
-- GraphEvent；
-- by-node/common graph query helper。
+- GraphEvent（level-triggered cursor）；
+- Service/Action availability 基于同一 participant-consistent candidate semantics。
 
-#### 阶段 4：WaitSet completion
+#### 阶段 4：WaitSet completion — 已完成
 
-- Timer/Clock-aware deadline；
-- GraphEvent；
-- Action aggregate registration skeleton；
-- WaitResult detail snapshot；
-- native wait/control-guard race regression。
+- Timer/Clock-aware deadline 与 Action expiry deadline 折入 native wait；
+- GraphEvent waitable；
+- Action aggregate 单 token 注册；
+- WaitResult detail snapshot（含 Action 子通道 bit）；
+- runtime deadline / control wake 与 topology generation 回归。
 
-#### 阶段 5：Action common runtime + interoperability
+#### 阶段 5：Action common runtime + interoperability — 已完成
 
 - ActionType；
-- ActionClient/Server五endpoint transaction；
-- Goal FSM；
-- accept transaction；
-- cancel selection；
-- result lifecycle/expiry；
-- status snapshot；
-- ROS2 Action bidirectional interoperability。
+- ActionClient/Server 五 endpoint transaction；
+- Goal FSM / accept transaction / cancel selection / result lifecycle / expiry / status snapshot；
+- ROS2 Action 双向互操作（命名+类型+availability 与数据面 goal/feedback/status/result）。
 
-Parameters可以在阶段2完成common store后由 dclcpp/dclpy并行构建typed user API，不阻塞Action。
+#### 阶段 6：V1 收口 — 已完成
+
+- API 全量审计（dmw.md ↔ public headers ↔ implementation ↔ tests）：已复核，缺口
+  `Context::runtime_mode()` 已补齐；
+- 并发与生命周期压力：`test/v1_stress_test.cpp` 覆盖 graph metadata churn × 快照查询 ×
+  GraphEvent × 并发 shutdown、Timer/Clock 边等待边变更与注册中销毁、Parameter 并发原子
+  mutation 与拒绝路径、Action aggregate（双 Context）FSM 与 shutdown；
+- dclcpp/dclpy 可实现性原型：`test/client_library_prototype_test.cpp` 仅用 DMW public API
+  实现 typed Publisher/Subscription、RequestId→Future、Timer→callback executor、
+  Graph wrapper、Parameter validate→callback→commit、Action Goal/Result Future 六类模式；
+- 安装消费验证：`dmw.install_consumer` —— 安装到 staging prefix 后用 clean external project
+  分别以 `dmw::dmw`（runtime-only：Context/Node/Parameter/Clock/Timer/WaitSet/GuardCondition/
+  GraphEvent/graph_snapshot/shutdown，源码不 include 任何 Fast DDS 头）与 `dmw::fastdds_binding`
+  构建**并实际运行**两个 consumer；
+- Humble / Fast DDS 2.6.x：build、unit/integration、四类 ROS 2 互操作、ASan+UBSan、targeted TSan
+  全部通过；
+- Jazzy / Fast DDS 2.14.x：在本机 Jazzy 容器（`osrf/ros:jazzy-desktop-full`，Fast DDS 2.14.6）
+  执行完整 primary 行——build、31 项 unit/integration（含 5 项 ROS 2 互操作）、ASan+UBSan、
+  targeted TSan 全部通过；该行暴露并修复了 2 处 GCC 13 `-Werror=redundant-move`
+  （`src/impl/graph_metadata.cpp`、`src/timer.cpp`）。详见 `dmw_fastdds.md` §10.2.1；
+- 文档冻结：本文与 `dmw_fastdds.md` 状态已改为 Frozen。
 
 ### 11.7 Foundation regression
 
@@ -3190,15 +3242,15 @@ Context shutdown
 Arguments/Remapping：
 
 ```text
-node name remap
-namespace remap
-topic/service/action remap
-global + node-local precedence
-rule scoped to node
-invalid remap
-unparsed arguments preservation
-parameter override parsing
-same result through dclcpp and dclpy bindings
+node name remap                       ✓ test/remapping_test.cpp
+namespace remap                       ✓ test/remapping_test.cpp
+topic/service/action remap            ✓ test/remapping_test.cpp（含 wire 层匹配验证）
+global + node-local precedence        ✓ test/remapping_test.cpp（identity 与 rule 两种）
+rule scoped to node                   ✓ test/remapping_test.cpp（命中与跳过两种）
+invalid remap                         ✓ test/remapping_test.cpp -> InvalidName
+unparsed arguments preservation       ✓ test/arguments_test.cpp
+parameter override parsing            ✓ test/parameter_test.cpp
+same result through dclcpp and dclpy  — 待 Client Library 落地后验证（DMW 侧语义已由上述用例锁定）
 ```
 
 Parameter：
@@ -3225,23 +3277,26 @@ allow_undeclared policy
 为所有 common profiles建立 golden tests：
 
 ```text
-ros2_default
-ros2_services_default
-ros2_sensor_data
-ros2_parameters
-ros2_parameter_events
-ros2_action_status_default
+ros2_default                        ✓ test/qos_test.cpp
+ros2_services_default               ✓ test/qos_test.cpp
+ros2_sensor_data                    ✓ test/qos_test.cpp
+ros2_parameters                     ✓ test/qos_test.cpp
+ros2_parameter_events               ✓ test/qos_test.cpp
+ros2_action_status_default          ✓ test/qos_test.cpp
 ```
 
 并覆盖：
 
 ```text
-SystemDefault -> effective actual QoS
-actual_qos writer/reader
-compatibility Compatible/Warning/Incompatible
-wait_for_all_acked success/timeout/shutdown
-assert_liveliness supported/invalid cases
+SystemDefault -> effective actual QoS        ✓ test/qos_test.cpp（captured baseline）
+actual_qos writer/reader                     ✓ test/wait_set_test.cpp
+compatibility Compatible/Warning/Incompatible ✓ test/qos_test.cpp
+wait_for_all_acked success/no-op/timeout/shutdown ✓ test/qos_operation_test.cpp
+assert_liveliness supported/invalid/shutdown ✓ test/qos_operation_test.cpp
 ```
+
+`wait_for_all_acked` 的 “timeout -> success + false” 用「已过期 finite deadline」
+（`WaitTimeout::finite(1ns)`）稳定触发；未匹配 reader 时 DDS 立刻确认，因此该分支返回 true 也一并断言。
 
 禁止 dclcpp/dclpy 再保存独立 preset 数值。
 
@@ -3275,19 +3330,21 @@ no callback thread
 WaitSet：
 
 ```text
-poll/finite/infinite
-no fixed periodic slice
-pre-existing data ready before native wait
-control wake
-add/remove while waiting
-original finite deadline preserved
-Timer deadline wakes infinite wait
-Action expiry wakes wait
-GraphEvent wakes wait
-GuardCondition trigger/consume race
-waitable destroy while waiting
-second concurrent wait -> Busy
-Action readiness detail snapshot
+poll/finite/infinite                 ✓ test/wait_set_test.cpp / test/timer_test.cpp
+no fixed periodic slice              ✓ 设计约束：WaitSet 只在 deadline/控制唤醒返回；
+                                       test/wait_set_test.cpp 断言 infinite wait 由 add/write 唤醒
+pre-existing data ready before native wait ✓ test/message_type_test.cpp（先 write 再 wait）
+control wake                         ✓ test/wait_set_test.cpp
+add/remove while waiting             ✓ test/wait_set_test.cpp
+original finite deadline preserved   ✓ test/timer_test.cpp（cancel 唤醒后仍按原 deadline Timeout）
+Timer deadline wakes infinite wait   ✓ test/timer_test.cpp
+Action expiry wakes wait             ✓ test/action_test.cpp
+GraphEvent wakes wait                ✓ test/graph_test.cpp
+GuardCondition trigger/consume race  ✓ test/wait_set_test.cpp
+waitable destroy while waiting       ✓ test/wait_set_test.cpp / test/graph_test.cpp
+second concurrent wait -> Busy       ✓ test/wait_set_test.cpp
+already registered -> AlreadyRegistered ✓ test/wait_set_test.cpp
+Action readiness detail snapshot     ✓ test/action_test.cpp（client feedback / server goal_expired bit）
 ```
 
 ### 11.11 Graph tests
@@ -3295,22 +3352,34 @@ Action readiness detail snapshot
 synthetic discovery + real Fast DDS discovery两层覆盖：
 
 ```text
-participant add/remove
-reader/writer add/change/remove
-no-op revision suppression
-local Node add/remove
-Node -> endpoint association
-remote ROS2 ParticipantEntitiesInfo compatibility
-topic names/types
-endpoint info + QoS
-service participant-consistent candidate
-action five-endpoint candidate
-GraphSnapshot consistency
-GraphEvent no pre-creation replay
-GraphEvent level-triggered until take
-concurrent snapshot + discovery update
-Context shutdown
-GraphEvent destruction while registered
+participant add/remove                        ✓ test/graph_revision_test.cpp
+reader/writer add/change/remove               ✓ test/graph_revision_test.cpp（含 change 触发 revision）
+no-op revision suppression                    ✓ test/graph_revision_test.cpp（duplicate Added/Removed、
+                                                identical remote metadata snapshot 均不推进 revision）
+local Node add/remove                         ✓ test/graph_test.cpp
+Node -> endpoint association                  ✓ test/graph_test.cpp（本地）/
+                                                test/ros2_graph_interop_test.cpp（远端，经 metadata）
+remote ROS2 ParticipantEntitiesInfo compatibility ✓ test/ros2_graph_interop_test.cpp
+                                                （ROS 2 侧 get_node_names() 能看到 DMW 节点）
+topic names/types                             ✓ test/graph_test.cpp
+endpoint info + QoS                           ✓ test/graph_test.cpp
+service participant-consistent candidate      ✓ test/graph_test.cpp（正例：同 participant 的
+                                                request reader + response writer 形成 candidate；
+                                                负例：跨 participant 的半对 endpoint 在已证明
+                                                discovery 可见的前提下仍不组合）
+                                              注：同一用例中原先有一处测试假设"peer 看到的
+                                                 client candidate 恒为 1"，但 discovery 完成后
+                                                 peer 合法地还能看到对端 participant 内组合出的
+                                                第二个 Client candidate；该断言已改为区间断言
+                                                 （client ∈ [1,2]、server ≤ 1），修复后 Humble
+                                                 40 次 / Rolling 80 次运行 0 失败
+action five-endpoint candidate                ✓ test/action_test.cpp / graph_test.cpp
+GraphSnapshot consistency                     ✓ test/graph_test.cpp（revision 与内容一致）
+GraphEvent no pre-creation replay             ✓ test/graph_test.cpp
+GraphEvent level-triggered until take         ✓ test/graph_test.cpp
+concurrent snapshot + discovery update        ✓ test/v1_stress_test.cpp
+Context shutdown                              ✓ test/graph_test.cpp / v1_stress_test.cpp
+GraphEvent destruction while registered       ✓ test/graph_test.cpp（auto-detach + stale token）
 ```
 
 ### 11.12 Action tests
@@ -3371,33 +3440,94 @@ ActionServer one registration -> goal/cancel/result/expiry detail bits
 
 ### 11.13 Interoperability matrix
 
-Jazzy / Fast DDS 2.14.x：
+Jazzy / Fast DDS 2.14.x（本机容器 `osrf/ros:jazzy-desktop-full`，Fast DDS 2.14.6；已执行）：
 
 ```text
-build
-unit/integration tests
-Topic bidirectional interop
-Service bidirectional interop
-Action bidirectional interop
-Graph metadata/node discovery interop
-QoS golden/actual tests
-shutdown/teardown
-ASan/UBSan
-selected TSan
+build                              ✓（GCC 13 + -Werror，全量 TU）
+unit/integration tests（31 项）    ✓
+Topic bidirectional interop        ✓
+Service bidirectional interop      ✓（AddTwoInts + std_srvs/SetBool）
+Action bidirectional interop       ✓（example_interfaces/action/Fibonacci）
+Graph metadata/node discovery interop ✓
+QoS golden/actual tests            ✓
+shutdown/teardown                  ✓
+ASan/UBSan                         ✓（DMW 测试集 26/26；interop 5/5）
+selected TSan                      ✓（DMW 测试集 26/26）
 ```
+
+Jazzy 行在首次执行时暴露并修复了两个 GCC 13 `-Werror=redundant-move`（Humble/Jammy 的
+GCC 11 未报告）：`src/impl/graph_metadata.cpp` 与 `src/timer.cpp` 从 `const` Result 取
+`.error()` 后 `std::move`，move 实际不生效；修复为把对应临时 Result 声明为非 `const`。
+该行同时确认 2.14 世代下 graph metadata transport、service correlation、action 五端点聚合
+与 Humble 行为一致。
 
 Humble / Fast DDS 2.6.x：
 
 ```text
 source build
 foundation tests
-Topic interop
-Service interop
-Graph compatibility path
-Action compatibility once implementation lands
+Topic interop              ✓
+Service interop            ✓
+Graph metadata interop     ✓（DMW 节点可被 rclcpp get_node_names() 看到）
+Action interop             ✓
+QoS golden/actual          ✓
+shutdown/teardown          ✓
+ASan/UBSan                 ✓
+selected TSan              ✓（suppressions 见 cmake/tsan_suppressions.txt）
 ```
 
-测试 network path建议显式使用 UDPv4，避免同机 SHM隐藏 wire compatibility问题。
+ROS 2 Rolling / Fast DDS 2.13.2（开发机上可用的、逼近 Jazzy 的世代）：
+
+```text
+source build                       ✓ 无需改动
+unit/integration tests（26 项）    ✓
+Topic interop                      ✓（rolling rclcpp + rmw_fastrtps）
+Service interop                    ✓（std_srvs/srv/SetBool，双向）
+Graph metadata interop             ✓（含 16 字节 Gid 布局）
+Action interop                     ✓（用 test/ros2_action_test_interfaces 生成的 Fibonacci，
+                                    经 test/build_action_test_interfaces.sh 安装到本地前缀）
+ASan/UBSan、targeted TSan          ✓（与 Humble 相同的测试集）
+```
+
+Rolling 上 Action 用例曾出现的约 1/12 抖动已定位并修复：根因是测试用 MultiThreadedExecutor
+并发驱动非线程安全的 rclcpp_action Client；改为单线程 `spin_some` canonical 模式后，
+Rolling 连续 15 次、Humble 连续 8 次运行均 0 失败（详见 `dmw_fastdds.md` §10.2）。
+
+该栈暴露并已修复：metadata listener 在回调线程取样本会阻塞、门控式 drain 漏读、
+ingest 循环无上界、远端 metadata 触发无意义 republish、以及 `rmw_dds_common` Gid
+线缆布局的世代差异（Humble 24 / Rolling-Jazzy 16）。
+
+并发运行隔离：`dmw.lifecycle_stress` 曾在 Humble 与 Rolling 两套栈同时运行时偶发地把
+shutdown 期间的 infinite `WaitSet::wait()` 观测为 `Ready`。定位后确认这不是 DMW 运行时缺陷，
+而是测试隔离缺陷：该用例固定占用 domain 100–119 且 topic/service 名固定，两个进程在同一
+domain 上互为对端，对端 sample 会被本进程 reader 正常接收，于是「合法 ready」与「shutdown
+竞态」无法区分。修复为按 pid 选择互不重叠的 21-wide domain slot
+（`domain = 1 + (pid % 11) * 21 + iteration`，`test/v1_stress_test.cpp` 同法占用连续
+slot）。修复后：4 实例并发 ×12 轮、Humble+Rolling 跨栈并发 ×6 轮、
+`ctest --repeat until-fail:60` 均 0 失败。
+
+Sanitizer 范围说明：DMW 测试集（26 项）在 ASan+UBSan 下全绿；5 项 ROS 2 interop 用例在
+ASan 下会因 ROS 2 Humble 自带 `librcutils` / `librclcpp` 的 `new-delete-type-mismatch`
+而 abort（报告位于 ROS 2 库内部，非 DMW 代码），因此 interop 在非 sanitizer 构建下验证，
+或在 ASan 下显式关闭 `new_delete_type_mismatch` 后运行。
+
+Action 互操作当前覆盖（`test/ros2_action_interop_test.cpp`，与真实 `rclcpp_action` 对端）：
+
+```text
+availability（ROS 2 client 发现 DMW server / DMW client 发现 ROS 2 server；五 endpoint candidate）
+accept / execute / succeed + 周期 feedback + status（EXECUTING -> SUCCEEDED）
+reject（accepted=false，DMW 侧不产生 GoalRecord，ROS 2 客户端得到 null goal handle）
+abort（DMW Executing -> Aborted，ROS 2 客户端 result code ABORTED）
+cancel（ROS 2 async_cancel_goal -> DMW Canceling -> Canceled，response 含 goals_canceling，result code CANCELED）
+GetResult before terminal（请求被挂起，terminal 后经 take_pending_result_requests 移交并回包）
+两个 ROS 2 client 并发各发一个 goal，结果分别正确
+```
+
+`result expiry`（terminal goal 超过 `result_timeout` 后被剪枝）在 DMW 侧由
+`test/action_test.cpp` 覆盖；互操作层不做 expiry 后迟到 GetResult 的断言，因为该窗口本质上与
+对端重试竞争，无法稳定断言。
+
+测试 network path 显式使用 UDPv4，避免同机 SHM 隐藏 wire compatibility 问题。
 
 ### 11.14 Frozen Architecture Invariants
 
@@ -3547,4 +3677,11 @@ DMW V1 的目标不是复制 ROS 2 package tree，而是把两个 Client Library
 - Future、callback、Executor、typed presentation、GIL/asyncio仍严格留在语言层；
 - Component/Composition明确不进入DCL V1。
 
-完成本文新增基础能力和现有Foundation contract convergence后，文档状态才应从 `V1 Architecture Convergence` 恢复为 `V1 Design Frozen Candidate`。
+本文新增基础能力（Arguments/Clock/Timer/Graph/Parameter/Action）与既有 Foundation contract
+convergence 均已完成，每个 Frozen Invariant 都有实现与测试支撑。ROS 2 兼容性矩阵的
+Jazzy / Fast DDS 2.14.6 与 Humble / Fast DDS 2.6.x 两行均已在本环境对应容器/前缀中执行并
+通过，因此文档状态已冻结为 `V1 Design Frozen`。
+
+仍需在下游回填的验证项只有 §11.8 的「dclcpp / dclpy 得到相同 remap/parameter 结果」：其 DMW
+侧语义已由 `test/remapping_test.cpp`、`test/parameter_test.cpp` 锁定，语言侧等价性属于尚未
+存在的 Client Library 的验收范围。
