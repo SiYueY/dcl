@@ -9,6 +9,7 @@
 
 #include "dmw/error.hpp"
 #include "impl/client_impl.hpp"
+#include "impl/deadline.hpp"
 #include "impl/identity.hpp"
 #include "impl/reader_wait_state.hpp"
 #include "impl/server_impl.hpp"
@@ -116,9 +117,7 @@ Result<bool> ActionClient::Impl::check_availability() const {
 Result<bool> ActionClient::Impl::server_is_available() const { return check_availability(); }
 
 Result<bool> ActionClient::Impl::wait_for_server(WaitTimeout timeout) const {
-    const auto deadline = timeout.kind() == WaitTimeout::Kind::Finite
-                              ? std::chrono::steady_clock::now() + timeout.duration()
-                              : std::chrono::steady_clock::time_point::max();
+    const auto deadline = impl::steady_deadline(timeout);
     auto observed = availability_state_->revision.load(std::memory_order_acquire);
     while (true) {
         if (context_->is_shutdown()) {
@@ -152,6 +151,11 @@ Result<bool> ActionClient::Impl::wait_for_server(WaitTimeout timeout) const {
 }
 
 Result<ActionClientReadySet> ActionClient::Impl::readiness() const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<ActionClientReadySet>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     ActionClientReadySet ready;
     ready.goal_response = goal_client_->impl_->wait_state()->is_ready();
     ready.cancel_response = cancel_client_->impl_->wait_state()->is_ready();
@@ -254,6 +258,11 @@ Result<GoalTransition> ActionServer::Impl::accept_goal(
 }
 
 Result<GoalState> ActionServer::Impl::goal_state(const GoalId& goal_id) const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<GoalState>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return goals_->state(goal_id);
 }
 
@@ -269,28 +278,62 @@ Result<GoalTransition> ActionServer::Impl::update_goal_state(
 
 Result<CancelSelection> ActionServer::Impl::select_cancel_goals(
     const CancelGoalCriteria& criteria) const {
+    if (criteria.stamp < std::chrono::nanoseconds::zero()) {
+        return Result<CancelSelection>::failure(
+            Error(ErrorCode::InvalidArgument, "Cancel stamp must not be negative"));
+    }
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<CancelSelection>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return goals_->select_cancel_goals(criteria);
 }
 
 Result<ResultRequestDisposition> ActionServer::Impl::register_result_request(
     const GoalId& goal_id, const RequestId& request_id) {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<ResultRequestDisposition>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return goals_->register_result_request(goal_id, request_id);
 }
 
 Result<std::vector<RequestId>> ActionServer::Impl::take_pending_result_requests(
     const GoalId& goal_id) {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::vector<RequestId>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return goals_->take_pending_result_requests(goal_id);
 }
 
 Result<std::vector<GoalStatusInfo>> ActionServer::Impl::status_snapshot() const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::vector<GoalStatusInfo>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return goals_->status_snapshot();
 }
 
 Result<std::vector<GoalId>> ActionServer::Impl::take_expired_goals() {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<std::vector<GoalId>>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     return goals_->take_expired_goals();
 }
 
 Result<ActionServerReadySet> ActionServer::Impl::readiness() const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<ActionServerReadySet>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
     ActionServerReadySet ready;
     ready.goal_request = goal_server_->impl_->wait_state()->is_ready();
     ready.cancel_request = cancel_server_->impl_->wait_state()->is_ready();
