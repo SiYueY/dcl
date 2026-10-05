@@ -7,6 +7,15 @@ from dclpy import _dclpy as native
 from dclpy.exceptions import AlreadyRegisteredError, EntityClosedError, InvalidStateError
 from dclpy.qos import QoSProfile, HistoryPolicy, QosDuration, InvalidArgumentError
 from std_msgs_dclpy.msg import String
+from std_msgs_dclpy.msg import UInt8MultiArray
+
+
+def test_uint8_sequence_byte_accessor_preserves_list_api_and_empty_data():
+    image_bytes = UInt8MultiArray(data=[0, 128, 255])
+    assert image_bytes.data_bytes == b"\x00\x80\xff"
+    assert image_bytes.data == [0, 128, 255]
+    image_bytes.data = []
+    assert image_bytes.data_bytes == b""
 
 
 def test_qos_values_and_invalid_duration_access():

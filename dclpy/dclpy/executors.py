@@ -433,6 +433,9 @@ class SingleThreadedExecutor:
                     record.registration = None
             if record.entity._native.state == _native._EntityState.CLOSED:
                 record.entity._retire_bindings()
+                with self._lock:
+                    if self._records.get(record.entity) is record:
+                        self._detach_record(record)
         while True:
             with self._lock:
                 if not self._notifications:

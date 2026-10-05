@@ -49,3 +49,5 @@ class Entity:
 
     def _retire_bindings(self) -> None:
         self._native.retire_binding()
+        with self.node._lock:
+            self.node._entities.discard(self)

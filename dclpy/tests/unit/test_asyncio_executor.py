@@ -9,6 +9,29 @@ from mfr3duo_msgs_dclpy.action import Move
 from std_msgs_dclpy.msg import String
 
 
+def test_repeated_dynamic_subscriptions_retire_node_and_executor_records():
+    async def run():
+        context = Context(domain_id=218)
+        node = Node("camera_switch_cleanup", context=context)
+        executor = AsyncIOExecutor(context)
+        executor.add_node(node)
+        executor.start()
+        try:
+            for _ in range(20):
+                subscriber = node.create_subscription(String, "/camera_switch_cleanup", lambda _: None, 1)
+                subscriber.close()
+                async with asyncio.timeout(2):
+                    while subscriber in executor._records:
+                        await asyncio.sleep(.01)
+                assert subscriber.wait_closed(0)
+                assert not node._entities and not executor._records
+                assert subscriber._owner is None
+        finally:
+            await executor.shutdown_async(timeout=5)
+            await context.shutdown_async(timeout=5)
+    asyncio.run(run())
+
+
 def test_callback_owner_thread_and_managed_self_wait_rejected_before_mutation():
     async def run():
         context = Context(domain_id=209)

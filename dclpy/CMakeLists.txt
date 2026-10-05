@@ -38,6 +38,7 @@ set_target_properties(_dclpy PROPERTIES
     INSTALL_RPATH "$<TARGET_FILE_DIR:dmw::dmw>"
     INSTALL_RPATH_USE_LINK_PATH TRUE)
 install(TARGETS _dclpy LIBRARY DESTINATION dclpy)
+install(DIRECTORY dclpy/ DESTINATION dclpy FILES_MATCHING PATTERN "*.py")
 install(DIRECTORY include/ DESTINATION include)
 
 if(DCLPY_BUILD_MFR3DUO_INTERFACES)
@@ -58,6 +59,8 @@ if(DCLPY_BUILD_MFR3DUO_INTERFACES)
          "${DCLPY_MFR3DUO_INTERFACE_PREFIX}/share/mfr3duo_msgs/*/*.idl"
          "${DCLPY_ROS_INTERFACE_PREFIX}/share/action_msgs/*/*.idl"
          "${DCLPY_ROS_INTERFACE_PREFIX}/share/nav_msgs/*/*.idl"
+         "${DCLPY_ROS_INTERFACE_PREFIX}/share/sensor_msgs/*/*.idl"
+         "${DCLPY_ROS_INTERFACE_PREFIX}/share/diagnostic_msgs/*/*.idl"
          "${DCLPY_ROS_INTERFACE_PREFIX}/share/geometry_msgs/*/*.idl"
          "${DCLPY_ROS_INTERFACE_PREFIX}/share/std_msgs/*/*.idl"
          "${DCLPY_ROS_INTERFACE_PREFIX}/share/builtin_interfaces/*/*.idl"
@@ -70,11 +73,14 @@ if(DCLPY_BUILD_MFR3DUO_INTERFACES)
     # added as normal CMake targets so `cmake --install` delivers importable
     # mfr3duo_msgs_dclpy/action.{Move,Grasp} modules with their dependencies.
     set(DCLPY_GENERATED_INTERFACES_DIR "${CMAKE_CURRENT_BINARY_DIR}/interfaces")
+    set(DCLPY_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include" CACHE PATH "DCLPY public binding headers")
     execute_process(
         COMMAND "${DCLPY_INTERFACE_GENERATOR_PYTHON}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/interface_generator/generate.py"
                 --package mfr3duo_msgs
                 --package nav_msgs
+                --package sensor_msgs
+                --package diagnostic_msgs
                 --prefix "${DCLPY_MFR3DUO_INTERFACE_PREFIX}"
                 --prefix "${DCLPY_ROS_INTERFACE_PREFIX}"
                 --output "${DCLPY_GENERATED_INTERFACES_DIR}"

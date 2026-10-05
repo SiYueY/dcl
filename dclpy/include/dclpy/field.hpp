@@ -4,6 +4,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <array>
+#include <cstdint>
 #include <limits>
 #include <string>
 #include <type_traits>
@@ -96,6 +97,17 @@ void assign(Message& message, Field Message::* member, py::handle value, FieldRu
 
 template <typename Message, typename Field>
 void field(py::class_<Message>& type, const char* name, Field Message::* member, FieldRules rules = {}) {
+    if constexpr (IsSequence<Field>::value && !IsString<Field>::value) {
+        if constexpr (std::is_same_v<typename Field::value_type, std::uint8_t>) {
+            // Keep the list API compatible, with an O(n) byte-copy accessor for
+            // image payloads that avoids one Python integer per byte.
+            type.def_property_readonly((std::string(name) + "_bytes").c_str(),
+                [member](const Message& message) {
+                    const auto& data = message.*member;
+                    return py::bytes(reinterpret_cast<const char*>(data.data()), data.size());
+                });
+        }
+    }
     type.def_property(name,
         [member](py::object parent) -> py::object {
             auto& message = parent.cast<Message&>();
