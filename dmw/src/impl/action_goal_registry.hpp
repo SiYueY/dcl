@@ -4,6 +4,9 @@
 #include <chrono>
 #include <cstddef>
 #include <mutex>
+#include <memory>
+
+#include "impl/logical_wait_observer.hpp"
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -48,10 +51,13 @@ public:
         const GoalId& goal_id, const RequestId& request_id);
 
     Result<std::vector<RequestId>> take_pending_result_requests(const GoalId& goal_id);
+    void remove_result_request(const RequestId& request_id) noexcept;
 
     Result<std::vector<GoalStatusInfo>> status_snapshot();
 
     Result<std::vector<GoalId>> take_expired_goals();
+    bool expiry_ready() const;
+    void observe_expiry(const std::shared_ptr<LogicalWaitObserver>& observer);
 
     /// Earliest absolute steady deadline at which a terminal goal expires.
     Result<std::optional<std::chrono::steady_clock::time_point>> earliest_expiry() const;
@@ -72,13 +78,15 @@ private:
     bool expired_locked(
         const GoalRecord& record, std::chrono::steady_clock::time_point now) const noexcept;
 
-    /// Lazy retention pruning; collects removed ids when requested.
-    void prune_expired_locked(
-        std::chrono::steady_clock::time_point now, std::vector<GoalId>* removed);
+    // Every pruning entry point records ids durably before erasing records.
+    void prune_expired_locked(std::chrono::steady_clock::time_point now);
+    void notify_expiry_locked() noexcept;
 
     mutable std::mutex mutex_;
     const std::chrono::nanoseconds result_timeout_;
     std::unordered_map<GoalId, GoalRecord, GoalIdHash> goals_;
+    std::vector<GoalId> expired_notifications_;
+    std::vector<std::weak_ptr<LogicalWaitObserver>> expiry_observers_;
 };
 
 }  // namespace dmw::impl

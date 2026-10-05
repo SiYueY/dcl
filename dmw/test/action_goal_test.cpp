@@ -1,4 +1,5 @@
 #include <cassert>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -224,6 +225,37 @@ void test_result_requests_and_expiry() {
     assert(registry.take_pending_result_requests(terminal).value().empty());
 }
 
+void test_expiry_notification_survives_other_pruning() {
+    dmw::impl::ActionGoalRegistry registry(0ns);
+    for (unsigned char id = 1; id <= 3; ++id) {
+        assert(registry.reserve(goal_id(id)));
+        assert(registry.commit(goal_info(id, id), GoalAcceptMode::Execute));
+        assert(registry.update_state(goal_id(id), GoalEvent::Succeed));
+    }
+    assert(registry.status_snapshot().value().empty());
+    assert(!registry.earliest_expiry().value());
+    assert(registry.expiry_ready());
+    auto expired = registry.take_expired_goals();
+    assert(expired && expired.value().size() == 3);
+    std::sort(expired.value().begin(), expired.value().end(),
+              [](const GoalId& lhs, const GoalId& rhs) { return lhs.data < rhs.data; });
+    assert(expired.value()[0] == goal_id(1));
+    assert(expired.value()[1] == goal_id(2));
+    assert(expired.value()[2] == goal_id(3));
+    assert(!registry.expiry_ready());
+    assert(registry.take_expired_goals().value().empty());
+
+    assert(registry.reserve(goal_id(4)));
+    assert(registry.commit(goal_info(4, 4), GoalAcceptMode::Execute));
+    assert(registry.register_result_request(goal_id(4), request_id(4)));
+    registry.remove_result_request(request_id(4));
+    assert(registry.take_pending_result_requests(goal_id(4)).value().empty());
+    assert(registry.update_state(goal_id(4), GoalEvent::Succeed));
+    assert(registry.register_result_request(goal_id(4), request_id(5)).value() ==
+           ResultRequestDisposition::UnknownGoal);
+    assert(registry.take_expired_goals().value().size() == 1);
+}
+
 void test_expiry_deadline_saturates() {
     dmw::impl::ActionGoalRegistry registry(std::chrono::nanoseconds::max());
     const auto goal = goal_id(4);
@@ -317,6 +349,7 @@ int main() {
     test_state_machine();
     test_cancel_selection();
     test_result_requests_and_expiry();
+    test_expiry_notification_survives_other_pruning();
     test_expiry_deadline_saturates();
     test_concurrent_accept_is_exactly_once();
     test_action_endpoint_naming();

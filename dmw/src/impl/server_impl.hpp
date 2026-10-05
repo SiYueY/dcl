@@ -3,7 +3,6 @@
 
 #include <memory>
 #include <mutex>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -48,6 +47,16 @@ public:
     std::string_view service_name() const noexcept { return service_name_; }
     Result<bool> read_request(void* request, RequestId& request_id);
     Result<void> write_response(const RequestId& request_id, const void* response);
+    Result<void> discard_request(const RequestId& request_id);
+
+    // Internal claim/write split lets Action remove its result association at
+    // the write claim's linearization point, without holding protocol locks
+    // during discovery waits or DDS serialization.
+    Result<eprosima::fastrtps::rtps::SampleIdentity> claim_response(const RequestId& request_id);
+    Result<void> write_claimed_response(
+        const RequestId& request_id,
+        const eprosima::fastrtps::rtps::SampleIdentity& sample_identity, const void* response);
+    Result<void> check_pending_request(const RequestId& request_id);
     Result<Qos> request_actual_qos() const;
     Result<Qos> response_actual_qos() const;
     const std::shared_ptr<impl::ReaderWaitState>& wait_state() const noexcept {

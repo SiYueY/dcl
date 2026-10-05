@@ -5,6 +5,7 @@
 #include <string_view>
 #include <utility>
 
+#include "dmw/availability_wait_token.hpp"
 #include "dmw/request_id.hpp"
 #include "dmw/qos.hpp"
 #include "dmw/result.hpp"
@@ -39,6 +40,9 @@ public:
 
     /// Block until this service is available, the timeout expires, or Context shuts down.
     Result<bool> wait_for_service(WaitTimeout timeout) const;
+    Result<AvailabilityWaitToken> prepare_availability_wait() const;
+    Result<void> interrupt_waits();
+    Result<bool> wait_for_service(WaitTimeout timeout, const AvailabilityWaitToken& token) const;
     Result<Qos> request_actual_qos() const;
     Result<Qos> response_actual_qos() const;
     std::string_view service_name() const noexcept;

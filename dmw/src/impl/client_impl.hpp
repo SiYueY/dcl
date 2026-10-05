@@ -13,6 +13,7 @@
 
 #include "dmw/client.hpp"
 #include "impl/context.hpp"
+#include "impl/availability_wait_state.hpp"
 #include "impl/discovery_graph.hpp"
 #include "impl/reader_wait_state.hpp"
 #include "impl/request.hpp"
@@ -23,11 +24,7 @@ namespace dmw {
 
 class Client::Impl {
 public:
-    struct ServiceWaitState {
-        std::mutex mutex;
-        std::condition_variable cv;
-        std::atomic<std::uint64_t> revision{0};
-    };
+    using ServiceWaitState = impl::AvailabilityWaitState;
 
     Impl(
         std::shared_ptr<impl::Context> context, std::string service_name, MessageType response_type,
@@ -55,14 +52,12 @@ public:
         const std::weak_ptr<ServiceWaitState> weak_state = service_wait_state_;
         service_subscription_ = context_->discovery_graph()->subscribe([weak_state](std::uint64_t) {
             if (const auto state = weak_state.lock()) {
-                state->revision.fetch_add(1, std::memory_order_release);
-                state->cv.notify_all();
+                state->notify_revision();
             }
         });
         shutdown_callback_id_ = context_->register_shutdown_callback([weak_state] {
             if (const auto state = weak_state.lock()) {
-                state->revision.fetch_add(1, std::memory_order_release);
-                state->cv.notify_all();
+                state->notify_revision();
             }
         });
     }
@@ -73,6 +68,9 @@ public:
     Result<bool> read_response(void* response, RequestId& request_id);
     Result<bool> service_is_available() const;
     Result<bool> wait_for_service(WaitTimeout timeout) const;
+    Result<bool> wait_for_service(WaitTimeout timeout, const AvailabilityWaitToken& token) const;
+    Result<AvailabilityWaitToken> prepare_availability_wait() const;
+    Result<void> interrupt_waits();
     Result<Qos> request_actual_qos() const;
     Result<Qos> response_actual_qos() const;
     const std::shared_ptr<impl::ReaderWaitState>& wait_state() const noexcept {

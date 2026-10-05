@@ -94,6 +94,17 @@ Result<void> WaitSet::Impl::remove(WaitableRegistration registration) {
     return Result<void>::success();
 }
 
+Result<void> WaitSet::Impl::set_interest(
+    WaitableRegistration registration, std::uint32_t detail_mask) {
+    const auto context = context_;
+    if (!registration.valid() || registration.wait_set_id_ != context->wait_set_id_)
+        return Result<void>::failure(Error(ErrorCode::NotRegistered, "Registration is stale"));
+    const auto operation = context->context_->try_acquire_operation();
+    if (!operation)
+        return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    return context->set_interest(registration.registration_id_, registration.kind_, detail_mask);
+}
+
 Result<WaitResult> WaitSet::Impl::wait(WaitTimeout timeout) {
     const auto context = context_;
     const auto operation = context->context_->try_acquire_operation();
@@ -161,7 +172,9 @@ Result<WaitResult> WaitSet::Impl::wait(WaitTimeout timeout) {
                     native_deadline = *timer_deadline;
                 }
             }
-            if (registration->runtime_deadline) {
+            if (registration->runtime_deadline &&
+                (registration->kind != WaitableKind::ActionServer ||
+                 (registration->interest.load(std::memory_order_acquire) & kActionGoalExpiredBit) != 0)) {
                 const auto runtime = registration->runtime_deadline();
                 if (runtime && *runtime < native_deadline) native_deadline = *runtime;
             }

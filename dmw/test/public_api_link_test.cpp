@@ -27,7 +27,16 @@ int main() {
     [[maybe_unused]] auto request = &dmw::Client::write_request;
     [[maybe_unused]] auto response = &dmw::Client::read_response;
     [[maybe_unused]] auto availability = &dmw::Client::service_is_available;
-    [[maybe_unused]] auto wait_for_service = &dmw::Client::wait_for_service;
+    [[maybe_unused]] auto wait_for_service =
+        static_cast<dmw::Result<bool> (dmw::Client::*)(dmw::WaitTimeout) const>(
+            &dmw::Client::wait_for_service);
+    [[maybe_unused]] auto wait_for_service_token =
+        static_cast<dmw::Result<bool> (dmw::Client::*)(dmw::WaitTimeout,
+            const dmw::AvailabilityWaitToken&) const>(&dmw::Client::wait_for_service);
+    [[maybe_unused]] auto interrupt = &dmw::Client::interrupt_waits;
+    [[maybe_unused]] auto prepare = &dmw::Client::prepare_availability_wait;
+    [[maybe_unused]] auto discard = &dmw::Server::discard_request;
+    [[maybe_unused]] auto interest = &dmw::WaitSet::set_interest;
     [[maybe_unused]] auto server_take = &dmw::Server::read_request;
     [[maybe_unused]] auto server_response = &dmw::Server::write_response;
 

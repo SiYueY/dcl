@@ -19,6 +19,7 @@
 #include "dmw/subscriber.hpp"
 #include "impl/action_goal_registry.hpp"
 #include "impl/context.hpp"
+#include "impl/availability_wait_state.hpp"
 #include "impl/discovery_graph.hpp"
 #include "impl/graph_candidates.hpp"
 #include "impl/graph_names.hpp"
@@ -65,6 +66,9 @@ public:
 
     Result<bool> server_is_available() const;
     Result<bool> wait_for_server(WaitTimeout timeout) const;
+    Result<bool> wait_for_server(WaitTimeout timeout, const AvailabilityWaitToken& token) const;
+    Result<AvailabilityWaitToken> prepare_availability_wait() const;
+    Result<void> interrupt_waits();
     Result<ActionClientReadySet> readiness() const;
 
     std::string_view action_name() const noexcept { return action_name_; }
@@ -79,11 +83,7 @@ private:
 
     /// Wakes wait_for_server() on discovery revision change or shutdown
     /// without any fixed polling slice.
-    struct AvailabilityWaitState {
-        std::mutex mutex;
-        std::condition_variable cv;
-        std::atomic<std::uint64_t> revision{0};
-    };
+    using AvailabilityWaitState = impl::AvailabilityWaitState;
 
     std::shared_ptr<impl::Context> context_;
     std::string action_name_;
@@ -115,6 +115,9 @@ public:
     Result<void> write_cancel_response(const RequestId& request_id, const void* response);
     Result<bool> read_result_request(void* request, RequestId& request_id);
     Result<void> write_result_response(const RequestId& request_id, const void* response);
+    Result<void> discard_goal_request(const RequestId& request_id);
+    Result<void> discard_cancel_request(const RequestId& request_id);
+    Result<void> discard_result_request(const RequestId& request_id);
     Result<void> publish_feedback(const void* feedback);
     Result<void> publish_status(const void* status);
 
@@ -148,6 +151,9 @@ private:
     std::unique_ptr<Server> result_server_;
     std::unique_ptr<Publisher> feedback_publisher_;
     std::unique_ptr<Publisher> status_publisher_;
+    // Lock order: result coordination -> Server pending -> GoalRegistry.
+    // DDS write runs after releasing this mutex.
+    std::mutex result_coordination_mutex_;
     std::shared_ptr<impl::ActionGoalRegistry> goals_;
 };
 

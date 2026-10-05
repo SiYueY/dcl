@@ -166,33 +166,59 @@ Result<Qos> Client::Impl::response_actual_qos() const {
     return impl::from_neutral_qos(qos);
 }
 
-Result<bool> Client::Impl::wait_for_service(WaitTimeout timeout) const {
+Result<AvailabilityWaitToken> Client::Impl::prepare_availability_wait() const {
     const auto operation = context_->try_acquire_operation();
-    if (!operation)
-        return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    if (!operation) {
+        return Result<AvailabilityWaitToken>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
+    return Result<AvailabilityWaitToken>::success(service_wait_state_->prepare());
+}
 
+Result<void> Client::Impl::interrupt_waits() {
+    service_wait_state_->interrupt();
+    return Result<void>::success();
+}
+
+Result<bool> Client::Impl::wait_for_service(WaitTimeout timeout) const {
+    auto token = prepare_availability_wait();
+    if (!token) return Result<bool>::failure(std::move(token.error()));
+    return wait_for_service(timeout, token.value());
+}
+
+Result<bool> Client::Impl::wait_for_service(
+    WaitTimeout timeout, const AvailabilityWaitToken& token) const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
+    const auto state = service_wait_state_;
+    if (!state->owns(token)) {
+        return Result<bool>::failure(
+            Error(ErrorCode::InvalidArgument, "Availability token belongs to another endpoint"));
+    }
     const auto deadline = impl::steady_deadline(timeout);
-    auto state = service_wait_state_;
     std::unique_lock lock(state->mutex);
     while (true) {
-        const auto observed_revision = state->revision.load(std::memory_order_acquire);
-        auto available = service_is_available();
-        if (!available || available.value() || timeout.kind() == WaitTimeout::Kind::Poll)
-            return available;
         if (context_->is_shutdown()) {
             return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
         }
+        if (state->interrupted(token)) {
+            return Result<bool>::failure(Error(ErrorCode::Interrupted, "Availability wait interrupted"));
+        }
+        const auto observed_revision = state->revision;
+        auto available = service_is_available();
+        if (!available || available.value() || timeout.kind() == WaitTimeout::Kind::Poll) {
+            return available;
+        }
+        const auto changed = [&] {
+            return context_->is_shutdown() || state->interrupted(token) ||
+                   state->revision != observed_revision;
+        };
         if (timeout.kind() == WaitTimeout::Kind::Finite) {
-            if (std::chrono::steady_clock::now() >= deadline) return Result<bool>::success(false);
-            state->cv.wait_until(lock, deadline, [&] {
-                return context_->is_shutdown() ||
-                       state->revision.load(std::memory_order_acquire) != observed_revision;
-            });
+            if (!state->cv.wait_until(lock, deadline, changed)) return Result<bool>::success(false);
         } else {
-            state->cv.wait(lock, [&] {
-                return context_->is_shutdown() ||
-                       state->revision.load(std::memory_order_acquire) != observed_revision;
-            });
+            state->cv.wait(lock, changed);
         }
     }
 }

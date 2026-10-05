@@ -1,4 +1,7 @@
 #include <cassert>
+#include <atomic>
+#include <future>
+#include <stdexcept>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -30,12 +33,15 @@ struct ActionPayload {
 
 class ActionPayloadType : public eprosima::fastdds::dds::TopicDataType {
 public:
+    inline static std::atomic<bool> throw_on_serialize{false};
+    inline static std::atomic<bool> throw_on_size{false};
     ActionPayloadType() {
         m_typeSize = sizeof(ActionPayload);
         setName("dmw.test.ActionPayload");
     }
 
     bool serialize(void* data, eprosima::fastrtps::rtps::SerializedPayload_t* payload) override {
+        if (throw_on_serialize.exchange(false)) throw std::runtime_error("serializer failure");
         payload->length = sizeof(ActionPayload);
         std::memcpy(payload->data, data, sizeof(ActionPayload));
         return true;
@@ -48,6 +54,7 @@ public:
     }
 
     std::function<std::uint32_t()> getSerializedSizeProvider(void*) override {
+        if (throw_on_size.exchange(false)) throw std::runtime_error("size provider failure");
         return [] { return static_cast<std::uint32_t>(sizeof(ActionPayload)); };
     }
 
@@ -144,6 +151,16 @@ int main() {
     const auto available = client.value()->wait_for_server(wait_available.value());
     assert(available && available.value());
     assert(client.value()->server_is_available().value());
+
+    // A token captured before interruption must remain interrupted even if
+    // the server was discovered before the native wait starts.
+    const auto availability_token = client.value()->prepare_availability_wait();
+    assert(availability_token);
+    assert(client.value()->interrupt_waits());
+    auto interrupted = client.value()->wait_for_server(
+        dmw::WaitTimeout::infinite(), availability_token.value());
+    assert(!interrupted && interrupted.error().code() == dmw::ErrorCode::Interrupted);
+    assert(client.value()->wait_for_server(dmw::WaitTimeout::poll()).value());
 
     // --- a rejected goal leaves no GoalRecord ---------------------------------
     {
@@ -299,6 +316,41 @@ int main() {
         assert(selection.value().goals.empty());
     }
 
+    // Mask only Result while Cancel remains attached. Unread Result data
+    // must not cause repeated native wakeups or appear in logical readiness.
+    {
+        auto wait_set = server_context.value()->create_wait_set();
+        assert(wait_set);
+        auto registration = wait_set.value()->add(*server.value());
+        assert(registration);
+        assert(wait_set.value()->set_interest(registration.value(), dmw::kActionCancelRequestBit));
+        auto invalid = wait_set.value()->set_interest(registration.value(), 1U << 31);
+        assert(!invalid && invalid.error().code() == dmw::ErrorCode::InvalidArgument);
+        const auto request = make_payload(91, 0);
+        assert(client.value()->write_result_request(&request));
+        assert(client.value()->write_cancel_request(&request));
+        const auto ready = wait_set.value()->wait(dmw::WaitTimeout::finite(2s).value());
+        assert(ready && !ready.value().ready().empty());
+        assert(ready.value().ready().front().detail_mask == dmw::kActionCancelRequestBit);
+        ActionPayload raw{};
+        dmw::RequestId id;
+        assert(server.value()->read_cancel_request(&raw, id).value());
+        assert(server.value()->discard_cancel_request(id));
+        auto masked = wait_set.value()->wait(dmw::WaitTimeout::finite(50ms).value());
+        assert(masked && masked.value().ready().empty());
+        assert(wait_set.value()->set_interest(registration.value(), dmw::kActionResultRequestBit));
+        auto restored = wait_set.value()->wait(dmw::WaitTimeout::finite(2s).value());
+        assert(restored && !restored.value().ready().empty());
+        assert(restored.value().ready().front().detail_mask == dmw::kActionResultRequestBit);
+        assert(server.value()->read_result_request(&raw, id).value());
+        assert(server.value()->discard_result_request(id));
+        auto association = server.value()->register_result_request(goal_id, id);
+        assert(!association && association.error().code() == dmw::ErrorCode::NotFound);
+        assert(wait_set.value()->remove(registration.value()));
+        auto stale = wait_set.value()->set_interest(registration.value(), 0);
+        assert(!stale && stale.error().code() == dmw::ErrorCode::NotRegistered);
+    }
+
     // Aggregate readiness: one token, driven by the feedback channel.
     {
         auto wait_set = client_context.value()->create_wait_set();
@@ -323,6 +375,11 @@ int main() {
         assert(readiness && readiness.value().feedback);
         assert(wait_set.value()->remove(registration.value()));
     }
+
+    // Drain the earlier terminal goal so the following test starts without
+    // an existing expiry deadline.
+    std::this_thread::sleep_for(250ms);
+    assert(!server.value()->take_expired_goals().value().empty());
 
     // One ActionServer token reports its own sub-channels, including the
     // logical goal_expired channel that no reader can express.
@@ -354,9 +411,16 @@ int main() {
                        request_id, goal_info, &accepted_payload, dmw::GoalAcceptMode::Execute)
                    .value()
                    .current == dmw::GoalState::Executing);
+        assert(wait_set.value()->set_interest(registration.value(), dmw::kActionGoalExpiredBit));
+        // Start the infinite wait before the terminal transition introduces a
+        // deadline; it must wake and recompute without any DDS traffic.
+        auto expiry_wait = std::async(std::launch::async, [&] {
+            return wait_set.value()->wait(dmw::WaitTimeout::infinite());
+        });
+        std::this_thread::sleep_for(20ms);
         assert(server.value()->update_goal_state(goal_info.goal_id, dmw::GoalEvent::Succeed));
-
-        const auto expired_wait = wait_set.value()->wait(dmw::WaitTimeout::infinite());
+        assert(expiry_wait.wait_for(2s) == std::future_status::ready);
+        const auto expired_wait = expiry_wait.get();
         assert(expired_wait);
         const auto expired_waitable = expired_wait.value().ready().front();
         assert(dmw::action_server_ready_set(expired_waitable.detail_mask).goal_expired);
@@ -371,6 +435,37 @@ int main() {
         assert(expired);
         assert(!server.value()->goal_state(goal_id));
         assert(server.value()->status_snapshot().value().empty());
+    }
+
+    // Serializer exceptions must roll back both the Goal reservation and the
+    // response claim. A subsequent acceptance of the same id must succeed.
+    {
+        const auto request = make_payload(90, 90);
+        assert(client.value()->write_goal_request(&request));
+        ActionPayload raw{};
+        dmw::RequestId request_id;
+        assert(server.value()->read_goal_request(&raw, request_id).value());
+        dmw::GoalInfo info;
+        info.goal_id = goal_id_of(raw);
+        auto accepted = make_payload(90, 1);
+        ActionPayloadType::throw_on_serialize.store(true);
+        auto failed = server.value()->accept_goal(request_id, info, &accepted, dmw::GoalAcceptMode::Execute);
+        assert(!failed && failed.error().code() == dmw::ErrorCode::DDSError);
+        assert(!server.value()->goal_state(info.goal_id));
+        ActionPayloadType::throw_on_size.store(true);
+        bool threw = false;
+        try {
+            (void)server.value()->accept_goal(request_id, info, &accepted, dmw::GoalAcceptMode::Execute);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        assert(threw);
+        assert(!server.value()->goal_state(info.goal_id));
+        assert(server.value()->accept_goal(request_id, info, &accepted, dmw::GoalAcceptMode::Execute));
+        assert(server.value()->update_goal_state(info.goal_id, dmw::GoalEvent::Abort));
+        ActionPayload response{};
+        dmw::RequestId response_id;
+        assert(client.value()->read_goal_response(&response, response_id).value());
     }
 
     assert(server_context.value()->shutdown());

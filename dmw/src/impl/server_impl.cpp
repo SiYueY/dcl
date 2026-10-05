@@ -214,26 +214,78 @@ Result<bool> Server::Impl::read_request(void* request, RequestId& request_id) {
     return Result<bool>::success(false);
 }
 
-Result<void> Server::Impl::write_response(const RequestId& request_id, const void* response) {
-    if (response == nullptr)
-        return Result<void>::failure(
-            Error(ErrorCode::InvalidArgument, "Response must not be null"));
+Result<void> Server::Impl::check_pending_request(const RequestId& request_id) {
+    std::lock_guard lock(pending_mutex_);
+    const auto pending = pending_.find(request_id);
+    if (pending == pending_.end())
+        return Result<void>::failure(Error(ErrorCode::NotFound, "Request is not pending"));
+    if (pending->second.phase == PendingPhase::Responding)
+        return Result<void>::failure(Error(ErrorCode::Busy, "Response is in progress"));
+    return Result<void>::success();
+}
+
+Result<void> Server::Impl::discard_request(const RequestId& request_id) {
     const auto operation = context_->try_acquire_operation();
     if (!operation)
         return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
-    eprosima::fastrtps::rtps::SampleIdentity sample_identity;
+    bool was_full;
     {
         std::lock_guard lock(pending_mutex_);
         const auto pending = pending_.find(request_id);
         if (pending == pending_.end())
-            return Result<void>::failure(
-                Error(ErrorCode::NotFound, "Request is not pending on this Server"));
+            return Result<void>::failure(Error(ErrorCode::NotFound, "Request is not pending"));
         if (pending->second.phase == PendingPhase::Responding)
-            return Result<void>::failure(
-                Error(ErrorCode::Busy, "A response for this request is already in progress"));
-        pending->second.phase = PendingPhase::Responding;
-        sample_identity = pending->second.sample_identity;
+            return Result<void>::failure(Error(ErrorCode::Busy, "Response is in progress"));
+        was_full = pending_.size() + reservations_ == max_pending_requests_;
+        pending_.erase(pending);
     }
+    if (was_full) request_wait_state_->set_blocking_enabled(true);
+    return Result<void>::success();
+}
+
+Result<eprosima::fastrtps::rtps::SampleIdentity> Server::Impl::claim_response(
+    const RequestId& request_id) {
+    using Identity = eprosima::fastrtps::rtps::SampleIdentity;
+    const auto operation = context_->try_acquire_operation();
+    if (!operation)
+        return Result<Identity>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    std::lock_guard lock(pending_mutex_);
+    const auto pending = pending_.find(request_id);
+    if (pending == pending_.end())
+        return Result<Identity>::failure(Error(ErrorCode::NotFound, "Request is not pending"));
+    if (pending->second.phase == PendingPhase::Responding)
+        return Result<Identity>::failure(Error(ErrorCode::Busy, "Response is in progress"));
+    pending->second.phase = PendingPhase::Responding;
+    return Result<Identity>::success(pending->second.sample_identity);
+}
+
+Result<void> Server::Impl::write_response(const RequestId& request_id, const void* response) {
+    if (response == nullptr)
+        return Result<void>::failure(Error(ErrorCode::InvalidArgument, "Response must not be null"));
+    auto claimed = claim_response(request_id);
+    if (!claimed) return Result<void>::failure(std::move(claimed.error()));
+    return write_claimed_response(request_id, claimed.value(), response);
+}
+
+Result<void> Server::Impl::write_claimed_response(
+    const RequestId& request_id,
+    const eprosima::fastrtps::rtps::SampleIdentity& sample_identity, const void* response) {
+    // Restore the claim on every failure, including exceptions before DDS
+    // write. Successful writes erase the entry before this guard runs.
+    struct RestorePending {
+        Impl& owner;
+        const RequestId& id;
+        ~RestorePending() noexcept {
+            std::lock_guard lock(owner.pending_mutex_);
+            const auto found = owner.pending_.find(id);
+            if (found != owner.pending_.end()) found->second.phase = PendingPhase::Pending;
+        }
+    } restore{*this, request_id};
+    if (response == nullptr)
+        return Result<void>::failure(Error(ErrorCode::InvalidArgument, "Response must not be null"));
+    const auto operation = context_->try_acquire_operation();
+    if (!operation)
+        return Result<void>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
 
     const bool has_target_reader = is_reader_guid(sample_identity.writer_guid());
     auto deadline = response_target_deadline(*response_writer_);

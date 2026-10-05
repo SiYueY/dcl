@@ -62,9 +62,7 @@ Result<WaitableRegistration> WaitSet::add(ActionServer& value) {
     auto goal_expired = [weak_goals]() -> std::uint32_t {
         const auto goals = weak_goals.lock();
         if (!goals) return 0;
-        const auto expiry = goals->earliest_expiry();
-        if (!expiry || !expiry.value()) return 0;
-        return std::chrono::steady_clock::now() >= *expiry.value() ? kActionGoalExpiredBit : 0;
+        return goals->expiry_ready() ? kActionGoalExpiredBit : 0;
     };
     auto earliest_expiry = [weak_goals]()
         -> std::optional<std::chrono::steady_clock::time_point> {
@@ -74,6 +72,7 @@ Result<WaitableRegistration> WaitSet::add(ActionServer& value) {
         if (!expiry || !expiry.value()) return std::nullopt;
         return *expiry.value();
     };
+    value.impl_->goals()->observe_expiry(impl_->logical_observer());
     return impl_->add_composite(
         value.impl_->wait_states(), WaitableKind::ActionServer, std::move(goal_expired),
         std::move(earliest_expiry));
@@ -81,6 +80,10 @@ Result<WaitableRegistration> WaitSet::add(ActionServer& value) {
 
 Result<void> WaitSet::remove(WaitableRegistration registration) {
     return impl_->remove(registration);
+}
+
+Result<void> WaitSet::set_interest(WaitableRegistration registration, std::uint32_t detail_mask) {
+    return impl_->set_interest(registration, detail_mask);
 }
 
 Result<WaitResult> WaitSet::wait(WaitTimeout timeout) { return impl_->wait(timeout); }

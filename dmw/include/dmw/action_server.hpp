@@ -53,6 +53,9 @@ public:
 
     Result<bool> read_result_request(void* request, RequestId& request_id);
     Result<void> write_result_response(const RequestId& request_id, const void* response);
+    Result<void> discard_goal_request(const RequestId& request_id);
+    Result<void> discard_cancel_request(const RequestId& request_id);
+    Result<void> discard_result_request(const RequestId& request_id);
 
     Result<void> publish_feedback(const void* feedback);
     Result<void> publish_status(const void* status);

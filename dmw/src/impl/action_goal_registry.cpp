@@ -74,11 +74,14 @@ bool ActionGoalRegistry::expired_locked(
 }
 
 void ActionGoalRegistry::prune_expired_locked(
-    std::chrono::steady_clock::time_point now, std::vector<GoalId>* removed) {
+    std::chrono::steady_clock::time_point now) {
     for (auto entry = goals_.begin(); entry != goals_.end();) {
         if (entry->second.committed && expired_locked(entry->second, now)) {
-            if (removed != nullptr) removed->push_back(entry->first);
+            // Allocation precedes erasure, so even bad_alloc cannot lose an
+            // expiry notification. Earlier removals remain queued for drain.
+            expired_notifications_.push_back(entry->first);
             entry = goals_.erase(entry);
+            notify_expiry_locked();
             continue;
         }
         ++entry;
@@ -119,6 +122,7 @@ Result<GoalTransition> ActionGoalRegistry::update_state(const GoalId& goal_id, G
         transition.became_terminal = true;
         record.terminal_time = std::chrono::steady_clock::now();
         record.expiry_scheduled = true;
+        notify_expiry_locked();
     }
     return Result<GoalTransition>::success(transition);
 }
@@ -156,7 +160,7 @@ Result<CancelSelection> ActionGoalRegistry::select_cancel_goals(
 Result<ResultRequestDisposition> ActionGoalRegistry::register_result_request(
     const GoalId& goal_id, const RequestId& request_id) {
     std::lock_guard lock(mutex_);
-    prune_expired_locked(std::chrono::steady_clock::now(), nullptr);
+    prune_expired_locked(std::chrono::steady_clock::now());
     const auto found = goals_.find(goal_id);
     if (found == goals_.end() || !found->second.committed) {
         return Result<ResultRequestDisposition>::success(ResultRequestDisposition::UnknownGoal);
@@ -165,8 +169,23 @@ Result<ResultRequestDisposition> ActionGoalRegistry::register_result_request(
     if (is_terminal_goal_state(record.state)) {
         return Result<ResultRequestDisposition>::success(ResultRequestDisposition::Terminal);
     }
+    // A RequestId belongs to at most one goal, including repeated registration.
+    for (const auto& entry : goals_) {
+        const auto& requests = entry.second.pending_result_requests;
+        if (std::find(requests.begin(), requests.end(), request_id) != requests.end())
+            return Result<ResultRequestDisposition>::failure(
+                Error(ErrorCode::AlreadyExists, "Result request is already associated"));
+    }
     record.pending_result_requests.push_back(request_id);
     return Result<ResultRequestDisposition>::success(ResultRequestDisposition::Pending);
+}
+
+void ActionGoalRegistry::remove_result_request(const RequestId& request_id) noexcept {
+    std::lock_guard lock(mutex_);
+    for (auto& entry : goals_) {
+        auto& requests = entry.second.pending_result_requests;
+        requests.erase(std::remove(requests.begin(), requests.end(), request_id), requests.end());
+    }
 }
 
 Result<std::vector<RequestId>> ActionGoalRegistry::take_pending_result_requests(
@@ -184,7 +203,7 @@ Result<std::vector<RequestId>> ActionGoalRegistry::take_pending_result_requests(
 
 Result<std::vector<GoalStatusInfo>> ActionGoalRegistry::status_snapshot() {
     std::lock_guard lock(mutex_);
-    prune_expired_locked(std::chrono::steady_clock::now(), nullptr);
+    prune_expired_locked(std::chrono::steady_clock::now());
     std::vector<GoalStatusInfo> snapshot;
     snapshot.reserve(goals_.size());
     for (const auto& entry : goals_) {
@@ -201,9 +220,39 @@ Result<std::vector<GoalStatusInfo>> ActionGoalRegistry::status_snapshot() {
 
 Result<std::vector<GoalId>> ActionGoalRegistry::take_expired_goals() {
     std::lock_guard lock(mutex_);
+    prune_expired_locked(std::chrono::steady_clock::now());
     std::vector<GoalId> expired;
-    prune_expired_locked(std::chrono::steady_clock::now(), &expired);
+    expired.swap(expired_notifications_);
     return Result<std::vector<GoalId>>::success(std::move(expired));
+}
+
+void ActionGoalRegistry::notify_expiry_locked() noexcept {
+    for (auto entry = expiry_observers_.begin(); entry != expiry_observers_.end();) {
+        if (const auto observer = entry->lock()) {
+            observer->wake();
+            ++entry;
+        } else {
+            entry = expiry_observers_.erase(entry);
+        }
+    }
+}
+
+void ActionGoalRegistry::observe_expiry(const std::shared_ptr<LogicalWaitObserver>& observer) {
+    std::lock_guard lock(mutex_);
+    for (const auto& weak : expiry_observers_) {
+        if (weak.lock() == observer) return;
+    }
+    expiry_observers_.push_back(observer);
+}
+
+bool ActionGoalRegistry::expiry_ready() const {
+    std::lock_guard lock(mutex_);
+    if (!expired_notifications_.empty()) return true;
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& entry : goals_) {
+        if (entry.second.committed && expired_locked(entry.second, now)) return true;
+    }
+    return false;
 }
 
 Result<std::optional<std::chrono::steady_clock::time_point>> ActionGoalRegistry::earliest_expiry()

@@ -24,7 +24,9 @@ enum class ErrorCode {
     ParentDestroyed,
     ResourceExhausted,
     DDSError,
-    ContextShutdown
+    ContextShutdown,
+    Interrupted,
+    ProtocolFault
 };
 
 /// Describes an expected DMW failure.

@@ -43,6 +43,7 @@
 #include "impl/client_impl.hpp"
 #include "impl/server_impl.hpp"
 #include "impl/timer_impl.hpp"
+#include "impl/logical_wait_observer.hpp"
 
 namespace dmw {
 
@@ -50,7 +51,15 @@ namespace impl {
 
 inline std::atomic<std::uint64_t> next_wait_set_id{1};
 
-struct WaitSetWake {
+struct WaitSetWake : LogicalWaitObserver {
+    void wake() noexcept override {
+        try {
+            (void)notify();
+        } catch (...) {
+            broken.store(true, std::memory_order_release);
+        }
+    }
+
     Result<void> notify() {
         generation.fetch_add(1, std::memory_order_acq_rel);
         std::lock_guard<std::mutex> lock(mutex);
@@ -138,6 +147,14 @@ struct Registration {
     /// Optional absolute steady deadline that must shorten a native wait.
     std::function<std::optional<std::chrono::steady_clock::time_point>()> runtime_deadline;
     std::atomic<RegistrationPhase> phase{RegistrationPhase::Attached};
+    std::atomic<std::uint32_t> interest{std::numeric_limits<std::uint32_t>::max()};
+    // Serializes condition-vector changes, including capacity callbacks and
+    // concurrent remove/close. Never held while invoking application code.
+    std::mutex conditions_mutex;
+
+    bool reader_interested(std::size_t index) const noexcept {
+        return (interest.load(std::memory_order_acquire) & reader_detail_bit(kind, index)) != 0;
+    }
 
     bool is_closing() const noexcept {
         if (guard) return guard->closing.load(std::memory_order_acquire);
@@ -266,11 +283,11 @@ struct Registration {
         if (graph_event) return graph_event->logically_ready() ? kWaitableReadyBit : 0U;
         std::uint32_t mask = 0;
         for (std::size_t index = 0; index < readers.size(); ++index) {
-            if (!readers[index]->is_ready()) continue;
+            if (!reader_interested(index) || !readers[index]->is_ready()) continue;
             mask |= reader_detail_bit(kind, index);
         }
         if (logical_detail) mask |= logical_detail();
-        return mask;
+        return mask & interest.load(std::memory_order_acquire);
     }
 
 private:
@@ -487,6 +504,33 @@ public:
         return detach(registration);
     }
 
+    Result<void> set_interest(std::uint64_t id, WaitableKind kind, std::uint32_t mask) {
+        std::shared_ptr<Registration> registration;
+        {
+            std::lock_guard lock(mutex_);
+            const auto found = registrations_.find(id);
+            if (found == registrations_.end() || found->second->kind != kind)
+                return Result<void>::failure(Error(ErrorCode::NotRegistered, "Registration is stale"));
+            registration = found->second;
+        }
+        std::lock_guard conditions_lock(registration->conditions_mutex);
+        if (registration->phase.load(std::memory_order_acquire) != RegistrationPhase::Attached)
+            return Result<void>::failure(Error(ErrorCode::NotRegistered, "Registration is stale"));
+        if (kind != WaitableKind::ActionServer)
+            return Result<void>::failure(Error(ErrorCode::Unsupported, "Interest requires ActionServer"));
+        constexpr auto allowed = kActionGoalRequestBit | kActionCancelRequestBit |
+                                 kActionResultRequestBit | kActionGoalExpiredBit;
+        if ((mask & ~allowed) != 0)
+            return Result<void>::failure(Error(ErrorCode::InvalidArgument, "Unknown ActionServer interest bit"));
+        const TopologyMutationGuard topology_mutation(*this);
+        registration->interest.store(mask, std::memory_order_release);
+        for (std::size_t index = 0; index < registration->readers.size(); ++index) {
+            if (!reconcile_reader_condition(*registration, index))
+                return Result<void>::failure(Error(ErrorCode::DDSError, "Interest reconciliation failed"));
+        }
+        return Result<void>::success();
+    }
+
     bool detach(const std::shared_ptr<Registration>& registration) noexcept {
         auto expected = RegistrationPhase::Attached;
         if (!registration->phase.compare_exchange_strong(
@@ -496,6 +540,7 @@ public:
 
         // See add(): the mutation guard wakes a blocking native wait before
         // attempting the detach and prevents it from re-entering early.
+        std::lock_guard conditions_lock(registration->conditions_mutex);
         const TopologyMutationGuard topology_mutation(*this);
 
         if (!registration->release(
@@ -526,32 +571,37 @@ public:
     /// Attach or detach one constituent reader of a registration.  A Server
     /// uses this to drop an unread request reader while its capacity is full.
     void set_reader_blocking(
-        Registration& registration, std::size_t index, bool enabled) noexcept {
+        Registration& registration, std::size_t index, bool /* enabled */) noexcept {
+        std::lock_guard conditions_lock(registration.conditions_mutex);
         if (index >= registration.readers.size() ||
-            registration.phase.load(std::memory_order_acquire) != RegistrationPhase::Attached) {
+            registration.phase.load(std::memory_order_acquire) != RegistrationPhase::Attached)
             return;
-        }
-        const auto& reader = registration.readers[index];
-        if (reader->closing.load(std::memory_order_acquire) || reader->reader == nullptr) return;
-        // Attaching or detaching a reader StatusCondition reconciles the
-        // native WaitSet.  The guard supplies a strict handoff with an
-        // infinite native wait.
         const TopologyMutationGuard topology_mutation(*this);
+        (void)reconcile_reader_condition(registration, index);
+    }
+
+    // Read current capacity and interest rather than a callback's stale value.
+    bool reconcile_reader_condition(Registration& registration, std::size_t index) noexcept {
+        const auto& reader = registration.readers[index];
+        const bool enabled = registration.reader_interested(index) &&
+                             reader->blocking_enabled.load(std::memory_order_acquire) &&
+                             !reader->closing.load(std::memory_order_acquire);
         if (!enabled) {
             auto* condition = registration.reader_conditions[index];
             if (condition != nullptr && !detach_native_condition(*condition)) {
                 std::lock_guard lock(mutex_);
                 poisoned_ = true;
-                return;
+                return false;
             }
             registration.reader_conditions[index] = nullptr;
         } else if (registration.reader_conditions[index] == nullptr) {
             if (attach_single_reader_condition(registration, index) != AttachResult::Attached) {
                 std::lock_guard lock(mutex_);
                 poisoned_ = true;
-                return;
+                return false;
             }
         }
+        return true;
     }
 
     void close() noexcept {
@@ -735,7 +785,8 @@ private:
     AttachResult attach_single_reader_condition(
         Registration& registration, std::size_t index) noexcept {
         const auto& reader = registration.readers[index];
-        if (!reader->blocking_enabled.load(std::memory_order_acquire)) {
+        if (!registration.reader_interested(index) ||
+            !reader->blocking_enabled.load(std::memory_order_acquire)) {
             return AttachResult::Attached;
         }
         std::unique_lock<std::mutex> reader_lock(reader->reader_mutex);
@@ -950,7 +1001,9 @@ public:
         std::function<std::optional<std::chrono::steady_clock::time_point>()> runtime_deadline =
             {});
     Result<void> remove(WaitableRegistration registration);
+    Result<void> set_interest(WaitableRegistration registration, std::uint32_t detail_mask);
     Result<WaitResult> wait(WaitTimeout);
+    std::shared_ptr<impl::LogicalWaitObserver> logical_observer() const { return context_->wake_; }
 
 private:
     std::shared_ptr<impl::WaitSetState> context_;

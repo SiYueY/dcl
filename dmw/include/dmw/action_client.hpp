@@ -5,6 +5,7 @@
 #include <string_view>
 #include <utility>
 
+#include "dmw/availability_wait_token.hpp"
 #include "dmw/action_common.hpp"
 #include "dmw/action_type.hpp"
 #include "dmw/message_info.hpp"
@@ -56,6 +57,9 @@ public:
 
     Result<bool> server_is_available() const;
     Result<bool> wait_for_server(WaitTimeout timeout) const;
+    Result<AvailabilityWaitToken> prepare_availability_wait() const;
+    Result<void> interrupt_waits();
+    Result<bool> wait_for_server(WaitTimeout timeout, const AvailabilityWaitToken& token) const;
 
     /// Current-state readiness observer; a WaitResult snapshot stays
     /// authoritative for one wait() cycle.

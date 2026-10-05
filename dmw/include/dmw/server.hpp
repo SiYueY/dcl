@@ -36,6 +36,9 @@ public:
     /// Respond only to a RequestId currently pending on this Server.
     Result<void> write_response(const RequestId& request_id, const void* response);
 
+    /// Release a pending request without replying. An active write returns Busy.
+    Result<void> discard_request(const RequestId& request_id);
+
     Result<Qos> request_actual_qos() const;
     Result<Qos> response_actual_qos() const;
 

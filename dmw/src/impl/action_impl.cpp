@@ -50,14 +50,12 @@ ActionClient::Impl::Impl(
     const std::weak_ptr<AvailabilityWaitState> weak_state = availability_state_;
     availability_subscription_ = context_->discovery_graph()->subscribe([weak_state](std::uint64_t) {
         if (const auto state = weak_state.lock()) {
-            state->revision.fetch_add(1, std::memory_order_release);
-            state->cv.notify_all();
+            state->notify_revision();
         }
     });
     shutdown_callback_id_ = context_->register_shutdown_callback([weak_state] {
         if (const auto state = weak_state.lock()) {
-            state->revision.fetch_add(1, std::memory_order_release);
-            state->cv.notify_all();
+            state->notify_revision();
         }
     });
 }
@@ -116,37 +114,60 @@ Result<bool> ActionClient::Impl::check_availability() const {
 
 Result<bool> ActionClient::Impl::server_is_available() const { return check_availability(); }
 
+Result<AvailabilityWaitToken> ActionClient::Impl::prepare_availability_wait() const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<AvailabilityWaitToken>::failure(
+            Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
+    return Result<AvailabilityWaitToken>::success(availability_state_->prepare());
+}
+
+Result<void> ActionClient::Impl::interrupt_waits() {
+    availability_state_->interrupt();
+    return Result<void>::success();
+}
+
 Result<bool> ActionClient::Impl::wait_for_server(WaitTimeout timeout) const {
+    auto token = prepare_availability_wait();
+    if (!token) return Result<bool>::failure(std::move(token.error()));
+    return wait_for_server(timeout, token.value());
+}
+
+Result<bool> ActionClient::Impl::wait_for_server(
+    WaitTimeout timeout, const AvailabilityWaitToken& token) const {
+    const auto operation = context_->try_acquire_operation();
+    if (!operation) {
+        return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
+    const auto state = availability_state_;
+    if (!state->owns(token)) {
+        return Result<bool>::failure(
+            Error(ErrorCode::InvalidArgument, "Availability token belongs to another endpoint"));
+    }
     const auto deadline = impl::steady_deadline(timeout);
-    auto observed = availability_state_->revision.load(std::memory_order_acquire);
+    std::unique_lock lock(state->mutex);
     while (true) {
         if (context_->is_shutdown()) {
-            return Result<bool>::failure(
-                Error(ErrorCode::ContextShutdown, "Context is shut down"));
+            return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
         }
+        if (state->interrupted(token)) {
+            return Result<bool>::failure(Error(ErrorCode::Interrupted, "Availability wait interrupted"));
+        }
+        const auto observed_revision = state->revision;
         auto available = check_availability();
-        if (!available) return Result<bool>::failure(std::move(available.error()));
-        if (available.value()) return Result<bool>::success(true);
-        if (timeout.kind() == WaitTimeout::Kind::Poll) return Result<bool>::success(false);
-        std::unique_lock lock(availability_state_->mutex);
-        const auto current = availability_state_->revision.load(std::memory_order_acquire);
-        if (current != observed) {
-            observed = current;
-            continue;
+        if (!available || available.value() || timeout.kind() == WaitTimeout::Kind::Poll) {
+            return available;
         }
-        // Discovery revision changes and Context shutdown both wake this wait;
-        // the loop re-evaluates availability against the original deadline.
-        const auto changed = [this, observed] {
-            return availability_state_->revision.load(std::memory_order_acquire) != observed;
+        const auto changed = [&] {
+            return context_->is_shutdown() || state->interrupted(token) ||
+                   state->revision != observed_revision;
         };
         if (timeout.kind() == WaitTimeout::Kind::Finite) {
-            if (!availability_state_->cv.wait_until(lock, deadline, changed)) {
-                return Result<bool>::success(false);
-            }
+            if (!state->cv.wait_until(lock, deadline, changed)) return Result<bool>::success(false);
         } else {
-            availability_state_->cv.wait(lock, changed);
+            state->cv.wait(lock, changed);
         }
-        observed = availability_state_->revision.load(std::memory_order_acquire);
     }
 }
 
@@ -215,7 +236,32 @@ Result<bool> ActionServer::Impl::read_result_request(void* request, RequestId& r
 
 Result<void> ActionServer::Impl::write_result_response(
     const RequestId& request_id, const void* response) {
-    return result_server_->write_response(request_id, response);
+    if (response == nullptr)
+        return Result<void>::failure(Error(ErrorCode::InvalidArgument, "Response must not be null"));
+    auto claimed = [&] {
+        std::lock_guard lock(result_coordination_mutex_);
+        auto claim = result_server_->impl_->claim_response(request_id);
+        if (claim) goals_->remove_result_request(request_id);
+        return claim;
+    }();
+    if (!claimed) return Result<void>::failure(std::move(claimed.error()));
+    return result_server_->impl_->write_claimed_response(request_id, claimed.value(), response);
+}
+
+Result<void> ActionServer::Impl::discard_goal_request(const RequestId& request_id) {
+    return goal_server_->discard_request(request_id);
+}
+
+Result<void> ActionServer::Impl::discard_cancel_request(const RequestId& request_id) {
+    return cancel_server_->discard_request(request_id);
+}
+
+Result<void> ActionServer::Impl::discard_result_request(const RequestId& request_id) {
+    std::lock_guard lock(result_coordination_mutex_);
+    auto discarded = result_server_->discard_request(request_id);
+    if (discarded || discarded.error().code() == ErrorCode::NotFound)
+        goals_->remove_result_request(request_id);
+    return discarded;
 }
 
 Result<void> ActionServer::Impl::publish_feedback(const void* feedback) {
@@ -240,16 +286,23 @@ Result<GoalTransition> ActionServer::Impl::accept_goal(
         return Result<GoalTransition>::failure(
             Error(ErrorCode::AlreadyExists, "Goal is already accepted"));
     }
+    struct ReservationRollback {
+        impl::ActionGoalRegistry& registry;
+        const GoalId& id;
+        bool committed{false};
+        ~ReservationRollback() noexcept {
+            if (!committed) registry.rollback_reservation(id);
+        }
+    } rollback{*goals_, goal_info.goal_id};
     auto written = goal_server_->write_response(request_id, accepted_response);
     if (!written) {
-        goals_->rollback_reservation(goal_info.goal_id);
         return Result<GoalTransition>::failure(std::move(written.error()));
     }
     if (!goals_->commit(goal_info, mode)) {
-        goals_->rollback_reservation(goal_info.goal_id);
         return Result<GoalTransition>::failure(
-            Error(ErrorCode::InvalidState, "Goal reservation was lost before commit"));
+            Error(ErrorCode::ProtocolFault, "Goal reservation was lost after response commit"));
     }
+    rollback.committed = true;
     GoalTransition transition;
     transition.previous = GoalState::Unknown;
     transition.current =
@@ -297,6 +350,9 @@ Result<ResultRequestDisposition> ActionServer::Impl::register_result_request(
         return Result<ResultRequestDisposition>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
+    std::lock_guard lock(result_coordination_mutex_);
+    auto pending = result_server_->impl_->check_pending_request(request_id);
+    if (!pending) return Result<ResultRequestDisposition>::failure(std::move(pending.error()));
     return goals_->register_result_request(goal_id, request_id);
 }
 
@@ -307,6 +363,7 @@ Result<std::vector<RequestId>> ActionServer::Impl::take_pending_result_requests(
         return Result<std::vector<RequestId>>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
+    std::lock_guard lock(result_coordination_mutex_);
     return goals_->take_pending_result_requests(goal_id);
 }
 
@@ -338,10 +395,7 @@ Result<ActionServerReadySet> ActionServer::Impl::readiness() const {
     ready.goal_request = goal_server_->impl_->wait_state()->is_ready();
     ready.cancel_request = cancel_server_->impl_->wait_state()->is_ready();
     ready.result_request = result_server_->impl_->wait_state()->is_ready();
-    const auto expiry = goals_->earliest_expiry();
-    if (expiry && expiry.value().has_value()) {
-        ready.goal_expired = std::chrono::steady_clock::now() >= *expiry.value();
-    }
+    ready.goal_expired = goals_->expiry_ready();
     return Result<ActionServerReadySet>::success(ready);
 }
 
@@ -381,6 +435,14 @@ Result<bool> ActionClient::read_status(void* status, MessageInfo& info) {
     return impl_->read_status(status, info);
 }
 Result<bool> ActionClient::server_is_available() const { return impl_->server_is_available(); }
+Result<AvailabilityWaitToken> ActionClient::prepare_availability_wait() const {
+    return impl_->prepare_availability_wait();
+}
+Result<void> ActionClient::interrupt_waits() { return impl_->interrupt_waits(); }
+Result<bool> ActionClient::wait_for_server(
+    WaitTimeout timeout, const AvailabilityWaitToken& token) const {
+    return impl_->wait_for_server(timeout, token);
+}
 Result<bool> ActionClient::wait_for_server(WaitTimeout timeout) const {
     return impl_->wait_for_server(timeout);
 }
@@ -410,6 +472,15 @@ Result<bool> ActionServer::read_result_request(void* request, RequestId& request
 Result<void> ActionServer::write_result_response(
     const RequestId& request_id, const void* response) {
     return impl_->write_result_response(request_id, response);
+}
+Result<void> ActionServer::discard_goal_request(const RequestId& request_id) {
+    return impl_->discard_goal_request(request_id);
+}
+Result<void> ActionServer::discard_cancel_request(const RequestId& request_id) {
+    return impl_->discard_cancel_request(request_id);
+}
+Result<void> ActionServer::discard_result_request(const RequestId& request_id) {
+    return impl_->discard_result_request(request_id);
 }
 Result<void> ActionServer::publish_feedback(const void* feedback) {
     return impl_->publish_feedback(feedback);

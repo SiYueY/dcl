@@ -52,6 +52,10 @@ public:
     /// Remove a registration created by this WaitSet.
     Result<void> remove(WaitableRegistration registration);
 
+    /// Select ActionServer sub-channels. Suppressed readers are detached from
+    /// the native wait; masks do not consume their unread samples.
+    Result<void> set_interest(WaitableRegistration registration, std::uint32_t detail_mask);
+
     /// Wait for a non-empty readiness snapshot or a non-error timeout result.
     Result<WaitResult> wait(WaitTimeout timeout);
 

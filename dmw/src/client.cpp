@@ -22,6 +22,14 @@ Result<bool> Client::read_response(void* response, RequestId& request_id) {
 
 Result<bool> Client::service_is_available() const { return impl_->service_is_available(); }
 
+Result<AvailabilityWaitToken> Client::prepare_availability_wait() const {
+    return impl_->prepare_availability_wait();
+}
+Result<void> Client::interrupt_waits() { return impl_->interrupt_waits(); }
+Result<bool> Client::wait_for_service(
+    WaitTimeout timeout, const AvailabilityWaitToken& token) const {
+    return impl_->wait_for_service(timeout, token);
+}
 Result<bool> Client::wait_for_service(WaitTimeout timeout) const {
     return impl_->wait_for_service(timeout);
 }

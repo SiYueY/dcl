@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <future>
 #include <thread>
 
 #include "fastdds/dds/topic/TopicDataType.hpp"
@@ -137,6 +138,45 @@ int main() {
     assert(response_received);
     assert(client_response == response);
     assert(response_id == written.value());
+
+    // Discard removes the local request without producing a response. The
+    // same identity must subsequently be unknown for both write and discard.
+    assert(client.value()->write_request(&request));
+    taken = false;
+    for (int attempt = 0; attempt < 2000 && !taken; ++attempt) {
+        auto read = server.value()->read_request(&received, request_id);
+        assert(read);
+        taken = read.value();
+        if (!taken) std::this_thread::sleep_for(2ms);
+    }
+    assert(taken);
+    assert(server.value()->discard_request(request_id));
+    auto discarded_again = server.value()->discard_request(request_id);
+    assert(!discarded_again && discarded_again.error().code() == dmw::ErrorCode::NotFound);
+    auto discarded_response = server.value()->write_response(request_id, &response);
+    assert(!discarded_response && discarded_response.error().code() == dmw::ErrorCode::NotFound);
+    assert(!client.value()->read_response(&client_response, response_id).value());
+
+    auto missing = node.value()->create_client(service_type, "/missing_service", dmw::Qos{});
+    assert(missing);
+    // Interrupt after admission but before entering native wait: no lost edge.
+    const auto token = missing.value()->prepare_availability_wait();
+    assert(token);
+    assert(missing.value()->interrupt_waits());
+    auto interrupted = missing.value()->wait_for_service(dmw::WaitTimeout::infinite(), token.value());
+    assert(!interrupted && interrupted.error().code() == dmw::ErrorCode::Interrupted);
+    auto wrong_endpoint = client.value()->wait_for_service(dmw::WaitTimeout::poll(), token.value());
+    assert(!wrong_endpoint && wrong_endpoint.error().code() == dmw::ErrorCode::InvalidArgument);
+    const auto next_token = missing.value()->prepare_availability_wait();
+    assert(next_token);
+    auto waiting = std::async(std::launch::async, [&] {
+        return missing.value()->wait_for_service(dmw::WaitTimeout::infinite(), next_token.value());
+    });
+    assert(missing.value()->interrupt_waits());
+    assert(waiting.wait_for(2s) == std::future_status::ready);
+    interrupted = waiting.get();
+    assert(!interrupted && interrupted.error().code() == dmw::ErrorCode::Interrupted);
+    assert(!missing.value()->wait_for_service(dmw::WaitTimeout::poll()).value());
 
     assert(context.value()->shutdown());
     const auto after_shutdown = server.value()->write_response(request_id, &response);

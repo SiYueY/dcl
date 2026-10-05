@@ -59,7 +59,7 @@ if(DMW_RMW_GID_SIZE STREQUAL "")
 endif()
 message(STATUS "DMW graph metadata rmw Gid size: ${DMW_RMW_GID_SIZE}")
 
-add_library(dmw
+add_library(dmw SHARED
     src/context.cpp
     src/arguments.cpp
     src/clock.cpp
@@ -92,6 +92,7 @@ add_library(dmw
     src/impl/wait_set_impl.cpp
 )
 add_library(dmw::dmw ALIAS dmw)
+set_target_properties(dmw PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
 
 # The Fast DDS binding is opt-in: ordinary consumers only need dmw::dmw,
 # while generated TopicDataType users link this target before including the

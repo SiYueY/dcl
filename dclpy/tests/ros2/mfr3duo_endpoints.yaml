@@ -1,0 +1,35 @@
+# Frozen from mfr3duo_ros2 source, not from intended API names.
+# launch/control.launch.py starts these controllers without a namespace.
+profile: humble
+runtime_mode: ROS2
+state:
+  topic: /tmr_controller/odom
+  type: nav_msgs/msg/Odometry
+  qos: {history: keep_last, depth: 10, reliability: reliable, durability: volatile}
+  source: mfr3duo_ros2/mfr3duo_control/src/tmr_controller.cpp
+  configuration: mfr3duo_ros2/mfr3duo_control/config/controllers.yaml
+# rclcpp_action::create_server is called with default rcl_action options.
+# Values verified by rcl_action_server_get_default_options in Humble:
+action_qos:
+  goal: &rpc {history: keep_last, depth: 10, reliability: reliable, durability: volatile}
+  cancel: *rpc
+  result: *rpc
+  feedback: *rpc
+  status: {history: keep_last, depth: 1, reliability: reliable, durability: transient_local}
+actions:
+  - {name: /left_gripper_controller/move, type: mfr3duo_msgs/action/Move}
+  - {name: /right_gripper_controller/move, type: mfr3duo_msgs/action/Move}
+  - {name: /left_gripper_controller/grasp, type: mfr3duo_msgs/action/Grasp}
+  - {name: /right_gripper_controller/grasp, type: mfr3duo_msgs/action/Grasp}
+action_source: mfr3duo_ros2/mfr3duo_control/src/gripper_controller.cpp
+interfaces:
+  source: mfr3duo_ros2/mfr3duo_msgs
+  Move:
+    goal: {width: float64, speed: float64}
+    result: {success: bool, error: string}
+    feedback: {current_width: float64}
+  Grasp:
+    goal: {width: float64, epsilon: GraspEpsilon, speed: float64, force: float64}
+    result: {success: bool, error: string}
+    feedback: {current_width: float64}
+  GraspEpsilon: {inner: float64, outer: float64}

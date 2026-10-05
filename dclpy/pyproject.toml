@@ -1,0 +1,18 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=3.0,<4"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "dclpy"
+version = "0.1.0"
+description = "Python client library for the DMW DDS runtime"
+requires-python = ">=3.10,<3.14"
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.23", "PyYAML>=6"]
+
+[tool.scikit-build]
+cmake.build-type = "Release"
+wheel.packages = ["dclpy"]
+build-dir = "build/{wheel_tag}"
+sdist.include = ["dclpy/**", "src/_dclpy/**", "include/**", "cmake/**", "tools/**", "tests/**"]
