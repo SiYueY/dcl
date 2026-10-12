@@ -20,7 +20,7 @@
 #include "dclpy/interface_binding.h"
 #include "dmw/fastdds/message_type.hpp"
 
-namespace dclpy::provider {
+namespace dclpy {
 namespace py = pybind11;
 
 template<class Binding>
@@ -227,6 +227,6 @@ struct ActionAdapter {
     }
 };
 
-}  // namespace dclpy::provider
+}  // namespace dclpy
 
 #endif  // DCLPY_ROSIDL_PROVIDER_ROSIDL_PROVIDER_HPP_

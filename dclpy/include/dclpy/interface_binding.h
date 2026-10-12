@@ -8,6 +8,8 @@
 #include "dmw/message_type.hpp"
 #include "dmw/service_type.hpp"
 
+namespace dclpy {
+
 inline constexpr std::uint32_t DCLPY_INTERFACE_BINDING_ABI = 1;
 
 struct DclpyBindingHeaderV1 {
@@ -61,5 +63,7 @@ struct DclpyActionBindingV1 {
     const DclpyMessageBindingV1* feedback_message;
     const DclpyMessageBindingV1* status_message;
 };
+
+}  // namespace dclpy
 
 #endif  // DCLPY_INTERFACE_BINDING_H_

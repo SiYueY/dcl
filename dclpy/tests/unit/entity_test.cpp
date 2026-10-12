@@ -8,7 +8,7 @@
 #include "entity.hpp"
 
 using namespace std::chrono_literals;
-using namespace dclpy::detail;
+using namespace dclpy;
 
 struct Resource {
     explicit Resource(std::atomic<unsigned>& destroyed) : destroyed(destroyed) {}

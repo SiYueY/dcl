@@ -123,7 +123,7 @@ def emit_package(package: Package, destination: Path) -> None:
            '#include "dclpy/rosidl_provider.hpp"',
            '#include "dclpy/field.hpp"']
     cpp += [f"#include <{include}>" for include in sorted(package.includes)]
-    cpp += ["namespace py = pybind11;", "using namespace dclpy::provider;"]
+    cpp += ["namespace py = pybind11;"]
     for message in package.messages.values():
         typename = message.structure.namespaced_type
         package_name, group = typename.namespaces
@@ -156,14 +156,14 @@ def emit_package(package: Package, destination: Path) -> None:
         cpp += ["for (const auto& item : kwargs) {", "auto key = py::cast<std::string>(item.first);",
                 f'if (!({allowed})) throw py::type_error("Unknown message field: " + key);', "}"]
         for member in message.structure.members:
-            cpp += [f'if (kwargs.contains("{member.name}")) assign(*sample, &{typ}::{member.name}, '
+            cpp += [f'if (kwargs.contains("{member.name}")) dclpy::assign(*sample, &{typ}::{member.name}, '
                     f'kwargs["{member.name}"], {field_rules(member.type)});']
         cpp += ["return sample; }));"]
         for member in message.structure.members:
-            cpp += [f'field({cls}, "{member.name}", &{typ}::{member.name}, {field_rules(member.type)});']
+            cpp += [f'dclpy::field({cls}, "{member.name}", &{typ}::{member.name}, {field_rules(member.type)});']
         for constant in message.constants:
             cpp += [f'{cls}.attr("{constant.name}") = py::cast({typ}::{constant.name});']
-        cpp += [f'auto* {var}_binding = MessageAdapter<{typ}, {var}_tag>::initialize("{qualified(typename)}");',
+        cpp += [f'auto* {var}_binding = dclpy::MessageAdapter<{typ}, {var}_tag>::initialize("{qualified(typename)}");',
                 f'{cls}.attr("__dclpy_message_binding__") = py::capsule({var}_binding, "dclpy.MessageBindingV1");']
     for service in package.services.values():
         typename = service.namespaced_type
@@ -174,7 +174,7 @@ def emit_package(package: Package, destination: Path) -> None:
         cpp += [f'auto {var}_class = py::class_<{typ}>(module, "{typename.name}");',
                 f'{var}_class.attr("Request") = {request}_class;',
                 f'{var}_class.attr("Response") = {response}_class;',
-                f'auto* {var}_binding = ServiceAdapter<{typ}>::initialize("{qualified(typename)}", '
+                f'auto* {var}_binding = dclpy::ServiceAdapter<{typ}>::initialize("{qualified(typename)}", '
                 f'{request}_binding, {response}_binding);',
                 f'{var}_class.attr("__dclpy_service_binding__") = py::capsule({var}_binding, "dclpy.ServiceBindingV1");']
     for action in package.actions:
@@ -196,7 +196,7 @@ def emit_package(package: Package, destination: Path) -> None:
                 f'{var}_impl.attr("CancelGoalService") = dep_action_msgs.attr("srv").attr("CancelGoal");',
                 f'{var}_impl.attr("FeedbackMessage") = {feedback_message}_class;',
                 f'{var}_impl.attr("GoalStatusMessage") = dep_action_msgs.attr("msg").attr("GoalStatusArray");',
-                f'auto* {var}_binding = ActionAdapter<{typ}>::initialize("{qualified(typename)}", '
+                f'auto* {var}_binding = dclpy::ActionAdapter<{typ}>::initialize("{qualified(typename)}", '
                 f'{goal}_binding, {result}_binding, {feedback}_binding, {send}_binding, '
                 f'{foreign_binding(cancel_type, "Service")}, {get}_binding, {feedback_message}_binding, '
                 f'{foreign_binding(status_type, "Message")});',

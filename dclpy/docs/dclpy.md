@@ -6,7 +6,7 @@
 | 模块 | DCLPY — DDS Client Library for Python |
 | Python package | `dclpy` |
 | Python C++ extension | `_dclpy` |
-| Binding implementation | `src/_dclpy/` |
+| Binding implementation | `src/` |
 | 下层 runtime | `dmw` |
 | DDS backend | Fast DDS |
 | C++ 标准 | C++17 |
@@ -693,24 +693,41 @@ dclpy/
 │   └── dclpy/
 │       └── interface_binding.h
 │
-├── src/_dclpy/
-│   ├── module.cpp
-│   ├── context.cpp
-│   ├── node.cpp
-│   ├── entity.cpp
-│   ├── publisher.cpp
-│   ├── subscription.cpp
-│   ├── client.cpp
-│   ├── service.cpp
-│   ├── timer.cpp
+├── src/
 │   ├── action.cpp
-│   ├── wait_set.cpp
-│   ├── graph.cpp
-│   ├── parameter.cpp
-│   ├── qos.cpp
-│   ├── type_support.cpp
+│   ├── action.hpp
+│   ├── action_io.hpp
+│   ├── binding_registry.hpp
+│   ├── build_info.cpp
+│   ├── context.cpp
+│   ├── context.hpp
+│   ├── entity.cpp
+│   ├── entity.hpp
 │   ├── error.cpp
-│   └── build_info.cpp
+│   ├── error.hpp
+│   ├── graph.cpp
+│   ├── graph.hpp
+│   ├── module.cpp
+│   ├── module.hpp
+│   ├── native_io.cpp
+│   ├── native_io.hpp
+│   ├── native_io_bind.cpp
+│   ├── parameter.cpp
+│   ├── publisher.cpp
+│   ├── qos.cpp
+│   ├── service.hpp
+│   ├── service_bind.cpp
+│   ├── service_io.hpp
+│   ├── subscription.cpp
+│   ├── timer.cpp
+│   ├── timer.hpp
+│   ├── topic.hpp
+│   ├── type_support.cpp
+│   ├── type_support.hpp
+│   ├── wait_set.cpp
+│   ├── wait_set.hpp
+│   ├── wait_set_bind.cpp
+│   └── waitable.hpp
 │
 ├── tools/
 │   └── interface_generator/
@@ -721,13 +738,11 @@ dclpy/
     └── ros2/
 ```
 
-`dclpy/`是可直接导入的 Python package；`src/_dclpy/`只保存 `_dclpy`
+`dclpy/`是可直接导入的 Python package；`src/`只保存 `_dclpy`
 扩展的 C++ 实现。`include/dclpy/`保存供生成接口扩展使用的稳定 ABI 头，三者
 均不再使用 `binding/` 作为目录层级。
 
-对应的 C++ namespace 固定为：`src/_dclpy/`中的实现使用
-`dclpy::detail`；`include/dclpy/`根层的 ABI 支持使用 `dclpy`；生成接口扩展
-使用 `dclpy::provider`。不保留 `dclpy::binding` 兼容别名。
+C++ 实现、公共绑定接口与生成接口扩展统一使用 `namespace dclpy`；不引入额外子命名空间或旧命名空间兼容别名。
 
 ---
 
@@ -5067,7 +5082,7 @@ Grasp Action
 8. Python 3.12为第一目标。
 9. cp310～cp313分别构建。
 10. V1不用abi3。
-11. `src/_dclpy/`为C++ binding目录。
+11. `src/`为C++ binding目录。
 12. Core和interface extension共享同一`libdmw.so`。
 13. Fast DDS patch不由Humble字符串锁死。
 14. Action expiry通知必须先在DMW修复。

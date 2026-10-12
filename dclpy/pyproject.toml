@@ -15,4 +15,4 @@ test = ["pytest>=8", "pytest-asyncio>=0.23", "PyYAML>=6"]
 cmake.build-type = "Release"
 wheel.packages = ["dclpy"]
 build-dir = "build/{wheel_tag}"
-sdist.include = ["dclpy/**", "src/_dclpy/**", "include/**", "cmake/**", "tools/**", "tests/**"]
+sdist.include = ["dclpy/**", "src/**", "include/**", "cmake/**", "tools/**", "tests/**"]

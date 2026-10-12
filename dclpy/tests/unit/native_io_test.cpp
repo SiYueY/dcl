@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-using namespace dclpy::detail;
+using namespace dclpy;
 namespace {
 class FaultJob final : public NativeJob {
 public:

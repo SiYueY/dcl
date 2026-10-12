@@ -21,11 +21,11 @@ set(DCLPY_MFR3DUO_INTERFACE_PREFIX "" CACHE PATH
 set(DCLPY_ROS_INTERFACE_PREFIX "/opt/ros/humble" CACHE PATH
     "ROS 2 Humble prefix containing standard ROSIDL packages for provider generation")
 
-pybind11_add_module(_dclpy NO_EXTRAS src/_dclpy/module.cpp src/_dclpy/error.cpp src/_dclpy/parameter.cpp src/_dclpy/type_support.cpp
-    src/_dclpy/context.cpp src/_dclpy/qos.cpp src/_dclpy/entity.cpp src/_dclpy/build_info.cpp
-    src/_dclpy/publisher.cpp src/_dclpy/subscription.cpp src/_dclpy/wait_set.cpp src/_dclpy/wait_set_bind.cpp src/_dclpy/native_io.cpp src/_dclpy/native_io_bind.cpp src/_dclpy/service_bind.cpp src/_dclpy/timer.cpp src/_dclpy/graph.cpp src/_dclpy/action.cpp)
+pybind11_add_module(_dclpy NO_EXTRAS src/module.cpp src/error.cpp src/parameter.cpp src/type_support.cpp
+    src/context.cpp src/qos.cpp src/entity.cpp src/build_info.cpp
+    src/publisher.cpp src/subscription.cpp src/wait_set.cpp src/wait_set_bind.cpp src/native_io.cpp src/native_io_bind.cpp src/service_bind.cpp src/timer.cpp src/graph.cpp src/action.cpp)
 target_link_libraries(_dclpy PRIVATE dmw::dmw dmw::fastdds_binding)
-target_include_directories(_dclpy PRIVATE include src/_dclpy)
+target_include_directories(_dclpy PRIVATE include src)
 target_compile_features(_dclpy PRIVATE cxx_std_17)
 target_compile_options(_dclpy PRIVATE -Wall -Wextra -Wpedantic -Werror)
 target_compile_definitions(_dclpy PRIVATE
@@ -98,7 +98,7 @@ if(DCLPY_BUILD_TESTS)
     enable_testing()
     find_package(Threads REQUIRED)
     add_executable(dclpy_entity_test tests/unit/entity_test.cpp)
-    target_include_directories(dclpy_entity_test PRIVATE src/_dclpy)
+    target_include_directories(dclpy_entity_test PRIVATE src)
     target_link_libraries(dclpy_entity_test PRIVATE dmw::dmw Threads::Threads)
     target_compile_features(dclpy_entity_test PRIVATE cxx_std_17)
     target_compile_options(dclpy_entity_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
@@ -106,8 +106,8 @@ if(DCLPY_BUILD_TESTS)
     set_tests_properties(dclpy.entity PROPERTIES TIMEOUT 20)
     if(DCLPY_ENABLE_DDS_TESTS)
         add_executable(dclpy_native_io_test tests/unit/native_io_test.cpp
-            src/_dclpy/native_io.cpp src/_dclpy/wait_set.cpp)
-        target_include_directories(dclpy_native_io_test PRIVATE src/_dclpy include ${Python_INCLUDE_DIRS})
+            src/native_io.cpp src/wait_set.cpp)
+        target_include_directories(dclpy_native_io_test PRIVATE src include ${Python_INCLUDE_DIRS})
         target_link_libraries(dclpy_native_io_test PRIVATE dmw::dmw Threads::Threads)
         set_target_properties(dclpy_native_io_test PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN TRUE)
         target_compile_features(dclpy_native_io_test PRIVATE cxx_std_17)

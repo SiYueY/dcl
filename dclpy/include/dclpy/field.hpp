@@ -10,7 +10,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace dclpy::provider {
+namespace dclpy {
 namespace py = pybind11;
 
 struct FieldRules {
@@ -128,6 +128,6 @@ void field(py::class_<Message>& type, const char* name, Field Message::* member,
         [member, rules](Message& message, py::handle value) { assign(message, member, value, rules); });
 }
 
-}  // namespace dclpy::provider
+}  // namespace dclpy
 
 #endif  // DCLPY_ROSIDL_PROVIDER_FIELD_HPP_
