@@ -13,6 +13,7 @@
 #include "fastdds/dds/topic/TopicDataType.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/set_bool.hpp"
+#include "std_srvs/srv/detail/set_bool__rosidl_typesupport_fastrtps_cpp.hpp"
 
 #include "dmw/client.hpp"
 #include "dmw/context.hpp"
@@ -50,27 +51,17 @@ std::uint32_t ros_domain_id() {
 }
 
 template <typename Message>
-struct CdrTraits;
+struct CdrTraits {
+    static bool serialize(eprosima::fastcdr::Cdr& cdr, const Message& message) {
+        return std_srvs::srv::typesupport_fastrtps_cpp::cdr_serialize(message, cdr);
+    }
 
-template <>
-struct CdrTraits<Request> {
-    static void serialize(eprosima::fastcdr::Cdr& cdr, const Request& message) {
-        cdr << message.data;
+    static bool deserialize(eprosima::fastcdr::Cdr& cdr, Message& message) {
+        return std_srvs::srv::typesupport_fastrtps_cpp::cdr_deserialize(cdr, message);
     }
-    static void deserialize(eprosima::fastcdr::Cdr& cdr, Request& message) {
-        cdr >> message.data;
-    }
-};
 
-template <>
-struct CdrTraits<Response> {
-    static void serialize(eprosima::fastcdr::Cdr& cdr, const Response& message) {
-        cdr << message.success;
-        cdr << message.message;
-    }
-    static void deserialize(eprosima::fastcdr::Cdr& cdr, Response& message) {
-        cdr >> message.success;
-        cdr >> message.message;
+    static std::size_t serialized_size(const Message& message) {
+        return std_srvs::srv::typesupport_fastrtps_cpp::get_serialized_size(message, 0U);
     }
 };
 
@@ -89,7 +80,7 @@ public:
         eprosima::fastcdr::Cdr cdr(
             buffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, kRosCdrVersion);
         cdr.serialize_encapsulation();
-        CdrTraits<Message>::serialize(cdr, *static_cast<Message*>(data));
+        if (!CdrTraits<Message>::serialize(cdr, *static_cast<Message*>(data))) return false;
 #if FASTCDR_VERSION_MAJOR >= 2
         payload->length = static_cast<std::uint32_t>(cdr.get_serialized_data_length());
 #else
@@ -105,12 +96,12 @@ public:
         eprosima::fastcdr::Cdr cdr(
             buffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, kRosCdrVersion);
         cdr.read_encapsulation();
-        CdrTraits<Message>::deserialize(cdr, *static_cast<Message*>(data));
-        return true;
+        return CdrTraits<Message>::deserialize(cdr, *static_cast<Message*>(data));
     }
 
-    std::function<std::uint32_t()> getSerializedSizeProvider(void*) override {
-        return [] { return 512U; };
+    std::function<std::uint32_t()> getSerializedSizeProvider(void* data) override {
+        const auto size = CdrTraits<Message>::serialized_size(*static_cast<Message*>(data));
+        return [size] { return static_cast<std::uint32_t>(size + 4U); };
     }
 
     void* createData() override { return new Message(); }

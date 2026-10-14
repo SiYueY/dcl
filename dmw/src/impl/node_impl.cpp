@@ -425,7 +425,8 @@ Result<std::unique_ptr<Client>> Node::Impl::create_client(
     auto request_state = std::make_shared<impl::RequestState>(
         impl_->context_->discovery_graph(), request_topic_name,
         std::string(type.request_type().type_name()), response_topic_name,
-        std::string(type.response_type().type_name()));
+        std::string(type.response_type().type_name()),
+        impl_->context_->runtime_mode() == RuntimeMode::ROS2);
     auto request_listener =
         std::make_unique<impl::RequestWriterListener>(std::weak_ptr(request_state));
     auto response_listener =

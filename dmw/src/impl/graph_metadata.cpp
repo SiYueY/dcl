@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -168,6 +169,8 @@ public:
 
     void on_data_available(eprosima::fastdds::dds::DataReader* reader) override {
         (void)reader;
+        if (!enter_callback()) return;
+        CallbackGuard guard(*this);
         if (!active_.load(std::memory_order_acquire)) return;
         if (on_data_) on_data_();
     }
@@ -179,9 +182,17 @@ public:
         eprosima::fastdds::dds::DataReader* reader,
         const eprosima::fastdds::dds::SubscriptionMatchedStatus& status) override {
         if (status.current_count_change <= 0) return;
+        if (!enter_callback()) return;
+        CallbackGuard guard(*this);
         if (!active_.load(std::memory_order_acquire)) return;
         (void)reader;
         if (on_data_) on_data_();
+    }
+
+    /// Wait until every callback that entered before this call has returned.
+    void wait_until_idle() noexcept {
+        std::unique_lock lock(mutex_);
+        cv_.wait(lock, [this] { return in_flight_ == 0; });
     }
 
     /// Drain the reader into the graph.  Serialized by the transport mutex.
@@ -232,6 +243,30 @@ public:
     }
 
 private:
+    class CallbackGuard {
+    public:
+        explicit CallbackGuard(GraphMetadataListener& owner) noexcept : owner_(owner) {}
+        ~CallbackGuard() { owner_.leave_callback(); }
+        CallbackGuard(const CallbackGuard&) = delete;
+        CallbackGuard& operator=(const CallbackGuard&) = delete;
+
+    private:
+        GraphMetadataListener& owner_;
+    };
+
+    bool enter_callback() noexcept {
+        std::lock_guard lock(mutex_);
+        if (!accepting_) return false;
+        ++in_flight_;
+        return true;
+    }
+
+    void leave_callback() noexcept {
+        std::lock_guard lock(mutex_);
+        if (in_flight_ != 0) --in_flight_;
+        if (in_flight_ == 0) cv_.notify_all();
+    }
+
     std::weak_ptr<DiscoveryGraph> graph_;
     eprosima::fastrtps::rtps::GuidPrefix_t local_prefix_;
     std::function<void()> on_data_;
@@ -396,10 +431,33 @@ void GraphMetadataTransport::ingest_pending() noexcept {
     data_pending_.store(false, std::memory_order_release);
     std::lock_guard lock(ingest_mutex_);
     try {
+        // Fast DDS may invoke the listener before the reader notification path
+        // has fully released its internal state.  Never take from the reader
+        // concurrently with one of our own metadata callbacks.
+        listener_->wait_until_idle();
         listener_->ingest(reader_);
+    } catch (const std::exception& error) {
+        std::cerr << "DIAG graph metadata ingest exception: " << error.what() << std::endl;
+        degraded_.store(true, std::memory_order_release);
     } catch (...) {
+        std::cerr << "DIAG graph metadata ingest unknown exception" << std::endl;
         degraded_.store(true, std::memory_order_release);
     }
+}
+
+void GraphMetadataTransport::observe_pending(
+    const std::shared_ptr<LogicalWaitObserver>& observer) {
+    if (!observer) return;
+    std::lock_guard lock(observer_mutex_);
+    for (auto entry = pending_observers_.begin(); entry != pending_observers_.end();) {
+        if (const auto current = entry->lock()) {
+            if (current == observer) return;
+            ++entry;
+        } else {
+            entry = pending_observers_.erase(entry);
+        }
+    }
+    pending_observers_.push_back(observer);
 }
 
 void GraphMetadataTransport::ingest_from_listener() noexcept {
@@ -407,6 +465,18 @@ void GraphMetadataTransport::ingest_from_listener() noexcept {
     // samples from inside the listener can block (the reader is being
     // notified), so draining happens on application threads instead.
     data_pending_.store(true, std::memory_order_release);
+
+    // Metadata arrival is a dependency change, not yet a public graph change.
+    // Wake internal availability waits without advancing GraphRevision.
+    std::lock_guard lock(observer_mutex_);
+    for (auto entry = pending_observers_.begin(); entry != pending_observers_.end();) {
+        if (const auto observer = entry->lock()) {
+            observer->wake();
+            ++entry;
+        } else {
+            entry = pending_observers_.erase(entry);
+        }
+    }
 }
 
 }  // namespace dmw::impl

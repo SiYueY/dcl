@@ -23,31 +23,52 @@ namespace {
 class NamedTopicDataType : public eprosima::fastdds::dds::TopicDataType {
 public:
     NamedTopicDataType() {
-        m_typeSize = sizeof(int);
+        m_typeSize = sizeof(int) + 4U;
         setName("dmw.test.NamedTopicDataType");
     }
 
     explicit NamedTopicDataType(const char* name) {
-        m_typeSize = sizeof(int);
+        m_typeSize = sizeof(int) + 4U;
         setName(name);
     }
 
     bool serialize(void* data, eprosima::fastrtps::rtps::SerializedPayload_t* payload) override {
-        payload->length = sizeof(int);
-        std::memcpy(payload->data, data, sizeof(int));
+        eprosima::fastcdr::FastBuffer buffer(
+            reinterpret_cast<char*>(payload->data), payload->max_size);
+#if FASTCDR_VERSION_MAJOR >= 2
+        constexpr auto cdr_version = eprosima::fastcdr::DDS_CDR;
+#else
+        constexpr auto cdr_version = eprosima::fastcdr::Cdr::DDS_CDR;
+#endif
+        eprosima::fastcdr::Cdr cdr(
+            buffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, cdr_version);
+        cdr.serialize_encapsulation();
+        cdr << *static_cast<int*>(data);
+#if FASTCDR_VERSION_MAJOR >= 2
+        payload->length = static_cast<std::uint32_t>(cdr.get_serialized_data_length());
+#else
+        payload->length = static_cast<std::uint32_t>(cdr.getSerializedDataLength());
+#endif
         return true;
     }
 
     bool deserialize(eprosima::fastrtps::rtps::SerializedPayload_t* payload, void* data) override {
-        if (payload->length != sizeof(int)) {
-            return false;
-        }
-        std::memcpy(data, payload->data, sizeof(int));
+        eprosima::fastcdr::FastBuffer buffer(
+            reinterpret_cast<char*>(payload->data), static_cast<std::size_t>(payload->length));
+#if FASTCDR_VERSION_MAJOR >= 2
+        constexpr auto cdr_version = eprosima::fastcdr::DDS_CDR;
+#else
+        constexpr auto cdr_version = eprosima::fastcdr::Cdr::DDS_CDR;
+#endif
+        eprosima::fastcdr::Cdr cdr(
+            buffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, cdr_version);
+        cdr.read_encapsulation();
+        cdr >> *static_cast<int*>(data);
         return true;
     }
 
     std::function<std::uint32_t()> getSerializedSizeProvider(void*) override {
-        return [] { return static_cast<std::uint32_t>(sizeof(int)); };
+        return [] { return static_cast<std::uint32_t>(sizeof(int) + 4U); };
     }
 
     void* createData() override { return new int(0); }
@@ -350,6 +371,7 @@ int main() {
             }
         }
         assert(ros_profile_matched);
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         int ros_profile_message = 5;
         assert(ros_publisher.value()->write(&ros_profile_message));
         dmw::MessageInfo ros_profile_info;

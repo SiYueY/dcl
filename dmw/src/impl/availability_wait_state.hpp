@@ -7,12 +7,14 @@
 #include <mutex>
 
 #include "dmw/availability_wait_token.hpp"
+#include "impl/logical_wait_observer.hpp"
 
 namespace dmw::impl {
 
 /// Discovery and interruption share the wait mutex. Updating a predicate
 /// without this mutex would lose a notification between checking and sleeping.
-class AvailabilityWaitState : public std::enable_shared_from_this<AvailabilityWaitState> {
+class AvailabilityWaitState : public std::enable_shared_from_this<AvailabilityWaitState>,
+                              public LogicalWaitObserver {
 public:
     AvailabilityWaitToken prepare() {
         std::lock_guard lock(mutex);
@@ -28,13 +30,15 @@ public:
         return token.generation_ != interruption_generation_;
     }
 
-    void notify_revision() {
+    void notify_revision() noexcept {
         {
             std::lock_guard lock(mutex);
             ++revision;
         }
         cv.notify_all();
     }
+
+    void wake() noexcept override { notify_revision(); }
 
     void interrupt() {
         {

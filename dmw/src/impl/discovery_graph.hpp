@@ -232,26 +232,59 @@ public:
     ServiceState service(
         const eprosima::fastrtps::rtps::GuidPrefix_t& prefix, const std::string& request_topic,
         const std::string& request_type, const std::string& response_topic,
-        const std::string& response_type) const noexcept {
+        const std::string& response_type, bool require_node_association = false) const noexcept {
         if (health() != DiscoveryHealth::Healthy) return ServiceState::Unavailable;
         std::lock_guard lock(mutex_);
-        bool relevant = false, request_reader = false, response_writer = false;
+        bool relevant = false;
+        std::vector<eprosima::fastrtps::rtps::GUID_t> request_readers;
+        std::vector<eprosima::fastrtps::rtps::GUID_t> response_writers;
         for (const auto& value : endpoints_) {
             if (value.guid.guidPrefix != prefix || value.lifecycle == DiscoveryChange::Removed ||
-                !value.participant || value.participant->lifecycle == DiscoveryChange::Removed)
+                !value.participant || value.participant->lifecycle == DiscoveryChange::Removed) {
                 continue;
+            }
             if (value.topic == request_topic && value.type == request_type) {
                 relevant = true;
-                request_reader = request_reader || value.kind == EndpointKind::Reader;
+                if (value.kind == EndpointKind::Reader) request_readers.push_back(value.guid);
             }
             if (value.topic == response_topic && value.type == response_type) {
                 relevant = true;
-                response_writer = response_writer || value.kind == EndpointKind::Writer;
+                if (value.kind == EndpointKind::Writer) response_writers.push_back(value.guid);
             }
         }
-        return request_reader && response_writer ? ServiceState::Complete
-               : relevant                        ? ServiceState::Incomplete
-                                                 : ServiceState::Unknown;
+        if (request_readers.empty() || response_writers.empty()) {
+            return relevant ? ServiceState::Incomplete : ServiceState::Unknown;
+        }
+        if (!require_node_association) return ServiceState::Complete;
+
+        const auto participant = std::find_if(
+            remote_nodes_.begin(), remote_nodes_.end(),
+            [&prefix](const RemoteParticipantNodes& value) { return value.prefix == prefix; });
+        if (participant == remote_nodes_.end()) return ServiceState::Incomplete;
+
+        const auto wire_gid = [](const eprosima::fastrtps::rtps::GUID_t& guid) {
+            std::array<std::uint8_t, 16> result{};
+            std::copy_n(guid.guidPrefix.value, 12, result.begin());
+            std::copy_n(guid.entityId.value, 4, result.begin() + 12);
+            return result;
+        };
+        for (const auto& node : participant->nodes) {
+            const bool has_request = std::any_of(
+                request_readers.begin(), request_readers.end(), [&](const auto& guid) {
+                    const auto gid = wire_gid(guid);
+                    return std::find(node.reader_gids.begin(), node.reader_gids.end(), gid) !=
+                           node.reader_gids.end();
+                });
+            if (!has_request) continue;
+            const bool has_response = std::any_of(
+                response_writers.begin(), response_writers.end(), [&](const auto& guid) {
+                    const auto gid = wire_gid(guid);
+                    return std::find(node.writer_gids.begin(), node.writer_gids.end(), gid) !=
+                           node.writer_gids.end();
+                });
+            if (has_response) return ServiceState::Complete;
+        }
+        return ServiceState::Incomplete;
     }
     Subscription subscribe(std::function<void(std::uint64_t)> callback) {
         std::lock_guard lock(mutex_);

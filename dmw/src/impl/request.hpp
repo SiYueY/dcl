@@ -27,12 +27,13 @@ public:
     explicit RequestState(
         std::weak_ptr<DiscoveryGraph> graph = {}, std::string request_topic = {},
         std::string request_type = {}, std::string response_topic = {},
-        std::string response_type = {}) noexcept
+        std::string response_type = {}, bool require_node_association = false) noexcept
     : graph_(std::move(graph)),
       request_topic_(std::move(request_topic)),
       request_type_(std::move(request_type)),
       response_topic_(std::move(response_topic)),
-      response_type_(std::move(response_type)) {}
+      response_type_(std::move(response_type)),
+      require_node_association_(require_node_association) {}
     void observe_request_reader(
         const eprosima::fastdds::dds::InstanceHandle_t& handle, std::int32_t change) {
         update(request_participants_, handle, change);
@@ -74,10 +75,11 @@ public:
                 responses.begin(), responses.end(), [&request](const ParticipantCount& candidate) {
                     return candidate.prefix == request.prefix;
                 });
-            if (response == responses.end()) continue;
+            if (response == responses.end() || request.count != response->count) continue;
             if (discovery) {
                 const auto pairing = discovery->service(
-                    request.prefix, request_topic, request_type, response_topic, response_type);
+                    request.prefix, request_topic, request_type, response_topic, response_type,
+                    require_node_association_);
                 if (pairing == ServiceState::Unavailable) return false;
                 if (pairing == ServiceState::Incomplete || pairing == ServiceState::Unknown)
                     continue;
@@ -150,6 +152,7 @@ private:
     std::string request_type_;
     std::string response_topic_;
     std::string response_type_;
+    bool require_node_association_{false};
 };
 
 /// Keeps a DDS listener alive until every callback that entered before its

@@ -4,10 +4,12 @@
 #include <cstdlib>
 #include <future>
 #include <memory>
+#include <iostream>
 #include <thread>
 #include <typeindex>
 
 #include "example_interfaces/srv/add_two_ints.hpp"
+#include "example_interfaces/srv/detail/add_two_ints__rosidl_typesupport_fastrtps_cpp.hpp"
 #include "fastcdr/Cdr.h"
 #include "fastcdr/FastBuffer.h"
 #include "fastcdr/config.h"
@@ -46,29 +48,17 @@ std::uint32_t ros_domain_id() {
 }
 
 template <typename Message>
-struct CdrTraits;
-
-template <>
-struct CdrTraits<Request> {
-    static void serialize(eprosima::fastcdr::Cdr& cdr, const Request& message) {
-        cdr << message.a;
-        cdr << message.b;
+struct CdrTraits {
+    static bool serialize(eprosima::fastcdr::Cdr& cdr, const Message& message) {
+        return example_interfaces::srv::typesupport_fastrtps_cpp::cdr_serialize(message, cdr);
     }
 
-    static void deserialize(eprosima::fastcdr::Cdr& cdr, Request& message) {
-        cdr >> message.a;
-        cdr >> message.b;
-    }
-};
-
-template <>
-struct CdrTraits<Response> {
-    static void serialize(eprosima::fastcdr::Cdr& cdr, const Response& message) {
-        cdr << message.sum;
+    static bool deserialize(eprosima::fastcdr::Cdr& cdr, Message& message) {
+        return example_interfaces::srv::typesupport_fastrtps_cpp::cdr_deserialize(cdr, message);
     }
 
-    static void deserialize(eprosima::fastcdr::Cdr& cdr, Response& message) {
-        cdr >> message.sum;
+    static std::size_t serialized_size(const Message& message) {
+        return example_interfaces::srv::typesupport_fastrtps_cpp::get_serialized_size(message, 0U);
     }
 };
 
@@ -87,7 +77,7 @@ public:
         eprosima::fastcdr::Cdr cdr(
             buffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, kRosCdrVersion);
         cdr.serialize_encapsulation();
-        CdrTraits<Message>::serialize(cdr, *static_cast<Message*>(data));
+        if (!CdrTraits<Message>::serialize(cdr, *static_cast<Message*>(data))) return false;
 #if FASTCDR_VERSION_MAJOR >= 2
         payload->length = static_cast<std::uint32_t>(cdr.get_serialized_data_length());
 #else
@@ -103,12 +93,12 @@ public:
         eprosima::fastcdr::Cdr cdr(
             buffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, kRosCdrVersion);
         cdr.read_encapsulation();
-        CdrTraits<Message>::deserialize(cdr, *static_cast<Message*>(data));
-        return true;
+        return CdrTraits<Message>::deserialize(cdr, *static_cast<Message*>(data));
     }
 
-    std::function<std::uint32_t()> getSerializedSizeProvider(void*) override {
-        return [] { return 20U; };
+    std::function<std::uint32_t()> getSerializedSizeProvider(void* data) override {
+        const auto size = CdrTraits<Message>::serialized_size(*static_cast<Message*>(data));
+        return [size] { return static_cast<std::uint32_t>(size + 4U); };
     }
 
     void* createData() override { return new Message(); }
@@ -158,9 +148,12 @@ int main() {
         const dmw::ServiceType service_type(request_type.value(), response_type.value());
 
         auto ros_node = std::make_shared<rclcpp::Node>("dmw_ros2_service_peer");
+        bool ros_service_called = false;
         auto ros_service = ros_node->create_service<AddTwoInts>(
             kDmwClientService,
-            [](const std::shared_ptr<Request> request, std::shared_ptr<Response> response) {
+            [&ros_service_called](const std::shared_ptr<Request> request, std::shared_ptr<Response> response) {
+                ros_service_called = true;
+                std::cerr << "DIAG ROS SERVICE CALLED a=" << request->a << " b=" << request->b << std::endl;
                 response->sum = request->a + request->b;
             });
         (void)ros_service;
@@ -168,9 +161,39 @@ int main() {
         assert(dmw_client);
         auto service_timeout = dmw::WaitTimeout::finite(std::chrono::seconds(5));
         assert(service_timeout);
+        const auto availability_begin = std::chrono::steady_clock::now();
         auto available = dmw_client.value()->wait_for_service(service_timeout.value());
+        const auto availability_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - availability_begin);
+        std::cerr << "DIAG DMW READY_MS=" << availability_elapsed.count() << std::endl;
+        if (!available) {
+            std::cerr << "DIAG DMW READY ERROR code=" << static_cast<int>(available.error().code())
+                      << " message=" << available.error().message() << std::endl;
+        }
         assert(available);
         assert(available.value());
+        const auto metadata_begin = std::chrono::steady_clock::now();
+        bool service_node_associated = false;
+        while (!service_node_associated &&
+               std::chrono::steady_clock::now() - metadata_begin < std::chrono::seconds(5)) {
+            auto diag_snapshot = context.value()->graph_snapshot();
+            assert(diag_snapshot);
+            for (const auto& endpoint : diag_snapshot.value().service_endpoints) {
+                if (endpoint.service_name == kDmwClientService &&
+                    endpoint.kind == dmw::ServiceEndpointKind::Server &&
+                    !endpoint.node_name.empty()) {
+                    service_node_associated = true;
+                    break;
+                }
+            }
+            if (!service_node_associated) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+        const auto metadata_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - metadata_begin);
+        std::cerr << "DIAG METADATA_READY_MS=" << metadata_elapsed.count() << std::endl;
+        assert(service_node_associated);
 
         Request request;
         request.a = 3;
@@ -179,12 +202,15 @@ int main() {
         assert(request_id);
         Response response;
         dmw::RequestId response_id;
-        assert(wait_until([&] {
+        const bool got_response = wait_until([&] {
             rclcpp::spin_some(ros_node);
             auto take = dmw_client.value()->read_response(&response, response_id);
             assert(take);
             return take.value();
-        }));
+        });
+        std::cerr << "DIAG service_called=" << ros_service_called
+                  << " got_response=" << got_response << std::endl;
+        assert(got_response);
         assert(response.sum == 7);
         assert(response_id == request_id.value());
 

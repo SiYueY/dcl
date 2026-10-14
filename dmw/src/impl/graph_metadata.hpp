@@ -15,6 +15,7 @@
 
 #include "dmw/result.hpp"
 #include "impl/topic.hpp"
+#include "impl/logical_wait_observer.hpp"
 
 namespace dmw::impl {
 
@@ -107,6 +108,12 @@ public:
 
     bool degraded() const noexcept { return degraded_.load(std::memory_order_acquire); }
 
+    /// Wake one internal availability waiter when remote metadata arrives.
+    ///
+    /// Observers are weak and wake-only; registration never extends a Client
+    /// lifetime and never changes the public graph revision.
+    void observe_pending(const std::shared_ptr<LogicalWaitObserver>& observer);
+
     /// Drain the reader from the Fast DDS listener thread.
     ///
     /// Never blocks: if an application thread is already draining, this returns
@@ -128,6 +135,8 @@ private:
     /// the graph subscription, which republishes the local snapshot.
     std::mutex ingest_mutex_;
     std::atomic<bool> data_pending_{false};
+    std::mutex observer_mutex_;
+    std::vector<std::weak_ptr<LogicalWaitObserver>> pending_observers_;
 };
 
 }  // namespace dmw::impl

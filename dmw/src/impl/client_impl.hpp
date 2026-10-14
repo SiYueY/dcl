@@ -50,6 +50,11 @@ public:
       response_metadata_(std::move(response_metadata)),
       service_wait_state_(std::make_shared<ServiceWaitState>()) {
         const std::weak_ptr<ServiceWaitState> weak_state = service_wait_state_;
+        if (context_->runtime_mode() == RuntimeMode::ROS2) {
+            if (const auto& metadata = context_->graph_metadata()) {
+                metadata->observe_pending(service_wait_state_);
+            }
+        }
         service_subscription_ = context_->discovery_graph()->subscribe([weak_state](std::uint64_t) {
             if (const auto state = weak_state.lock()) {
                 state->notify_revision();

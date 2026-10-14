@@ -130,8 +130,18 @@ Result<bool> Client::Impl::read_response(void* response, RequestId& request_id) 
 
 Result<bool> Client::Impl::service_is_available() const {
     const auto operation = context_->try_acquire_operation();
-    if (!operation)
+    if (!operation) {
         return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+    }
+
+    if (context_->runtime_mode() == RuntimeMode::ROS2) {
+        const auto& metadata = context_->graph_metadata();
+        if (!metadata) {
+            return Result<bool>::failure(
+                Error(ErrorCode::DDSError, "ROS 2 graph metadata transport is unavailable"));
+        }
+        metadata->ingest_pending();
+    }
 
     if (request_state_->is_degraded()) {
         return Result<bool>::failure(
@@ -198,25 +208,52 @@ Result<bool> Client::Impl::wait_for_service(
             Error(ErrorCode::InvalidArgument, "Availability token belongs to another endpoint"));
     }
     const auto deadline = impl::steady_deadline(timeout);
-    std::unique_lock lock(state->mutex);
+
     while (true) {
-        if (context_->is_shutdown()) {
-            return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        std::uint64_t observed_revision = 0;
+        {
+            std::lock_guard lock(state->mutex);
+            if (context_->is_shutdown()) {
+                return Result<bool>::failure(
+                    Error(ErrorCode::ContextShutdown, "Context is shut down"));
+            }
+            if (state->interrupted(token)) {
+                return Result<bool>::failure(
+                    Error(ErrorCode::Interrupted, "Availability wait interrupted"));
+            }
+            observed_revision = state->revision;
         }
-        if (state->interrupted(token)) {
-            return Result<bool>::failure(Error(ErrorCode::Interrupted, "Availability wait interrupted"));
-        }
-        const auto observed_revision = state->revision;
+
+        // The ROS graph metadata reader is drained by service_is_available().
+        // Keep this check outside the wait-state mutex because folding metadata
+        // into DiscoveryGraph may synchronously wake this same wait state.
         auto available = service_is_available();
         if (!available || available.value() || timeout.kind() == WaitTimeout::Kind::Poll) {
             return available;
         }
+
+        std::unique_lock lock(state->mutex);
+        if (context_->is_shutdown()) {
+            return Result<bool>::failure(
+                Error(ErrorCode::ContextShutdown, "Context is shut down"));
+        }
+        if (state->interrupted(token)) {
+            return Result<bool>::failure(
+                Error(ErrorCode::Interrupted, "Availability wait interrupted"));
+        }
+        if (state->revision != observed_revision) continue;
+
         const auto changed = [&] {
             return context_->is_shutdown() || state->interrupted(token) ||
                    state->revision != observed_revision;
         };
         if (timeout.kind() == WaitTimeout::Kind::Finite) {
-            if (!state->cv.wait_until(lock, deadline, changed)) return Result<bool>::success(false);
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return Result<bool>::success(false);
+            }
+            if (!state->cv.wait_until(lock, deadline, changed)) {
+                return Result<bool>::success(false);
+            }
         } else {
             state->cv.wait(lock, changed);
         }
