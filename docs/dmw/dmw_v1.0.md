@@ -7,7 +7,7 @@
 > **状态**：Re-Freeze Candidate  
 > **设计语言**：C++17  
 > **中间件**：Fast DDS only  
-> **源码基线**：`SiYueY/dcl` commit `d1eed2ea405c085721f2a844d9a2602f580b34da`  
+> **源码基线**：`SiYueY/dcl` commit `8364732890c0de7defac9bda47bef3ac50510a49`  
 > **主要兼容线**：ROS 2 Humble / Fast DDS 2.6.x；ROS 2 Jazzy / Fast DDS 2.14.x  
 > **文档组织参考**：IEEE 1016 的软件设计说明思想，并结合现代 C++ runtime/library 的接口契约、并发、生命周期、互操作和验证实践  
 > **替代关系**：本文在 **V1.0 Frozen** 之后正式 supersede `dmw/docs/dmw.md` 与 `dmw/docs/dmw_fastdds.md`；在 Candidate 阶段两份旧文档仍作为迁移核对来源，不得提前删除
@@ -3198,11 +3198,51 @@ action send_goal
 
 # Appendix A. Complete Public API Index
 
-> 本附录是 commit `d1eed2ea405c085721f2a844d9a2602f580b34da` 下 `dmw/include/dmw/**` 的 public declaration inventory。  
+> 本附录是 commit `8364732890c0de7defac9bda47bef3ac50510a49` 下 `dmw/include/dmw/**` 的 public declaration inventory。  
 > 这里保留返回类型、参数、默认值、`const`、`noexcept`、overload、公开析构函数，以及头文件中显式声明的 copy/move 特性。  
 > private constructor、PImpl 字段和 friend 声明不属于 public API，因此不列出。  
 > **编译器隐式生成、而头文件没有显式写出的 special members 不在本索引展开；显式 `= default` / `= delete` 的 public declaration 必须列出。**  
-> 最终 Frozen 前，应使用 header inventory/check 脚本机械比对本附录与 public headers。
+> 最终 Frozen 前，运行 `python3 dmw/tools/check_public_api_inventory.py --repo . --document docs/dmw/dmw_v1.0.md --source-ref <commit>`；它检查所有 public header 的 Appendix A 覆盖及已审阅源码 digest，任何 header 漂移都会失败并要求重新审阅本附录。
+
+<!-- DMW_PUBLIC_API_HEADER_SHA256
+action_client.hpp 7e3c05715ae4347f91c6a0de05892c1e15c51162173fc7ac5f7f2d2e9365d045
+action_common.hpp e20aa254c9d4dda757ffb118af6e907d25ce317686a7be15c5f9d919fda05634
+action_server.hpp b373af6f2378d779c74e2e106301e860b90c59b6c6feaba091bf68a8f414fe8a
+action_type.hpp 62782742af955ac50e726897e08c476c16b9b613d777436f1deb6f88e1d192f2
+arguments.hpp a4e602b3a6e9e15fc85e63263e674cb03ead4d1568fcde9d3ad29a90c7323b6c
+availability_wait_token.hpp 82061bd99a1824e33ef4090dd43a79821b9b605e54395096b2bb8b6247b9ac5a
+client.hpp 83970ad0ee145f4c0b480967c0055c7aa33f7d0f81494b7847c4aa327cc61e3d
+clock.hpp b3609fab9dc2da2fd54283c5588348ae6fb15c725986ae09c756901463011823
+context.hpp 2fa97f894347437ec726c463d1a63eb50cedf3c4661da1c10938b9c4800567f3
+error.hpp a65ce7c2f93d1501f4dcee9a541378d9e6c724d1240b28cd68ffe81bddef37bb
+event.hpp ff960d74a88f2d1ba20822d99aaff55a95f4a545ee363942f6823c40fe9aa3a3
+event_info.hpp d470a70c460e4aecbbd9453e8f6199b935c5846188e30b87ef81b88e300e39e2
+fastdds/message_type.hpp cc9222f9c8aa987e31b9f498e2d59d8b6a85a55bd3dabd331c93e53bfe11dfbb
+gid.hpp 6b97ac21b964840e3ea66bb19397a866c738ecda76a8b7a875386644073fcd4e
+graph.hpp fcafa0564a3c4ebe0e5474e92a3e0425e3aa9062d89689b05dd72c7cf19ff5b4
+graph_event.hpp 545bdda02f3c3175ce505e331a9dd1f52b3591b986bfa7fa6534bd1075192b47
+guard_condition.hpp 24422bd155d406334f54dbaaac9fab09c6957c7a0143eda3c3ea1353c76f0c99
+message_info.hpp 0f6afdef329cd0c4a0c9267661806e31d3e5005ef35a981cbcc86182218b5b88
+message_type.hpp f2caf7f21ec92803d56ffaa201bc496894f702a087ee0c74c9dac8f92520d736
+node.hpp c8bb2f363bf9c2b8485366299b9a76675b038b41a9fb75775dfb29a0cad55f1a
+parameter.hpp 993d0c897bf55edd48ed0cd5826bdbd743ec858d716ca77097ca0d7cd2885320
+parameter_change_set.hpp e0236f23674209e89b7cba49d274e573981944175a6600e42c068778e52bab5d
+parameter_descriptor.hpp 41872d077b7cc222e70d222e1b98b00ef0bf5a938a40cfb439f9aafacab14a6f
+publisher.hpp 7fae0f6f0a31e2989f1d22a9d697205baea4c9342b3320fbb6d93587d9db0056
+qos.hpp 535e24f0c9636ba785a810e864a26ec77389ade8a2c2125de3faaaa69e4e10de
+request_id.hpp 32892044efbee34dee8a4172be0d0d438b254ba03faadeff71c42e5608489a16
+result.hpp 325a7205cdb619dae5e6c0da6d9829c6daf90bd275380cf3bd8e531862209ac0
+runtime_mode.hpp d53df2b9349109de05e5a73fe302491c9f1ee9f3895f9bfe7347cf651be7ab0f
+server.hpp 227bf52bbd7d86b8a9f41aefd615c7e3e3f200cdd099f616bf01cd3272954677
+service_type.hpp fb145ce14b39b1e8d5bab6987e7d1ae6f21c76e6ef2cb9a9745e764ba994d6c1
+subscriber.hpp ee0b68554417e2bf8381f7655216b5114ab56ac852c5d15dc6152a420d6e932e
+timer.hpp 03828f3cf754566e7dea9e19c5df0f8b1a45517365102b15aab14a2b1d62908e
+visibility_control.hpp 76d1723fe6b1ebdc3e69b9b9a9880422233e6bc6811cf8810e44be0b29bee3d2
+wait_result.hpp 43241ad4967e3b442fcc994e26311bb2d729e5c3a749a6704f12afc31cf49dc9
+wait_set.hpp 61945446e5bedb0d1a69ebe6395fb16c475ce18bac04ca54f4a576d39fc6a27a
+wait_timeout.hpp dd2b06fcafdca5d084142fdb60b3bfd9691ac7a00947c95ecd959722ef0f64bf
+waitable_registration.hpp b2641022cd6df9380fee3d95738d3aa7bdefbb244069b9a58b79b9f94a3ee455
+DMW_PUBLIC_API_HEADER_SHA256 -->
 
 ## A.1 `arguments.hpp`
 
@@ -4998,7 +5038,7 @@ Jazzy / Fast DDS 2.14.6
 
 ```text
 Source Commit:
-    d1eed2ea405c085721f2a844d9a2602f580b34da
+    8364732890c0de7defac9bda47bef3ac50510a49
 
 Validation Date:
     TBD
