@@ -11,6 +11,9 @@
 #include <typeindex>
 #include <thread>
 
+#include "fastcdr/Cdr.h"
+#include "fastcdr/FastBuffer.h"
+#include "fastcdr/config.h"
 #include "dmw/client.hpp"
 #include "dmw/context.hpp"
 #include "dmw/fastdds/message_type.hpp"
