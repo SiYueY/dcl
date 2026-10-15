@@ -7,7 +7,7 @@
 > **状态**：Re-Freeze Candidate  
 > **设计语言**：C++17  
 > **中间件**：Fast DDS only  
-> **源码基线**：`SiYueY/dcl` commit `8364732890c0de7defac9bda47bef3ac50510a49`  
+> **源码基线**：`SiYueY/dcl` commit `d07ee14b81a87a88345295d1416875e9fa5e5596`  
 > **主要兼容线**：ROS 2 Humble / Fast DDS 2.6.x；ROS 2 Jazzy / Fast DDS 2.14.x  
 > **文档组织参考**：IEEE 1016 的软件设计说明思想，并结合现代 C++ runtime/library 的接口契约、并发、生命周期、互操作和验证实践  
 > **替代关系**：本文在 **V1.0 Frozen** 之后正式 supersede `dmw/docs/dmw.md` 与 `dmw/docs/dmw_fastdds.md`；在 Candidate 阶段两份旧文档仍作为迁移核对来源，不得提前删除
@@ -3198,7 +3198,7 @@ action send_goal
 
 # Appendix A. Complete Public API Index
 
-> 本附录是 commit `8364732890c0de7defac9bda47bef3ac50510a49` 下 `dmw/include/dmw/**` 的 public declaration inventory。  
+> 本附录是 commit `d07ee14b81a87a88345295d1416875e9fa5e5596` 下 `dmw/include/dmw/**` 的 public declaration inventory。  
 > 这里保留返回类型、参数、默认值、`const`、`noexcept`、overload、公开析构函数，以及头文件中显式声明的 copy/move 特性。  
 > private constructor、PImpl 字段和 friend 声明不属于 public API，因此不列出。  
 > **编译器隐式生成、而头文件没有显式写出的 special members 不在本索引展开；显式 `= default` / `= delete` 的 public declaration 必须列出。**  
@@ -5038,7 +5038,7 @@ Jazzy / Fast DDS 2.14.6
 
 ```text
 Source Commit:
-    8364732890c0de7defac9bda47bef3ac50510a49
+    d07ee14b81a87a88345295d1416875e9fa5e5596
 
 Validation Date:
     TBD
