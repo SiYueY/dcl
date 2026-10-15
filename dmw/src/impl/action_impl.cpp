@@ -48,6 +48,11 @@ ActionClient::Impl::Impl(
   status_subscriber_(std::move(status_subscriber)),
   availability_state_(std::make_shared<AvailabilityWaitState>()) {
     const std::weak_ptr<AvailabilityWaitState> weak_state = availability_state_;
+    if (context_->runtime_mode() == RuntimeMode::ROS2) {
+        if (const auto& metadata = context_->graph_metadata()) {
+            metadata->observe_pending(availability_state_);
+        }
+    }
     availability_subscription_ = context_->discovery_graph()->subscribe([weak_state](std::uint64_t) {
         if (const auto state = weak_state.lock()) {
             state->notify_revision();
@@ -106,10 +111,14 @@ Result<bool> ActionClient::Impl::check_availability() const {
         return Result<bool>::failure(
             Error(ErrorCode::DDSError, "Discovery graph is unavailable"));
     }
+    if (context_->runtime_mode() == RuntimeMode::ROS2) {
+        if (const auto& metadata = context_->graph_metadata()) metadata->ingest_pending();
+    }
     const auto candidates =
         impl::collect_endpoint_candidates(context_->runtime_mode(), graph->view());
     return Result<bool>::success(
-        impl::has_remote_action_server(candidates, names_, types_, local_participant_));
+        impl::has_remote_action_server(
+            candidates, names_, types_, local_participant_, context_->runtime_mode()));
 }
 
 Result<bool> ActionClient::Impl::server_is_available() const { return check_availability(); }

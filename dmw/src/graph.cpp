@@ -100,7 +100,8 @@ GraphSnapshot assemble_snapshot(impl::Context& context) {
     std::map<std::string, ServiceGroup> service_groups;
     for (const auto& candidate : candidates) {
         if (candidate.role == GraphEndpointRole::Topic) continue;
-        auto& group = service_groups[candidate.participant_key + "|" + candidate.logical_name];
+        auto& group = service_groups[candidate.participant_key + "|" + candidate.logical_name + "|" +
+                                     impl::candidate_composition_key(mode, candidate)];
         group.name = candidate.logical_name;
         const bool reader = candidate.native_kind == NativeEndpointKind::Reader;
         if (candidate.role == GraphEndpointRole::ServiceRequest) {
@@ -176,7 +177,7 @@ GraphSnapshot assemble_snapshot(impl::Context& context) {
     // Action composition is shared with Action availability so both use the
     // same participant-consistent candidate semantics.
     std::map<std::string, ActionGraphInfo> action_aggregates;
-    for (const auto& candidate : impl::compose_action_candidates(candidates)) {
+    for (const auto& candidate : impl::compose_action_candidates(mode, candidates)) {
         auto& aggregate = action_aggregates[candidate.action_name];
         aggregate.action_name = candidate.action_name;
         if (candidate.has_server) {

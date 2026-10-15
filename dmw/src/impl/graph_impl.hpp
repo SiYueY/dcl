@@ -14,7 +14,9 @@
 #include "dmw/graph_event.hpp"
 #include "impl/context.hpp"
 #include "impl/discovery_graph.hpp"
+#include "impl/graph_metadata.hpp"
 #include "impl/lock_rank.hpp"
+#include "impl/logical_wait_observer.hpp"
 
 namespace dmw {
 
@@ -24,7 +26,8 @@ struct Registration;
 
 
 /// Level-triggered graph revision cursor behind one public GraphEvent.
-class GraphEventState : public std::enable_shared_from_this<GraphEventState> {
+class GraphEventState : public std::enable_shared_from_this<GraphEventState>,
+                        public LogicalWaitObserver {
 public:
     explicit GraphEventState(std::shared_ptr<impl::Context> context) noexcept
     : context_(std::move(context)) {}
@@ -45,11 +48,15 @@ public:
             return Result<void>::failure(
                 Error(ErrorCode::ResourceExhausted, "GraphEvent subscription IDs are exhausted"));
         }
+        if (const auto& metadata = context_->graph_metadata()) {
+            metadata->observe_pending(shared_from_this());
+        }
         return Result<void>::success();
     }
 
     bool logically_ready() const noexcept {
         if (closing.load(std::memory_order_acquire) || context_->is_shutdown()) return false;
+        if (const auto& metadata = context_->graph_metadata()) metadata->ingest_pending();
         std::lock_guard lock(state_mutex_);
         return context_->discovery_graph()->revision() > cursor_;
     }
@@ -64,6 +71,7 @@ public:
         if (!operation) {
             return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
         }
+        if (const auto& metadata = context_->graph_metadata()) metadata->ingest_pending();
         {
             std::lock_guard lock(state_mutex_);
             const auto current = context_->discovery_graph()->revision();
@@ -89,6 +97,8 @@ public:
         } catch (...) {
         }
     }
+
+    void wake() noexcept override { notify_wait_set_noexcept(); }
 
     void detach_wait_set() noexcept {
         std::function<void()> callback;

@@ -1,4 +1,5 @@
 #include "impl/graph_metadata.hpp"
+#include "impl/process_lifetime.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -404,7 +405,14 @@ GraphMetadataTransport::~GraphMetadataTransport() noexcept {
         } catch (...) {
             detached = false;
         }
-        if (detached) listener_->close_and_drain();
+        listener_->close_and_drain();
+        if (!detached) {
+            // Fast DDS may still retain the raw listener pointer after a
+            // failed detach.  Retain the closed listener for process lifetime
+            // rather than releasing it and turning that failure into UAF.
+            ProcessLifetime::instance().retain_reader_listener(std::move(listener_));
+            return;
+        }
     }
     listener_.reset();
 }

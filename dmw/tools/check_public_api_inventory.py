@@ -7,11 +7,11 @@ This is deliberately dependency-free so it can run in a minimal CI checkout:
       --repo . --document docs/dmw/dmw_v1.0.md \
       --source-ref <immutable-commit>
 
-It verifies that every public header has an Appendix A section and that every
-public declaration name has a textual counterpart in that section.  It is a
-freeze guard: a header addition or declaration rename/removal fails the check
-and requires an explicit Appendix A review.  C++ semantic equivalence (for
-example typedef expansion) remains a compiler/API-review responsibility.
+It verifies that every public header has an Appendix A section and that its
+reviewed source digest matches the immutable baseline.  It is a freeze guard:
+any public-header addition or byte-level change fails the check and requires
+an explicit Appendix A review.  It is not a C++ declaration-level semantic
+comparator; that requires a Clang AST-based tool.
 """
 
 from __future__ import annotations

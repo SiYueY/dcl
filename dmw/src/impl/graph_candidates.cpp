@@ -44,6 +44,17 @@ std::string participant_key(const eprosima::fastrtps::rtps::GuidPrefix_t& prefix
     return std::string(reinterpret_cast<const char*>(prefix.value), sizeof(prefix.value));
 }
 
+std::string candidate_composition_key(RuntimeMode mode, const EndpointCandidate& candidate) {
+    if (mode != RuntimeMode::ROS2) return {};
+    if (candidate.has_node) {
+        return candidate.node_namespace + std::string(1, '\0') + candidate.node_name;
+    }
+    // Metadata is authoritative in ROS 2 mode.  Keep an unassociated endpoint
+    // isolated rather than allowing it to compose with a different Node.
+    return std::string("?") +
+           std::string(reinterpret_cast<const char*>(candidate.gid.data.data()), candidate.gid.data.size());
+}
+
 std::vector<EndpointCandidate> collect_endpoint_candidates(
     RuntimeMode mode, const GraphView& view) {
     std::unordered_map<std::uint64_t, const LocalNodeRecord*> nodes_by_id;
@@ -118,7 +129,7 @@ std::vector<EndpointCandidate> collect_endpoint_candidates(
 }
 
 std::vector<ActionCandidate> compose_action_candidates(
-    const std::vector<EndpointCandidate>& candidates) {
+    RuntimeMode mode, const std::vector<EndpointCandidate>& candidates) {
     // Action composition: all five logical endpoints must live in the same
     // participant before DMW reports an Action candidate.
     std::map<std::string, ActionGroup> groups;
@@ -126,7 +137,8 @@ std::vector<ActionCandidate> compose_action_candidates(
         const NormalizedEndpointName normalized{candidate.logical_name, candidate.role};
         const auto classified = classify_action_endpoint(normalized);
         if (!classified) continue;
-        auto& group = groups[candidate.participant_key + "|" + classified->action_name];
+        auto& group = groups[candidate.participant_key + "|" + classified->action_name + "|" +
+                             candidate_composition_key(mode, candidate)];
         group.action_name = classified->action_name;
         group.endpoints.insert(
             {ActionRoleKey{classified->role, candidate.native_kind}, candidate});
@@ -190,12 +202,13 @@ namespace {
 bool has_endpoint(
     const std::vector<EndpointCandidate>& candidates, const std::string& participant,
     const std::string& logical_name, GraphEndpointRole role, EndpointKind kind,
-    const std::string& wire_type) {
+    const std::string& wire_type, RuntimeMode mode, const std::string& composition_key) {
     for (const auto& candidate : candidates) {
         if (candidate.participant_key != participant) continue;
         if (candidate.native_kind != kind || candidate.role != role) continue;
         if (candidate.logical_name != logical_name) continue;
         if (candidate.wire_type != wire_type) continue;
+        if (candidate_composition_key(mode, candidate) != composition_key) continue;
         return true;
     }
     return false;
@@ -203,51 +216,67 @@ bool has_endpoint(
 
 bool action_server_composition_complete(
     const std::vector<EndpointCandidate>& candidates, const std::string& participant,
-    const ActionEndpointNames& names, const ActionEndpointTypes& types) {
+    const ActionEndpointNames& names, const ActionEndpointTypes& types, RuntimeMode mode,
+    const std::string& composition_key) {
     return has_endpoint(
                candidates, participant, names.send_goal, GraphEndpointRole::ServiceRequest,
-               EndpointKind::Reader, types.send_goal_request) &&
+               EndpointKind::Reader, types.send_goal_request, mode, composition_key) &&
            has_endpoint(
                candidates, participant, names.send_goal, GraphEndpointRole::ServiceResponse,
-               EndpointKind::Writer, types.send_goal_response) &&
+               EndpointKind::Writer, types.send_goal_response, mode, composition_key) &&
            has_endpoint(
                candidates, participant, names.cancel_goal, GraphEndpointRole::ServiceRequest,
-               EndpointKind::Reader, types.cancel_goal_request) &&
+               EndpointKind::Reader, types.cancel_goal_request, mode, composition_key) &&
            has_endpoint(
                candidates, participant, names.cancel_goal, GraphEndpointRole::ServiceResponse,
-               EndpointKind::Writer, types.cancel_goal_response) &&
+               EndpointKind::Writer, types.cancel_goal_response, mode, composition_key) &&
            has_endpoint(
                candidates, participant, names.get_result, GraphEndpointRole::ServiceRequest,
-               EndpointKind::Reader, types.get_result_request) &&
+               EndpointKind::Reader, types.get_result_request, mode, composition_key) &&
            has_endpoint(
                candidates, participant, names.get_result, GraphEndpointRole::ServiceResponse,
-               EndpointKind::Writer, types.get_result_response) &&
+               EndpointKind::Writer, types.get_result_response, mode, composition_key) &&
            has_endpoint(
                candidates, participant, names.feedback, GraphEndpointRole::Topic,
-               EndpointKind::Writer, types.feedback) &&
+               EndpointKind::Writer, types.feedback, mode, composition_key) &&
            has_endpoint(
                candidates, participant, names.status, GraphEndpointRole::Topic,
-               EndpointKind::Writer, types.status);
+               EndpointKind::Writer, types.status, mode, composition_key);
+}
+
+bool participant_has_action_server(
+    const std::vector<EndpointCandidate>& candidates, const std::string& participant,
+    const ActionEndpointNames& names, const ActionEndpointTypes& types, RuntimeMode mode) {
+    std::set<std::string> compositions;
+    for (const auto& candidate : candidates) {
+        if (candidate.participant_key == participant) {
+            compositions.insert(candidate_composition_key(mode, candidate));
+        }
+    }
+    return std::any_of(compositions.begin(), compositions.end(), [&](const auto& composition) {
+        return action_server_composition_complete(
+            candidates, participant, names, types, mode, composition);
+    });
 }
 
 }  // namespace
 
 bool has_remote_action_server(
     const std::vector<EndpointCandidate>& candidates, const ActionEndpointNames& names,
-    const ActionEndpointTypes& types, const std::string& local_participant) {
+    const ActionEndpointTypes& types, const std::string& local_participant, RuntimeMode mode) {
     std::set<std::string> participants;
     for (const auto& candidate : candidates) participants.insert(candidate.participant_key);
     for (const auto& participant : participants) {
         if (participant == local_participant) continue;
-        if (action_server_composition_complete(candidates, participant, names, types)) return true;
+        if (participant_has_action_server(candidates, participant, names, types, mode)) return true;
     }
     return false;
 }
 
 bool has_local_action_server(
     const std::vector<EndpointCandidate>& candidates, const ActionEndpointNames& names,
-    const ActionEndpointTypes& types, const std::string& local_participant) {
-    return action_server_composition_complete(candidates, local_participant, names, types);
+    const ActionEndpointTypes& types, const std::string& local_participant, RuntimeMode mode) {
+    return participant_has_action_server(candidates, local_participant, names, types, mode);
 }
 
 }  // namespace dmw::impl

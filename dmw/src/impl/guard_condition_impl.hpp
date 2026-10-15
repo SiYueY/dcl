@@ -99,7 +99,7 @@ private:
 
 class GuardCondition::Impl {
 public:
-    explicit Impl(std::shared_ptr<impl::Context> context) noexcept
+    explicit Impl(std::shared_ptr<impl::Context> context)
     : context_(std::make_shared<GuardConditionState>(std::move(context))) {}
     ~Impl() noexcept { context_->close(); }
 

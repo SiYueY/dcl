@@ -14,8 +14,10 @@
 #include "dmw/context.hpp"
 #include "dmw/fastdds/message_type.hpp"
 #include "dmw/graph.hpp"
+#include "dmw/graph_event.hpp"
 #include "dmw/node.hpp"
 #include "dmw/publisher.hpp"
+#include "dmw/wait_set.hpp"
 
 namespace {
 
@@ -101,6 +103,23 @@ int main() {
         named_type("std_msgs::msg::dds_::String_"), "/dmw_graph_topic",
         dmw::Qos::ros2_default());
     assert(publisher);
+
+    // Metadata arrival must wake GraphEvent/WaitSet and readiness must drain
+    // it before checking GraphRevision; no graph_snapshot polling is allowed.
+    auto graph_event = context.value()->create_graph_event();
+    auto wait_set = context.value()->create_wait_set();
+    assert(graph_event && wait_set);
+    const auto registration = wait_set.value()->add(*graph_event.value());
+    assert(registration);
+    auto late_ros_node = std::make_shared<rclcpp::Node>("ros_graph_wait_event");
+    auto late_ros_publisher =
+        late_ros_node->create_publisher<std_msgs::msg::String>("/ros_graph_wait_event_topic", 10);
+    (void)late_ros_publisher;
+    const auto waited = wait_set.value()->wait(dmw::WaitTimeout::finite(10s).value());
+    assert(waited && waited.value().status() == dmw::WaitStatus::Ready);
+    dmw::GraphChangeInfo event_change;
+    const auto taken = graph_event.value()->take(event_change);
+    assert(taken && taken.value());
 
     // --- the DMW graph learns the ROS 2 node and its endpoints ----------------
     bool saw_ros_node = false;
