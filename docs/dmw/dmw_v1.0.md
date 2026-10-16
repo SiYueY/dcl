@@ -7,7 +7,7 @@
 > **状态**：Re-Freeze Candidate  
 > **设计语言**：C++17  
 > **中间件**：Fast DDS only  
-> **源码基线**：`SiYueY/dcl` commit `24baf544f7ae9bf3c6b8d1cf47f72f4350cafc7a`
+> **源码基线**：`SiYueY/dcl` commit `1e02a0eb2a87c6bfae8f8b0de4b4e8033810eff9`
 > **主要兼容线**：ROS 2 Humble / Fast DDS 2.6.x；ROS 2 Jazzy / Fast DDS 2.14.x  
 > **文档组织参考**：IEEE 1016 的软件设计说明思想，并结合现代 C++ runtime/library 的接口契约、并发、生命周期、互操作和验证实践  
 > **替代关系**：本文在 **V1.0 Frozen** 之后正式 supersede `dmw/docs/dmw.md` 与 `dmw/docs/dmw_fastdds.md`；在 Candidate 阶段两份旧文档仍作为迁移核对来源，不得提前删除
@@ -1632,6 +1632,14 @@ struct ActionGraphInfo
 };
 ```
 
+`ActionEndpointInfo::endpoint_gids` 是固定顺序的八个 physical DDS
+endpoint：SendGoal request、SendGoal response、CancelGoal request、CancelGoal
+response、GetResult request、GetResult response、Feedback、Status。Server
+candidate 的方向依次为 reader/writer/reader/writer/reader/writer/writer/writer；
+Client candidate 则为 writer/reader/writer/reader/writer/reader/reader/reader。
+Graph candidate 只表达结构完整性；`ActionClient::server_is_available()` 还必须以当前
+client 的 endpoint QoS 验证通信兼容性。
+
 Snapshot：
 
 ```cpp
@@ -3198,7 +3206,7 @@ action send_goal
 
 # Appendix A. Complete Public API Index
 
-> 本附录是 commit `24baf544f7ae9bf3c6b8d1cf47f72f4350cafc7a` 下 `dmw/include/dmw/**` 的 public declaration inventory。
+> 本附录是 commit `1e02a0eb2a87c6bfae8f8b0de4b4e8033810eff9` 下 `dmw/include/dmw/**` 的 public declaration inventory。
 > 这里保留返回类型、参数、默认值、`const`、`noexcept`、overload、公开析构函数，以及头文件中显式声明的 copy/move 特性。  
 > private constructor、PImpl 字段和 friend 声明不属于 public API，因此不列出。  
 > **编译器隐式生成、而头文件没有显式写出的 special members 不在本索引展开；显式 `= default` / `= delete` 的 public declaration 必须列出。**  
@@ -5038,7 +5046,7 @@ Jazzy / Fast DDS 2.14.6
 
 ```text
 Source Commit:
-    24baf544f7ae9bf3c6b8d1cf47f72f4350cafc7a
+    1e02a0eb2a87c6bfae8f8b0de4b4e8033810eff9
 
 Validation Date:
     TBD
