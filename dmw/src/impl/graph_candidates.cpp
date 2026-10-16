@@ -217,7 +217,7 @@ std::vector<ActionCandidate> compose_action_candidates(
 
 namespace {
 
-bool has_endpoint(
+const EndpointCandidate* find_endpoint(
     const std::vector<EndpointCandidate>& candidates, const std::string& participant,
     const std::string& logical_name, GraphEndpointRole role, EndpointKind kind,
     const std::string& wire_type, RuntimeMode mode, const std::string& composition_key) {
@@ -227,44 +227,61 @@ bool has_endpoint(
         if (candidate.logical_name != logical_name) continue;
         if (candidate.wire_type != wire_type) continue;
         if (candidate_composition_key(mode, candidate) != composition_key) continue;
-        return true;
+        return &candidate;
     }
-    return false;
+    return nullptr;
+}
+
+bool qos_compatible(const Qos& publisher, const Qos& subscriber) {
+    const auto compatibility = check_qos_compatibility(publisher, subscriber);
+    return compatibility && compatibility.value().compatibility != QosCompatibility::Incompatible;
 }
 
 bool action_server_composition_complete(
     const std::vector<EndpointCandidate>& candidates, const std::string& participant,
     const ActionEndpointNames& names, const ActionEndpointTypes& types, RuntimeMode mode,
-    const std::string& composition_key) {
-    return has_endpoint(
+    const std::string& composition_key, const ActionClientEndpointQos* client_qos) {
+    const auto* send_goal_request = find_endpoint(
                candidates, participant, names.send_goal, GraphEndpointRole::ServiceRequest,
-               EndpointKind::Reader, types.send_goal_request, mode, composition_key) &&
-           has_endpoint(
+               EndpointKind::Reader, types.send_goal_request, mode, composition_key);
+    const auto* send_goal_response = find_endpoint(
                candidates, participant, names.send_goal, GraphEndpointRole::ServiceResponse,
-               EndpointKind::Writer, types.send_goal_response, mode, composition_key) &&
-           has_endpoint(
+               EndpointKind::Writer, types.send_goal_response, mode, composition_key);
+    const auto* cancel_goal_request = find_endpoint(
                candidates, participant, names.cancel_goal, GraphEndpointRole::ServiceRequest,
-               EndpointKind::Reader, types.cancel_goal_request, mode, composition_key) &&
-           has_endpoint(
+               EndpointKind::Reader, types.cancel_goal_request, mode, composition_key);
+    const auto* cancel_goal_response = find_endpoint(
                candidates, participant, names.cancel_goal, GraphEndpointRole::ServiceResponse,
-               EndpointKind::Writer, types.cancel_goal_response, mode, composition_key) &&
-           has_endpoint(
+               EndpointKind::Writer, types.cancel_goal_response, mode, composition_key);
+    const auto* get_result_request = find_endpoint(
                candidates, participant, names.get_result, GraphEndpointRole::ServiceRequest,
-               EndpointKind::Reader, types.get_result_request, mode, composition_key) &&
-           has_endpoint(
+               EndpointKind::Reader, types.get_result_request, mode, composition_key);
+    const auto* get_result_response = find_endpoint(
                candidates, participant, names.get_result, GraphEndpointRole::ServiceResponse,
-               EndpointKind::Writer, types.get_result_response, mode, composition_key) &&
-           has_endpoint(
+               EndpointKind::Writer, types.get_result_response, mode, composition_key);
+    const auto* feedback = find_endpoint(
                candidates, participant, names.feedback, GraphEndpointRole::Topic,
-               EndpointKind::Writer, types.feedback, mode, composition_key) &&
-           has_endpoint(
+               EndpointKind::Writer, types.feedback, mode, composition_key);
+    const auto* status = find_endpoint(
                candidates, participant, names.status, GraphEndpointRole::Topic,
                EndpointKind::Writer, types.status, mode, composition_key);
+    if (!(send_goal_request && send_goal_response && cancel_goal_request && cancel_goal_response &&
+          get_result_request && get_result_response && feedback && status)) return false;
+    if (!client_qos) return true;
+    return qos_compatible(client_qos->send_goal_request_writer, send_goal_request->qos) &&
+           qos_compatible(send_goal_response->qos, client_qos->send_goal_response_reader) &&
+           qos_compatible(client_qos->cancel_goal_request_writer, cancel_goal_request->qos) &&
+           qos_compatible(cancel_goal_response->qos, client_qos->cancel_goal_response_reader) &&
+           qos_compatible(client_qos->get_result_request_writer, get_result_request->qos) &&
+           qos_compatible(get_result_response->qos, client_qos->get_result_response_reader) &&
+           qos_compatible(feedback->qos, client_qos->feedback_reader) &&
+           qos_compatible(status->qos, client_qos->status_reader);
 }
 
 bool participant_has_action_server(
     const std::vector<EndpointCandidate>& candidates, const std::string& participant,
-    const ActionEndpointNames& names, const ActionEndpointTypes& types, RuntimeMode mode) {
+    const ActionEndpointNames& names, const ActionEndpointTypes& types, RuntimeMode mode,
+    const ActionClientEndpointQos* client_qos) {
     std::set<std::string> compositions;
     for (const auto& candidate : candidates) {
         if (candidate.participant_key == participant) {
@@ -273,7 +290,7 @@ bool participant_has_action_server(
     }
     return std::any_of(compositions.begin(), compositions.end(), [&](const auto& composition) {
         return action_server_composition_complete(
-            candidates, participant, names, types, mode, composition);
+            candidates, participant, names, types, mode, composition, client_qos);
     });
 }
 
@@ -281,11 +298,11 @@ bool participant_has_action_server(
 
 bool has_action_server(
     const std::vector<EndpointCandidate>& candidates, const ActionEndpointNames& names,
-    const ActionEndpointTypes& types, RuntimeMode mode) {
+    const ActionEndpointTypes& types, RuntimeMode mode, const ActionClientEndpointQos* client_qos) {
     std::set<std::string> participants;
     for (const auto& candidate : candidates) participants.insert(candidate.participant_key);
     for (const auto& participant : participants) {
-        if (participant_has_action_server(candidates, participant, names, types, mode)) return true;
+        if (participant_has_action_server(candidates, participant, names, types, mode, client_qos)) return true;
     }
     return false;
 }

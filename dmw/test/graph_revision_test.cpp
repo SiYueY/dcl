@@ -140,14 +140,20 @@ int main() {
     };
     add_action_endpoint("/split/_action/send_goal", dmw::impl::GraphEndpointRole::ServiceRequest,
                         EndpointKind::Reader, "node_a", 1);
+    add_action_endpoint("/split/_action/send_goal", dmw::impl::GraphEndpointRole::ServiceResponse,
+                        EndpointKind::Writer, "node_b", 2);
     add_action_endpoint("/split/_action/cancel_goal", dmw::impl::GraphEndpointRole::ServiceRequest,
-                        EndpointKind::Reader, "node_b", 2);
-    add_action_endpoint("/split/_action/get_result", dmw::impl::GraphEndpointRole::ServiceRequest,
                         EndpointKind::Reader, "node_b", 3);
-    add_action_endpoint("/split/_action/feedback", dmw::impl::GraphEndpointRole::Topic,
+    add_action_endpoint("/split/_action/cancel_goal", dmw::impl::GraphEndpointRole::ServiceResponse,
                         EndpointKind::Writer, "node_b", 4);
+    add_action_endpoint("/split/_action/get_result", dmw::impl::GraphEndpointRole::ServiceRequest,
+                        EndpointKind::Reader, "node_b", 5);
+    add_action_endpoint("/split/_action/get_result", dmw::impl::GraphEndpointRole::ServiceResponse,
+                        EndpointKind::Writer, "node_b", 6);
+    add_action_endpoint("/split/_action/feedback", dmw::impl::GraphEndpointRole::Topic,
+                        EndpointKind::Writer, "node_b", 7);
     add_action_endpoint("/split/_action/status", dmw::impl::GraphEndpointRole::Topic,
-                        EndpointKind::Writer, "node_b", 5);
+                        EndpointKind::Writer, "node_b", 8);
     const auto split_actions =
         dmw::impl::compose_action_candidates(dmw::RuntimeMode::ROS2, action_candidates);
     assert(std::none_of(split_actions.begin(), split_actions.end(), [](const auto& candidate) {

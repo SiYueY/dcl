@@ -303,20 +303,15 @@ public:
 
     /// Register one local Node identity and return its stable id, or 0 when the
     /// graph cannot admit more local state.
-    std::uint64_t add_local_node(std::string name, std::string node_namespace) noexcept {
+    std::uint64_t add_local_node(std::string name, std::string node_namespace) {
         std::uint64_t id = 0;
-        try {
-            mutate([&] {
-                if (next_local_node_id_ == UINT64_MAX) return GraphMutation::Invalid;
-                const auto candidate = ++next_local_node_id_;
-                local_nodes_.push_back({candidate, std::move(name), std::move(node_namespace), 1});
-                id = candidate;
-                return GraphMutation::Changed;
-            });
-        } catch (...) {
-            unavailable();
-            return 0;
-        }
+        mutate([&] {
+            if (next_local_node_id_ == UINT64_MAX) return GraphMutation::Invalid;
+            const auto candidate = ++next_local_node_id_;
+            local_nodes_.push_back({candidate, std::move(name), std::move(node_namespace), 1});
+            id = candidate;
+            return GraphMutation::Changed;
+        });
         return id;
     }
 

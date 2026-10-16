@@ -582,6 +582,17 @@ if(BUILD_TESTING)
     )
     set_tests_properties(dmw.header_checks PROPERTIES LABELS "build")
 
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(
+        NAME dmw.public_api_inventory
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_public_api_inventory.py
+            --repo ${CMAKE_CURRENT_SOURCE_DIR}/..
+            --document ${CMAKE_CURRENT_SOURCE_DIR}/../docs/dmw/dmw_v1.0.md
+            --source-ref HEAD
+    )
+    set_tests_properties(dmw.public_api_inventory PROPERTIES LABELS "freeze")
+
     add_test(
         NAME dmw.install_consumer
         COMMAND ${CMAKE_COMMAND}

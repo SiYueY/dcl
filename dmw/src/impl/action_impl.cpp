@@ -101,6 +101,28 @@ Result<bool> ActionClient::Impl::check_availability() const {
         return Result<bool>::failure(
             Error(ErrorCode::DDSError, "Discovery graph is unavailable"));
     }
+    impl::ActionClientEndpointQos client_qos;
+    auto load_qos = [](auto&& result, Qos& target) -> Result<void> {
+        if (!result) return Result<void>::failure(std::move(result.error()));
+        target = std::move(result.value());
+        return Result<void>::success();
+    };
+    if (auto result = load_qos(goal_client_->request_actual_qos(), client_qos.send_goal_request_writer); !result)
+        return Result<bool>::failure(std::move(result.error()));
+    if (auto result = load_qos(goal_client_->response_actual_qos(), client_qos.send_goal_response_reader); !result)
+        return Result<bool>::failure(std::move(result.error()));
+    if (auto result = load_qos(cancel_client_->request_actual_qos(), client_qos.cancel_goal_request_writer); !result)
+        return Result<bool>::failure(std::move(result.error()));
+    if (auto result = load_qos(cancel_client_->response_actual_qos(), client_qos.cancel_goal_response_reader); !result)
+        return Result<bool>::failure(std::move(result.error()));
+    if (auto result = load_qos(result_client_->request_actual_qos(), client_qos.get_result_request_writer); !result)
+        return Result<bool>::failure(std::move(result.error()));
+    if (auto result = load_qos(result_client_->response_actual_qos(), client_qos.get_result_response_reader); !result)
+        return Result<bool>::failure(std::move(result.error()));
+    if (auto result = load_qos(feedback_subscriber_->actual_qos(), client_qos.feedback_reader); !result)
+        return Result<bool>::failure(std::move(result.error()));
+    if (auto result = load_qos(status_subscriber_->actual_qos(), client_qos.status_reader); !result)
+        return Result<bool>::failure(std::move(result.error()));
     if (context_->runtime_mode() == RuntimeMode::ROS2) {
         if (const auto& metadata = context_->graph_metadata()) metadata->ingest_pending();
     }
@@ -111,7 +133,7 @@ Result<bool> ActionClient::Impl::check_availability() const {
     const auto candidates =
         impl::collect_endpoint_candidates(context_->runtime_mode(), graph->view());
     return Result<bool>::success(
-        impl::has_action_server(candidates, names_, types_, context_->runtime_mode()));
+        impl::has_action_server(candidates, names_, types_, context_->runtime_mode(), &client_qos));
 }
 
 Result<bool> ActionClient::Impl::server_is_available() const { return check_availability(); }

@@ -79,12 +79,27 @@ struct ActionEndpointTypes {
     std::string status;
 };
 
+/// QoS of the eight endpoints owned by one ActionClient. Availability is
+/// client-specific: a structural graph candidate is not necessarily usable by
+/// this client.
+struct ActionClientEndpointQos {
+    Qos send_goal_request_writer;
+    Qos send_goal_response_reader;
+    Qos cancel_goal_request_writer;
+    Qos cancel_goal_response_reader;
+    Qos get_result_request_writer;
+    Qos get_result_response_reader;
+    Qos feedback_reader;
+    Qos status_reader;
+};
+
 /// True when any participant holds a complete Action server composition whose
 /// wire types match `types`. Endpoint direction prevents a local client from
 /// being mistaken for a server.
 bool has_action_server(
     const std::vector<EndpointCandidate>& candidates, const ActionEndpointNames& names,
-    const ActionEndpointTypes& types, RuntimeMode mode);
+    const ActionEndpointTypes& types, RuntimeMode mode,
+    const ActionClientEndpointQos* client_qos = nullptr);
 
 }  // namespace dmw::impl
 
