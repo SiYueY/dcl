@@ -100,7 +100,7 @@ public:
     std::shared_ptr<DiscoveryGraph> discovery_graph() const noexcept { return discovery_graph_; }
 
     /// Create the ROS 2 graph metadata transport; no-op in DDS mode.
-    Result<void> install_graph_metadata_transport() noexcept;
+    Result<void> install_graph_metadata_transport();
     const std::shared_ptr<GraphMetadataTransport>& graph_metadata() const noexcept {
         return graph_metadata_;
     }

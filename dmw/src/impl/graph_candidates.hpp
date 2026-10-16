@@ -35,9 +35,9 @@ bool candidate_is_publisher(const EndpointCandidate& candidate) noexcept;
 /// participant, as dmw.md §5.9 requires.
 std::string participant_key(const eprosima::fastrtps::rtps::GuidPrefix_t& prefix);
 
-/// Composition identity within one participant.  In ROS 2 mode an endpoint
-/// without a metadata Node association is intentionally isolated: guessing a
-/// peer Node would fabricate a Service/Action candidate.
+/// Composition identity within one participant. Known Node identity is always
+/// authoritative. In ROS 2 mode an unassociated endpoint is isolated;
+/// DDS-only discovery falls back to participant composition.
 std::string candidate_composition_key(RuntimeMode mode, const EndpointCandidate& candidate);
 
 /// Normalize local metadata plus remote discovery into one candidate list.
@@ -60,7 +60,7 @@ struct ActionCandidate {
     std::string participant_key;
 };
 
-/// Compose the five constituent endpoints of each Action into candidates.
+/// Compose the eight physical endpoints of each Action into candidates.
 ///
 /// The composition never crosses participants and never invents a DDS object
 /// identity that the middleware cannot prove.
@@ -79,18 +79,12 @@ struct ActionEndpointTypes {
     std::string status;
 };
 
-/// True when a participant other than `local_participant` holds a complete
-/// Action server composition whose wire types match `types`.
-///
-/// This is the only availability authority; language layers never recompute it.
-bool has_remote_action_server(
+/// True when any participant holds a complete Action server composition whose
+/// wire types match `types`. Endpoint direction prevents a local client from
+/// being mistaken for a server.
+bool has_action_server(
     const std::vector<EndpointCandidate>& candidates, const ActionEndpointNames& names,
-    const ActionEndpointTypes& types, const std::string& local_participant, RuntimeMode mode);
-
-/// True when this participant holds a complete Action server composition.
-bool has_local_action_server(
-    const std::vector<EndpointCandidate>& candidates, const ActionEndpointNames& names,
-    const ActionEndpointTypes& types, const std::string& local_participant, RuntimeMode mode);
+    const ActionEndpointTypes& types, RuntimeMode mode);
 
 }  // namespace dmw::impl
 

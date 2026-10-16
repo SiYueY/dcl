@@ -174,7 +174,7 @@ Context::~Context() noexcept {
     }
 }
 
-Result<void> Context::install_graph_metadata_transport() noexcept {
+Result<void> Context::install_graph_metadata_transport() {
     if (runtime_mode_ != RuntimeMode::ROS2) return Result<void>::success();
     auto transport = GraphMetadataTransport::create(*this, discovery_graph_);
     if (!transport) {

@@ -232,6 +232,10 @@ Result<GraphRevision> Context::Impl::graph_revision() const {
     // Remote graph metadata that arrived as historical data is folded in before
     // the revision is observed.
     if (context_->graph_metadata()) context_->graph_metadata()->ingest_pending();
+    if (context_->discovery_graph()->health() != impl::DiscoveryHealth::Healthy) {
+        return Result<GraphRevision>::failure(
+            Error(ErrorCode::DDSError, "Discovery graph is unavailable"));
+    }
     return Result<GraphRevision>::success(context_->discovery_graph()->revision());
 }
 
@@ -241,11 +245,11 @@ Result<GraphSnapshot> Context::Impl::graph_snapshot() const {
         return Result<GraphSnapshot>::failure(
             Error(ErrorCode::ContextShutdown, "Context is shut down"));
     }
+    if (context_->graph_metadata()) context_->graph_metadata()->ingest_pending();
     if (context_->discovery_graph()->health() != impl::DiscoveryHealth::Healthy) {
         return Result<GraphSnapshot>::failure(
             Error(ErrorCode::DDSError, "Discovery graph is unavailable"));
     }
-    if (context_->graph_metadata()) context_->graph_metadata()->ingest_pending();
     return Result<GraphSnapshot>::success(assemble_snapshot(*context_));
 }
 

@@ -2,7 +2,7 @@
 
 cmake_minimum_required(VERSION 3.16)
 
-project(dmw VERSION 0.1.0 LANGUAGES CXX)
+project(dmw VERSION 1.0.0 LANGUAGES CXX)
 
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
@@ -56,6 +56,9 @@ if(DMW_RMW_GID_SIZE STREQUAL "")
     else()
         set(DMW_RMW_GID_SIZE 16)
     endif()
+endif()
+if(NOT DMW_RMW_GID_SIZE STREQUAL "16" AND NOT DMW_RMW_GID_SIZE STREQUAL "24")
+    message(FATAL_ERROR "DMW_RMW_GID_SIZE must be 16 or 24")
 endif()
 message(STATUS "DMW graph metadata rmw Gid size: ${DMW_RMW_GID_SIZE}")
 

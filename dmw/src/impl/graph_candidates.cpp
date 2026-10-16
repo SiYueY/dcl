@@ -45,14 +45,16 @@ std::string participant_key(const eprosima::fastrtps::rtps::GuidPrefix_t& prefix
 }
 
 std::string candidate_composition_key(RuntimeMode mode, const EndpointCandidate& candidate) {
-    if (mode != RuntimeMode::ROS2) return {};
     if (candidate.has_node) {
         return candidate.node_namespace + std::string(1, '\0') + candidate.node_name;
     }
     // Metadata is authoritative in ROS 2 mode.  Keep an unassociated endpoint
     // isolated rather than allowing it to compose with a different Node.
-    return std::string("?") +
-           std::string(reinterpret_cast<const char*>(candidate.gid.data.data()), candidate.gid.data.size());
+    if (mode == RuntimeMode::ROS2) {
+        return std::string("?") + std::string(
+            reinterpret_cast<const char*>(candidate.gid.data.data()), candidate.gid.data.size());
+    }
+    return {};
 }
 
 std::vector<EndpointCandidate> collect_endpoint_candidates(
@@ -130,7 +132,7 @@ std::vector<EndpointCandidate> collect_endpoint_candidates(
 
 std::vector<ActionCandidate> compose_action_candidates(
     RuntimeMode mode, const std::vector<EndpointCandidate>& candidates) {
-    // Action composition: all five logical endpoints must live in the same
+    // Action composition: all eight physical endpoints must live in the same
     // participant before DMW reports an Action candidate.
     std::map<std::string, ActionGroup> groups;
     for (const auto& candidate : candidates) {
@@ -153,18 +155,25 @@ std::vector<ActionCandidate> compose_action_candidates(
 
         const auto* send_goal_reader =
             group.find(ActionEndpointRole::SendGoalRequest, EndpointKind::Reader);
+        const auto* send_goal_writer =
+            group.find(ActionEndpointRole::SendGoalResponse, EndpointKind::Writer);
         const auto* cancel_goal_reader =
             group.find(ActionEndpointRole::CancelGoalRequest, EndpointKind::Reader);
+        const auto* cancel_goal_writer =
+            group.find(ActionEndpointRole::CancelGoalResponse, EndpointKind::Writer);
         const auto* get_result_reader =
             group.find(ActionEndpointRole::GetResultRequest, EndpointKind::Reader);
+        const auto* get_result_writer =
+            group.find(ActionEndpointRole::GetResultResponse, EndpointKind::Writer);
         const auto* feedback_writer =
             group.find(ActionEndpointRole::Feedback, EndpointKind::Writer);
         const auto* status_writer = group.find(ActionEndpointRole::Status, EndpointKind::Writer);
-        if (send_goal_reader && cancel_goal_reader && get_result_reader && feedback_writer &&
-            status_writer) {
+        if (send_goal_reader && send_goal_writer && cancel_goal_reader && cancel_goal_writer &&
+            get_result_reader && get_result_writer && feedback_writer && status_writer) {
             candidate.has_server = true;
             candidate.server_gids = {
-                send_goal_reader->gid, cancel_goal_reader->gid, get_result_reader->gid,
+                send_goal_reader->gid, send_goal_writer->gid, cancel_goal_reader->gid,
+                cancel_goal_writer->gid, get_result_reader->gid, get_result_writer->gid,
                 feedback_writer->gid, status_writer->gid};
             if (send_goal_reader->has_node) {
                 candidate.server_node_name = send_goal_reader->node_name;
@@ -172,24 +181,33 @@ std::vector<ActionCandidate> compose_action_candidates(
             }
         }
 
-        const auto* send_goal_writer =
+        const auto* send_goal_request_writer =
             group.find(ActionEndpointRole::SendGoalRequest, EndpointKind::Writer);
-        const auto* cancel_goal_writer =
+        const auto* send_goal_response_reader =
+            group.find(ActionEndpointRole::SendGoalResponse, EndpointKind::Reader);
+        const auto* cancel_goal_request_writer =
             group.find(ActionEndpointRole::CancelGoalRequest, EndpointKind::Writer);
-        const auto* get_result_writer =
+        const auto* cancel_goal_response_reader =
+            group.find(ActionEndpointRole::CancelGoalResponse, EndpointKind::Reader);
+        const auto* get_result_request_writer =
             group.find(ActionEndpointRole::GetResultRequest, EndpointKind::Writer);
+        const auto* get_result_response_reader =
+            group.find(ActionEndpointRole::GetResultResponse, EndpointKind::Reader);
         const auto* feedback_reader =
             group.find(ActionEndpointRole::Feedback, EndpointKind::Reader);
         const auto* status_reader = group.find(ActionEndpointRole::Status, EndpointKind::Reader);
-        if (send_goal_writer && cancel_goal_writer && get_result_writer && feedback_reader &&
-            status_reader) {
+        if (send_goal_request_writer && send_goal_response_reader && cancel_goal_request_writer &&
+            cancel_goal_response_reader && get_result_request_writer &&
+            get_result_response_reader && feedback_reader && status_reader) {
             candidate.has_client = true;
             candidate.client_gids = {
-                send_goal_writer->gid, cancel_goal_writer->gid, get_result_writer->gid,
+                send_goal_request_writer->gid, send_goal_response_reader->gid,
+                cancel_goal_request_writer->gid, cancel_goal_response_reader->gid,
+                get_result_request_writer->gid, get_result_response_reader->gid,
                 feedback_reader->gid, status_reader->gid};
-            if (send_goal_writer->has_node) {
-                candidate.client_node_name = send_goal_writer->node_name;
-                candidate.client_node_namespace = send_goal_writer->node_namespace;
+            if (send_goal_request_writer->has_node) {
+                candidate.client_node_name = send_goal_request_writer->node_name;
+                candidate.client_node_namespace = send_goal_request_writer->node_namespace;
             }
         }
         result.push_back(std::move(candidate));
@@ -261,22 +279,15 @@ bool participant_has_action_server(
 
 }  // namespace
 
-bool has_remote_action_server(
+bool has_action_server(
     const std::vector<EndpointCandidate>& candidates, const ActionEndpointNames& names,
-    const ActionEndpointTypes& types, const std::string& local_participant, RuntimeMode mode) {
+    const ActionEndpointTypes& types, RuntimeMode mode) {
     std::set<std::string> participants;
     for (const auto& candidate : candidates) participants.insert(candidate.participant_key);
     for (const auto& participant : participants) {
-        if (participant == local_participant) continue;
         if (participant_has_action_server(candidates, participant, names, types, mode)) return true;
     }
     return false;
-}
-
-bool has_local_action_server(
-    const std::vector<EndpointCandidate>& candidates, const ActionEndpointNames& names,
-    const ActionEndpointTypes& types, const std::string& local_participant, RuntimeMode mode) {
-    return participant_has_action_server(candidates, local_participant, names, types, mode);
 }
 
 }  // namespace dmw::impl

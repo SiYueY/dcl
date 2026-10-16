@@ -89,7 +89,6 @@ private:
     std::string action_name_;
     impl::ActionEndpointNames names_;
     impl::ActionEndpointTypes types_;
-    std::string local_participant_;
     std::unique_ptr<Client> goal_client_;
     std::unique_ptr<Client> cancel_client_;
     std::unique_ptr<Client> result_client_;

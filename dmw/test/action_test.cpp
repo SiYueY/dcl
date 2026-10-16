@@ -116,7 +116,7 @@ int main() {
     assert(client);
     assert(client.value()->action_name() == "/dmw/move");
 
-    // The five constituent endpoints must appear in the public graph as one
+    // The eight physical endpoints must appear in the public graph as one
     // Action candidate per side.
     {
         const auto snapshot = client_context.value()->graph_snapshot();
@@ -135,7 +135,7 @@ int main() {
         bool saw_client_endpoint = false;
         for (const auto& endpoint : snapshot.value().action_endpoints) {
             if (endpoint.action_name != "/dmw/move") continue;
-            assert(endpoint.endpoint_gids.size() == 5);
+            assert(endpoint.endpoint_gids.size() == 8);
             if (endpoint.kind != dmw::ActionEndpointKind::Client) continue;
             saw_client_endpoint = true;
             assert(endpoint.node_name == "action_client");
@@ -144,7 +144,7 @@ int main() {
     }
 
     // Action availability uses one participant-consistent composition of all
-    // five endpoints.  Discovery is asynchronous, so wait for it rather than
+    // eight physical endpoints. Discovery is asynchronous, so wait for it rather than
     // assuming the graph is already complete.
     const auto wait_available = dmw::WaitTimeout::finite(5s);
     assert(wait_available);

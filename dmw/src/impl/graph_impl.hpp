@@ -57,6 +57,7 @@ public:
     bool logically_ready() const noexcept {
         if (closing.load(std::memory_order_acquire) || context_->is_shutdown()) return false;
         if (const auto& metadata = context_->graph_metadata()) metadata->ingest_pending();
+        if (context_->discovery_graph()->health() != impl::DiscoveryHealth::Healthy) return true;
         std::lock_guard lock(state_mutex_);
         return context_->discovery_graph()->revision() > cursor_;
     }
@@ -72,6 +73,9 @@ public:
             return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
         }
         if (const auto& metadata = context_->graph_metadata()) metadata->ingest_pending();
+        if (context_->discovery_graph()->health() != impl::DiscoveryHealth::Healthy) {
+            return Result<bool>::failure(Error(ErrorCode::DDSError, "Discovery graph is unavailable"));
+        }
         {
             std::lock_guard lock(state_mutex_);
             const auto current = context_->discovery_graph()->revision();

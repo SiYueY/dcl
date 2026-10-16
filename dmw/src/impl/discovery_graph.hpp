@@ -232,7 +232,7 @@ public:
     ServiceState service(
         const eprosima::fastrtps::rtps::GuidPrefix_t& prefix, const std::string& request_topic,
         const std::string& request_type, const std::string& response_topic,
-        const std::string& response_type, bool require_node_association = false) const noexcept {
+        const std::string& response_type, bool require_node_association = false) const {
         if (health() != DiscoveryHealth::Healthy) return ServiceState::Unavailable;
         std::lock_guard lock(mutex_);
         bool relevant = false;
@@ -345,10 +345,9 @@ public:
     /// Associate one local endpoint with the Node that created it.
     void add_local_endpoint(
         const eprosima::fastrtps::rtps::GUID_t& guid, EndpointKind kind, std::string topic,
-        std::string type, std::uint64_t node_id, Qos qos = {}) noexcept {
+        std::string type, std::uint64_t node_id, Qos qos = {}) {
         if (node_id == 0) return;
-        try {
-            mutate([&] {
+        mutate([&] {
                 const auto node = std::find_if(
                     local_nodes_.begin(), local_nodes_.end(),
                     [&](const LocalNodeRecord& value) { return value.id == node_id; });
@@ -372,10 +371,7 @@ public:
                 local_endpoints_.push_back(
                     {guid, kind, std::move(topic), std::move(type), std::move(qos), node_id});
                 return GraphMutation::Changed;
-            });
-        } catch (...) {
-            unavailable();
-        }
+        });
     }
 
     void remove_local_endpoint(const eprosima::fastrtps::rtps::GUID_t& guid) noexcept {

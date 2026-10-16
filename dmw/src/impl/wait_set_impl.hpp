@@ -360,7 +360,7 @@ public:
 
     ~WaitSetState() noexcept { close(); }
 
-    Result<void> initialize_shutdown_callback() noexcept {
+    Result<void> initialize_shutdown_callback() {
         {
             std::lock_guard lock(native_mutex_);
             try {

@@ -19,15 +19,6 @@ namespace dmw {
 
 namespace {
 
-/// Participant identity used to keep Action availability composition inside
-/// one participant and to exclude the local participant from "remote server".
-std::string local_participant_key(const impl::Context& context) {
-    const auto guid = eprosima::fastrtps::rtps::iHandle2GUID(
-        context.participant()->get_instance_handle());
-    return std::string(
-        reinterpret_cast<const char*>(guid.guidPrefix.value), sizeof(guid.guidPrefix.value));
-}
-
 }  // namespace
 
 ActionClient::Impl::Impl(
@@ -40,7 +31,6 @@ ActionClient::Impl::Impl(
   action_name_(std::move(action_name)),
   names_(std::move(names)),
   types_(std::move(types)),
-  local_participant_(local_participant_key(*context_)),
   goal_client_(std::move(goal_client)),
   cancel_client_(std::move(cancel_client)),
   result_client_(std::move(result_client)),
@@ -114,11 +104,14 @@ Result<bool> ActionClient::Impl::check_availability() const {
     if (context_->runtime_mode() == RuntimeMode::ROS2) {
         if (const auto& metadata = context_->graph_metadata()) metadata->ingest_pending();
     }
+    if (graph->health() != impl::DiscoveryHealth::Healthy) {
+        return Result<bool>::failure(
+            Error(ErrorCode::DDSError, "Discovery graph is unavailable"));
+    }
     const auto candidates =
         impl::collect_endpoint_candidates(context_->runtime_mode(), graph->view());
     return Result<bool>::success(
-        impl::has_remote_action_server(
-            candidates, names_, types_, local_participant_, context_->runtime_mode()));
+        impl::has_action_server(candidates, names_, types_, context_->runtime_mode()));
 }
 
 Result<bool> ActionClient::Impl::server_is_available() const { return check_availability(); }
@@ -155,24 +148,42 @@ Result<bool> ActionClient::Impl::wait_for_server(
             Error(ErrorCode::InvalidArgument, "Availability token belongs to another endpoint"));
     }
     const auto deadline = impl::steady_deadline(timeout);
-    std::unique_lock lock(state->mutex);
     while (true) {
+        std::uint64_t observed_revision = 0;
+        {
+            std::lock_guard lock(state->mutex);
+            if (context_->is_shutdown()) {
+                return Result<bool>::failure(
+                    Error(ErrorCode::ContextShutdown, "Context is shut down"));
+            }
+            if (state->interrupted(token)) {
+                return Result<bool>::failure(
+                    Error(ErrorCode::Interrupted, "Availability wait interrupted"));
+            }
+            observed_revision = state->revision;
+        }
+
+        // Metadata ingestion can synchronously notify this wait state; never
+        // hold its mutex while checking availability.
+        auto available = check_availability();
+        if (!available || available.value() || timeout.kind() == WaitTimeout::Kind::Poll) {
+            return available;
+        }
+
+        std::unique_lock lock(state->mutex);
         if (context_->is_shutdown()) {
             return Result<bool>::failure(Error(ErrorCode::ContextShutdown, "Context is shut down"));
         }
         if (state->interrupted(token)) {
             return Result<bool>::failure(Error(ErrorCode::Interrupted, "Availability wait interrupted"));
         }
-        const auto observed_revision = state->revision;
-        auto available = check_availability();
-        if (!available || available.value() || timeout.kind() == WaitTimeout::Kind::Poll) {
-            return available;
-        }
+        if (state->revision != observed_revision) continue;
         const auto changed = [&] {
             return context_->is_shutdown() || state->interrupted(token) ||
                    state->revision != observed_revision;
         };
         if (timeout.kind() == WaitTimeout::Kind::Finite) {
+            if (std::chrono::steady_clock::now() >= deadline) return Result<bool>::success(false);
             if (!state->cv.wait_until(lock, deadline, changed)) return Result<bool>::success(false);
         } else {
             state->cv.wait(lock, changed);
